@@ -85,6 +85,7 @@ trap 'rm -rf "$staging"' EXIT
 mkdir -p "$staging/deploy/env"
 cp docker-compose.yml docker-compose.prod.yml "$staging/"
 cp deploy/healthcheck.sh deploy/build-on-host.sh "$staging/deploy/"
+mkdir -p "$staging/deploy/chatwoot" && cp deploy/chatwoot/setup-bot.sh "$staging/deploy/chatwoot/"
 cp deploy/env/apply-server-state.sh "$staging/deploy/env/"
 if [ "$BUILD" = host ]; then
   # Só o que o git rastreia (nada de venv/, chroma_db/, .env, __pycache__):
@@ -140,6 +141,21 @@ if "${SSH[@]}" "cd $DEST && docker compose run --rm -T brain python -m src.rag.s
 else
   echo "   AVISO: ingestão ($FONTE) terminou com falha/trava (exit != 0) — ver a saída acima."
   echo "   O índice já existente continua servindo; corrija a fonte e rode: sudo -u deploy azapfy-sync-docs"
+fi
+
+# Bootstrap do Chatwoot numa VM NOVA: o gateway recusa subir sem
+# CHATWOOT_API_TOKEN, e esse token só existe depois que o bot foi provisionado
+# no omni-route (pipeline configure-chatwoot → .chatwoot-token). Sem isto o
+# primeiro deploy de toda VM nova morria no healthcheck. Se o estado não
+# existe, roda o MESMO setup-bot.sh da pipeline do Chatwoot (idempotente) aqui;
+# rotações posteriores continuam pela pipeline dedicada.
+if ! "${SSH[@]}" "test -s $DEST/.chatwoot-token"; then
+  echo "→ [5b/8] .chatwoot-token ausente — provisionando o bot no omni-route (setup-bot.sh)…"
+  "${SSH[@]}" "docker run --rm -i --network omniroute_default \
+      -v /opt/omni-route/.env:/omni.env:ro -v $DEST:/state \
+      -e HOST_UID=\$(id -u) -e HOST_GID=\$(id -g) \
+      alpine:3.22 sh -s" < deploy/chatwoot/setup-bot.sh
+  "${SSH[@]}" "$DEST/deploy/env/apply-server-state.sh"
 fi
 
 echo "→ [6/8] Up da stack (sem build)…"

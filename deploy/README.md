@@ -115,7 +115,10 @@ Sem registry de imagens ⇒ sem secrets de Docker Hub/GHCR.
    `ssh-keygen -R <ip>` antes, ou passe `ANSIBLE_SSH_ARGS`/`SSH_EXTRA_OPTS`
    com `-o UserKnownHostsFile=…`.
 3. Cadastre os secrets acima (a privada do CI vira `SSH_PRIVATE_KEY`) e rode a
-   pipeline **Deploy** (converge o estado via Ansible e sobe a stack).
+   pipeline **Deploy** (converge o estado via Ansible e sobe a stack). Numa VM
+   nova o deploy percebe que `.chatwoot-token` não existe e roda o
+   `setup-bot.sh` sozinho antes de subir o gateway (que não inicia sem
+   `CHATWOOT_API_TOKEN`) — o passo 4 fica para rotações e para listar caixas.
 4. Rode a pipeline **Configurar Chatwoot (caixa do bot)** — ela provisiona o
    bot **pela API do omni-route** (`deploy/chatwoot/setup-bot.sh`,
    idempotente): usuário "Zapin (bot)" via `POST /api/users/workspace`, token
