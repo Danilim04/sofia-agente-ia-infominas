@@ -4,7 +4,7 @@
 # (sincronizado pelo deploy-remote.sh; a pipeline do Chatwoot também o chama).
 #
 # Estado hoje: só o CHATWOOT_API_TOKEN. Ele é gerado DENTRO do Chatwoot da
-# própria VM (usuário "Zapin (bot)", pipeline configure-chatwoot) e gravado em
+# própria VM (usuário "Zapin", pipeline configure-chatwoot) e gravado em
 # .chatwoot-token — nunca passa pelo GitHub (o runner não tem como escrever
 # secrets, e não precisa: quem gera e quem consome estão na mesma máquina).
 # O .env renderizado pelo CI chega com a chave vazia; AQUI ela ganha o valor.

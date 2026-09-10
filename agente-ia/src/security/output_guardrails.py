@@ -103,6 +103,28 @@ def _termos_permitidos(fontes: Iterable[str]) -> list[str]:
     return termos
 
 
+def remover_citacoes(texto: str) -> tuple[str, list[str]]:
+    """Remove TODA citação "(fonte: ...)" da resposta final.
+
+    Decisão de produto (2026-09-10): o cliente não recebe referência de
+    documentação — nem nome de arquivo, nem seção. A auditabilidade (LLM09)
+    continua no estado (`fontes_usadas`), não no texto enviado.
+
+    Returns:
+        `(texto_limpo, citacoes_removidas)`.
+    """
+    if not texto:
+        return texto, []
+    removidas = [m.group(0) for m in _CITACAO_RE.finditer(texto)]
+    if not removidas:
+        return texto, []
+    limpo = _CITACAO_RE.sub("", texto)
+    limpo = re.sub(r"[ \t]+([.,;:!?\n])", r"\1", limpo)
+    limpo = re.sub(r"[ \t]{2,}", " ", limpo).strip()
+    logger.info("citacoes_removidas_da_resposta total=%d", len(removidas))
+    return limpo, removidas
+
+
 def validar_citacoes(texto: str, fontes: Iterable[str]) -> tuple[str, list[str]]:
     """Remove citações "(fonte: ...)" que não batem com as fontes recuperadas.
 

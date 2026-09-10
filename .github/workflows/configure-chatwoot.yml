@@ -2,7 +2,7 @@
 # Configura o BOT na instância omni-route da VM — sob demanda (Run workflow).
 # Roda deploy/chatwoot/setup-bot.sh num container na rede do Chatwoot:
 #
-#   · usuário "Zapin (bot)"  → PELA API DO OMNI-ROUTE (POST /api/users/workspace)
+#   · usuário "Zapin"        → PELA API DO OMNI-ROUTE (POST /api/users/workspace)
 #   · token do Chatwoot      → login workspace do bot no omni → estado da VM
 #                              (.chatwoot-token; o valor nunca sai da máquina)
 #   · etiquetas e webhook    → API do Chatwoot (mesmo caminho do front do omni)

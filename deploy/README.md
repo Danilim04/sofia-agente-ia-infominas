@@ -94,7 +94,7 @@ Dispara a cada push na `main` (ou `Run workflow` com uma tag à escolha):
 | `INBOX_ID` | caixa do Chatwoot cujas conversas novas o gateway põe na `fila-bot`. Vazia = `0` = todas. Os ids são da instância — a pipeline "Configurar Chatwoot" lista as caixas ao final. |
 
 O `CHATWOOT_API_TOKEN` de verdade é **estado da VM**: a pipeline "Configurar
-Chatwoot" grava o access token do usuário "Zapin (bot)" em
+Chatwoot" grava o access token do usuário "Zapin" em
 `/opt/azapfy-bot/.chatwoot-token` (o valor nunca sai da máquina) e o
 `apply-server-state.sh` o aplica no `.env` — nesta hora e em todo Deploy.
 
@@ -121,7 +121,7 @@ Sem registry de imagens ⇒ sem secrets de Docker Hub/GHCR.
    `CHATWOOT_API_TOKEN`) — o passo 4 fica para rotações e para listar caixas.
 4. Rode a pipeline **Configurar Chatwoot (caixa do bot)** — ela provisiona o
    bot **pela API do omni-route** (`deploy/chatwoot/setup-bot.sh`,
-   idempotente): usuário "Zapin (bot)" via `POST /api/users/workspace`, token
+   idempotente): usuário "Zapin" via `POST /api/users/workspace`, token
    via login workspace do bot (vira estado da VM, `.chatwoot-token`),
    etiquetas e webhook pela API do Chatwoot (o mesmo caminho do front do
    omni), verificação via `GET /api/auth/workspace/me`, e recarrega o

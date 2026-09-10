@@ -12,7 +12,7 @@
 # criado PELA API DELE; o que é caminho oficial do produto via Chatwoot usa a
 # MESMA API HTTP que o front do omni usa. Nada de rails console.
 #
-#   1. Usuário "Zapin (bot)"  → POST /api/users/workspace (omni; platform token,
+#   1. Usuário "Zapin"        → POST /api/users/workspace (omni; platform token,
 #      política de senha, compensação de órfão). Senha vira estado da VM.
 #   2. Token do Chatwoot      → POST /api/auth/workspace/login do PRÓPRIO bot
 #      (omni devolve o api_access_token) → /state/.chatwoot-token.
@@ -37,7 +37,7 @@ BOT_ENV="$STATE/.env"
 API=http://api:3333
 CW=http://chatwoot-rails:3000
 BOT_EMAIL=zapin-bot@azapfy.com.br
-BOT_NAME='Zapin (bot)'
+BOT_NAME='Zapin'
 
 envval() { grep "^$2=" "$1" 2>/dev/null | head -1 | cut -d= -f2-; }
 falha() { echo "ERRO: $1" >&2; exit 1; }
@@ -114,6 +114,17 @@ printf 'ZAPIN_EMAIL=%s\nZAPIN_PASSWORD=%s\n' "$BOT_EMAIL" "$BOT_PASS" > "$STATE/
 echo "$BOT_JSON" | jq -r .chatwoot.accessToken | tr -d '\n' > "$STATE/.chatwoot-token"
 [ -s "$STATE/.chatwoot-token" ] || falha "token do bot veio vazio"
 echo "→ token do bot gravado como estado da VM (.chatwoot-token)"
+
+# Nome exibido do bot CONVERGE para $BOT_NAME (usuário antigo pode ter nascido
+# como "Zapin (bot)"): o próprio bot atualiza seu perfil no Chatwoot.
+BOT_CW_TOKEN="$(cat "$STATE/.chatwoot-token")"
+if jq -n --arg n "$BOT_NAME" '{profile:{name:$n,display_name:$n}}' \
+    | curl -sf -X PUT "$CW/api/v1/profile" -H "api_access_token: $BOT_CW_TOKEN" \
+        -H 'Content-Type: application/json' -d @- > /dev/null; then
+  echo "→ nome do bot no Chatwoot: $BOT_NAME"
+else
+  echo "AVISO: não consegui atualizar o nome do bot no Chatwoot (segue como está)" >&2
+fi
 
 # --- 4. Etiquetas (mesma API que o front do omni usa) -------------------------
 # CONVERGE, não só cria: etiqueta existente ganha PATCH para o estado desejado.

@@ -50,7 +50,7 @@ from src.security.input_guardrails import avaliar_entrada
 from src.security.output_guardrails import (
     contem_vazamento_interno,
     envolver_chunks_rag,
-    validar_citacoes,
+    remover_citacoes,
 )
 
 
@@ -327,8 +327,8 @@ def _build_system_message(state: AgentState) -> SystemMessage:
     if rag_contexto:
         partes.append(
             "\n# Trechos da base de conhecimento (recuperados para a mensagem atual)\n"
-            "Use-os quando forem relevantes; cite APENAS documentos presentes "
-            "aqui. Se não forem relevantes, ignore-os e não cite fonte.\n"
+            "Use-os quando forem relevantes, SEM citar fonte, arquivo ou seção "
+            "na resposta. Se não forem relevantes, ignore-os.\n"
             + rag_contexto
         )
 
@@ -614,9 +614,9 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
 def output_guardrail_node(state: AgentState) -> dict:
     """Valida a resposta final antes de sair do grafo.
 
-    1. Citações verificadas (F4): "(fonte: ...)" que não corresponda a um
-       documento REALMENTE recuperado no turno é removida — citação fabricada
-       não sobrevive até o cliente.
+    1. Sem referências (F4 + decisão de produto 2026-09-10): toda citação
+       "(fonte: ...)" é removida — o cliente nunca recebe nome de documento ou
+       seção; a rastreabilidade fica em `fontes_usadas` (LLM09).
     2. Máscara de erro interno (A2): resposta com marca inequívoca de erro
        técnico (traceback, módulos, hosts) é trocada por fallback amigável.
 
@@ -631,7 +631,7 @@ def output_guardrail_node(state: AgentState) -> dict:
     if not texto.strip():
         return {}
 
-    novo, removidas = validar_citacoes(texto, state.get("fontes_usadas") or [])
+    novo, removidas = remover_citacoes(texto)
     if contem_vazamento_interno(novo):
         logger.warning("output_guardrail_vazamento_interno len=%d", len(novo))
         logger.debug("output_guardrail_resposta_original %r", novo)

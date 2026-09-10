@@ -749,7 +749,9 @@ def test_output_guardrail_remove_citacao_fabricada():
     assert novo.id == ultima.id
 
 
-def test_output_guardrail_mantem_citacao_real():
+def test_output_guardrail_remove_tambem_citacao_real():
+    # Decisão de produto: o cliente não recebe referência de documentação,
+    # mesmo quando a fonte existe de verdade — fica só em fontes_usadas.
     ultima = AIMessage(
         content='Use a Pesquisa (fonte: azapfy-web.md, seção "Módulo: Pesquisa").'
     )
@@ -758,6 +760,16 @@ def test_output_guardrail_mantem_citacao_real():
             "messages": [ultima],
             "fontes_usadas": ["azapfy-web.md — Módulo: Pesquisa"],
         }
+    )
+    novo = out["messages"][0]
+    assert "fonte:" not in novo.content
+    assert novo.content == "Use a Pesquisa."
+
+
+def test_output_guardrail_sem_citacao_nao_altera():
+    ultima = AIMessage(content="Use a Pesquisa no menu lateral.")
+    out = nodes.output_guardrail_node(
+        {"messages": [ultima], "fontes_usadas": ["azapfy-web.md — Módulo: Pesquisa"]}
     )
     assert out == {}  # nada a corrigir
 

@@ -172,7 +172,7 @@ def _rag_com_resultado(pergunta: str) -> dict:
     }
 
 
-def test_cenario_3_pergunta_tecnica_recebe_contexto_e_cita_fonte_real(monkeypatch):
+def test_cenario_3_pergunta_tecnica_recebe_contexto_sem_citar_fonte(monkeypatch):
     _passa_seguranca(monkeypatch)
     fake = _fake_llm(
         scripted=[
@@ -204,8 +204,12 @@ def test_cenario_3_pergunta_tecnica_recebe_contexto_e_cita_fonte_real(monkeypatc
     assert 'secao="Integrações › Bling"' in sp
     assert 'origem="rag"' in sp
 
-    # A citação é REAL (bate com a fonte recuperada) → sobrevive ao guardrail.
-    assert "Integrações › Bling" in out["messages"][-1].content
+    # Mesmo REAL, a citação não chega ao cliente (decisão de produto): o
+    # guardrail remove a referência e mantém a orientação; a fonte fica só em
+    # fontes_usadas (auditoria LLM09).
+    final = out["messages"][-1].content
+    assert "fonte:" not in final and "Integrações › Bling" not in final
+    assert "Configurações > Integrações" in final
 
 
 # ===========================================================================
