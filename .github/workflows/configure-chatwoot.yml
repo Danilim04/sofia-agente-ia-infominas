@@ -1,0 +1,75 @@
+# ==============================================================================
+# Configura o BOT na instância omni-route da VM — sob demanda (Run workflow).
+# Roda deploy/chatwoot/setup-bot.sh num container na rede do Chatwoot:
+#
+#   · usuário "Zapin (bot)"  → PELA API DO OMNI-ROUTE (POST /api/users/workspace)
+#   · token do Chatwoot      → login workspace do bot no omni → estado da VM
+#                              (.chatwoot-token; o valor nunca sai da máquina)
+#   · etiquetas e webhook    → API do Chatwoot (mesmo caminho do front do omni)
+#   · automation rule        → removida (o omni não gerencia; quem etiqueta
+#                              conversa nova é o gateway, no conversation_created
+#                              — escopo pela INBOX_ID do .env)
+#   · verificação            → GET /api/auth/workspace/me na API do omni
+#
+# Idempotente: rode quantas vezes precisar (VM nova, token rotacionado). Ao
+# final, aplica o token no .env e recarrega o gateway — sem passo manual.
+#
+# Secrets exigidos: SSH_PRIVATE_KEY (credenciais do omni são lidas NA VM).
+# ==============================================================================
+name: Configurar Chatwoot (caixa do bot)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: configure-chatwoot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Chave SSH do deploy
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_bot
+          chmod 600 ~/.ssh/id_bot
+
+      - name: Resolve o IP da VM
+        id: vm
+        run: |
+          ip="$(awk '/ansible_host:/ { print $2; exit }' infra/ansible/inventories/prod/hosts.yml)"
+          test -n "$ip" || { echo "ansible_host não encontrado no inventário"; exit 1; }
+          echo "ip=$ip" >> "$GITHUB_OUTPUT"
+
+      # O script viaja por stdin e roda num container na rede do Chatwoot;
+      # credenciais do omni (/omni.env) e estado do bot (/state) são da VM.
+      - name: Provisiona o bot via API do omni-route
+        run: |
+          ssh -i ~/.ssh/id_bot -o StrictHostKeyChecking=accept-new \
+            deploy@'${{ steps.vm.outputs.ip }}' \
+            'docker run --rm -i --network omniroute_default \
+               -v /opt/omni-route/.env:/omni.env:ro \
+               -v /opt/azapfy-bot:/state \
+               -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
+               alpine:3.22 sh -s' < deploy/chatwoot/setup-bot.sh
+
+      # Se a stack já estiver deployada, aplica o token no .env e recarrega o
+      # gateway agora; senão, o próximo Deploy aplica (apply-server-state.sh).
+      - name: Aplica no .env e recarrega o gateway
+        run: |
+          ssh -i ~/.ssh/id_bot deploy@'${{ steps.vm.outputs.ip }}' \
+            "if [ -x /opt/azapfy-bot/deploy/env/apply-server-state.sh ]; then
+               /opt/azapfy-bot/deploy/env/apply-server-state.sh &&
+               cd /opt/azapfy-bot && docker compose up -d gateway
+             else
+               echo 'stack ainda não deployada — o próximo Deploy aplica o token'
+             fi"

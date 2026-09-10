@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+venv/
+.venv/
+env/
+ENV/
+# deploy/env/ são templates de deploy, não um virtualenv
+!deploy/env/
+
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project-specific
+chroma_db/
+# checkpointer SQLite do brain (histórico de conversa local/dev)
+agente-ia/data/
+.chainlit/
+.files/
+chainlit.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Terraform (state local, providers baixados, plans)
+infra/terraform/.terraform/
+infra/terraform/terraform.tfstate*
+infra/terraform/*.tfplan
+
+# Estado local do gateway (sqlite)
+*.db

@@ -1,0 +1,3 @@
+deploy_user: deploy
+enable_fail2ban: true
+swap_size_mb: 2048

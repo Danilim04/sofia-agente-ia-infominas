@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# azapfy-sync-docs — rotina do sync da base de conhecimento do bot
+# (AzapDocs → pgvector; Fase 4 do plano-migracao-pgvector.md).
+#
+# Instalado pelo ansible (role base) em /usr/local/bin e chamado pelo cron do
+# usuário deploy. Roda o sync DENTRO da imagem do brain (mesmo código, mesmo
+# modelo de embeddings baked), via docker compose:
+#
+#   azapfy-sync-docs            # incremental (--fonte api) — diário
+#   azapfy-sync-docs --full     # reconciliação completa — semanal
+#
+# Saída no journal (journalctl -t azapfy-sync). Exit != 0 = ciclo com
+# falha/trava: o índice anterior CONTINUA servindo (falha nunca degrada), e o
+# webhook SYNC_ALERTA_WEBHOOK do .env (se definido) recebe um POST JSON.
+# ==============================================================================
+set -uo pipefail
+
+APP_DIR="${APP_DIR:-/opt/azapfy-bot}"
+TAG=azapfy-sync
+
+cd "$APP_DIR" 2>/dev/null || { logger -t "$TAG" "erro: diretório da stack não existe: $APP_DIR"; exit 2; }
+
+logger -t "$TAG" "início: sync --fonte api $*"
+# -T: sem TTY (cron); --rm: container efêmero. As dependências (pgvector)
+# sobem se não estiverem no ar.
+docker compose run --rm -T brain python -m src.rag.sync --fonte api "$@" 2>&1 | logger -t "$TAG"
+rc=${PIPESTATUS[0]}
+
+if [ "$rc" -ne 0 ]; then
+  logger -t "$TAG" "FALHOU (exit $rc) — o índice anterior continua servindo; ver journalctl -t $TAG"
+  # Só a chave do webhook é lida do .env (nada mais sai do arquivo).
+  webhook="$(grep -E '^SYNC_ALERTA_WEBHOOK=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'" )"
+  if [ -n "$webhook" ]; then
+    msg="[azapfy-bot] sync da base de conhecimento FALHOU (exit $rc) em $(hostname) — journalctl -t $TAG"
+    curl -fsS -m 10 -X POST "$webhook" -H 'Content-Type: application/json' \
+      -d "{\"text\":\"$msg\"}" >/dev/null 2>&1 \
+      || logger -t "$TAG" "aviso: não consegui avisar o webhook de alerta"
+  fi
+  exit "$rc"
+fi
+logger -t "$TAG" "ok"

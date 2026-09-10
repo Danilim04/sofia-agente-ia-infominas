@@ -1,0 +1,49 @@
+# ==============================================================================
+# ESTADO da VM (Ansible, role base) — user deploy, hardening, firewall, docker,
+# /opt/azapfy-bot. Roda como 1º job de todo deploy (workflow_call a partir do
+# deploy.yml) e sob demanda (Run workflow) após mudar infra/ansible/**.
+# Deploy de aplicação NÃO passa por aqui (deploy.yml → deploy/deploy-remote.sh).
+#
+# Secrets exigidos: SSH_PRIVATE_KEY (par da chave autorizada no user deploy)
+# ==============================================================================
+name: Configurar servidor (estado)
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: configure-server
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ansible:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Chave SSH do deploy
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_bot
+          chmod 600 ~/.ssh/id_bot
+          ssh-keygen -y -f ~/.ssh/id_bot > ~/.ssh/id_bot.pub
+
+      - name: Instala Ansible + collections
+        run: |
+          pip install --quiet ansible-core
+          ansible-galaxy collection install -r infra/ansible/requirements.yml
+
+      # A pubkey vai em JSON: em key=value o Ansible corta no primeiro espaço.
+      - name: Converge o estado base
+        working-directory: infra/ansible
+        run: |
+          ansible-playbook playbooks/site.yml \
+            --private-key ~/.ssh/id_bot \
+            -e "{\"deploy_ssh_public_key\": \"$(cat ~/.ssh/id_bot.pub)\"}"

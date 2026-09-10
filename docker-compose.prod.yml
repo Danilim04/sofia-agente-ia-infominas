@@ -1,0 +1,60 @@
+# ==============================================================================
+# Override de PRODUÇÃO — ativado pelo COMPOSE_FILE do .env (escrito pelo
+# deploy). Muda três coisas em relação à base:
+#
+#   1. Sem build e sem portas publicadas: as imagens chegam prontas via
+#      docker load (deploy/deploy-remote.sh) e NINGUÉM fala com o bot pela
+#      internet — só o Chatwoot, por dentro da rede docker. O Postgres
+#      (pgvector) também não publica porta: só brain e gateway o alcançam.
+#   2. O gateway entra na rede da stack omni-route (omniroute_default), onde
+#      vivem o Chatwoot e o Traefik do servidor, com o alias `azapfy-bot`:
+#      - webhook do Chatwoot →  http://azapfy-bot:8080/webhook?token=…
+#      - gateway → API do Chatwoot em http://chatwoot-rails:3000
+#   3. restart + teto de logs (a VPS é pequena).
+#
+# DNS/Traefik (quando ativar): o Traefik da stack omni-route já termina TLS
+# nesse servidor. Para expor o gateway num host público, crie o registro no
+# Terraform (infra/terraform, var bot_hosts) e descomente os labels abaixo.
+# Requer compose >= 2.24.4 (tags !reset).
+# ==============================================================================
+services:
+  pgvector:
+    # Só a rede interna da stack (brain + gateway); nada publicado no host.
+    ports: !reset []
+    restart: unless-stopped
+    logging: &log
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  brain:
+    build: !reset null
+    ports: !reset []
+    restart: unless-stopped
+    logging: *log
+
+  gateway:
+    build: !reset null
+    ports: !reset []
+    restart: unless-stopped
+    logging: *log
+    networks:
+      default: {}
+      chatwoot:
+        aliases:
+          - azapfy-bot
+    # --- Exposição pública via Traefik (desligada até o DNS existir) ---------
+    # labels:
+    #   traefik.enable: 'true'
+    #   traefik.docker.network: omniroute_default
+    #   traefik.http.routers.azapfy-bot.rule: Host(`${DOMAIN_BOT}`)
+    #   traefik.http.routers.azapfy-bot.entrypoints: websecure
+    #   traefik.http.routers.azapfy-bot.tls: 'true'
+    #   traefik.http.services.azapfy-bot.loadbalancer.server.port: '8080'
+
+networks:
+  # Rede da stack omni-route (Chatwoot/Traefik) já existente no servidor.
+  chatwoot:
+    name: omniroute_default
+    external: true

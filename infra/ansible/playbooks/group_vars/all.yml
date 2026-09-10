@@ -1,0 +1,7 @@
+# Vars comuns da VM do bot.
+app_dir: /opt/azapfy-bot
+deploy_user: deploy
+
+# Segredos e valores sensíveis NUNCA ficam aqui — chegam por --extra-vars
+# da pipeline (ver .github/workflows/*):
+#   deploy_ssh_public_key   chave pública derivada da SSH_PRIVATE_KEY do CI

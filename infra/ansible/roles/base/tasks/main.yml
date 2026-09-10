@@ -1,0 +1,210 @@
+---
+# ==============================================================================
+# Role base — estado da VM do bot, idempotente: usuário deploy, hardening ssh,
+# firewall, updates automáticos, swap e Docker. Espelha a role base do
+# omni-route (a VM é compartilhada com a stack de lá — convergir o mesmo estado
+# é proposital); o que é específico do bot é o app_dir.
+# ==============================================================================
+
+# --- Usuário de deploy --------------------------------------------------------
+- name: Usuário {{ deploy_user }}
+  ansible.builtin.user:
+    name: '{{ deploy_user }}'
+    shell: /bin/bash
+    groups: sudo
+    append: true
+
+- name: Sudo sem senha para {{ deploy_user }}
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-azapfy-deploy
+    content: '{{ deploy_user }} ALL=(ALL) NOPASSWD:ALL'
+    mode: '0440'
+    validate: 'visudo -cf %s'
+
+- name: Chave SSH autorizada do {{ deploy_user }}
+  ansible.posix.authorized_key:
+    user: '{{ deploy_user }}'
+    key: '{{ deploy_ssh_public_key }}'
+  when: deploy_ssh_public_key is defined
+
+# Diretório da stack — o deploy (pipeline) sincroniza os arquivos pra cá.
+- name: Garante {{ app_dir }} (dono {{ deploy_user }})
+  ansible.builtin.file:
+    path: '{{ app_dir }}'
+    state: directory
+    owner: '{{ deploy_user }}'
+    group: '{{ deploy_user }}'
+    mode: '0755'
+
+# --- Rotina do RAG (Fase 4 do plano-migracao-pgvector.md) ---------------------
+# Sync diário da base de conhecimento (AzapDocs → pgvector) via compose, como o
+# usuário deploy (grupo docker). Horários em UTC (a VM roda em UTC):
+# 06:30 UTC = 03:30 em Brasília. Log: journalctl -t azapfy-sync.
+- name: Script do sync da base de conhecimento
+  ansible.builtin.copy:
+    src: azapfy-sync-docs
+    dest: /usr/local/bin/azapfy-sync-docs
+    mode: '0755'
+
+- name: Cron — sync incremental diário (03:30 Brasília)
+  ansible.builtin.cron:
+    name: azapfy-bot sync base de conhecimento (incremental)
+    user: '{{ deploy_user }}'
+    minute: '30'
+    hour: '6'
+    job: 'APP_DIR={{ app_dir }} /usr/local/bin/azapfy-sync-docs'
+
+- name: Cron — reconciliação completa semanal (domingo 04:00 Brasília)
+  ansible.builtin.cron:
+    name: azapfy-bot sync base de conhecimento (reconciliação semanal)
+    user: '{{ deploy_user }}'
+    minute: '0'
+    hour: '7'
+    weekday: '0'
+    job: 'APP_DIR={{ app_dir }} /usr/local/bin/azapfy-sync-docs --full'
+
+# --- Hardening sshd -----------------------------------------------------------
+- name: sshd — sem autenticação por senha
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PasswordAuthentication'
+    line: 'PasswordAuthentication no'
+  notify: reiniciar sshd
+
+- name: sshd — root só com chave
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PermitRootLogin'
+    line: 'PermitRootLogin prohibit-password'
+  notify: reiniciar sshd
+
+# --- DNS resiliente (systemd-resolved) ----------------------------------------
+# Os recursores da Hetzner (185.12.64.x) têm períodos de timeout que derrubam a
+# resolução no host E nos containers (o Docker repassa os upstreams do resolved
+# aos containers). Sintoma real visto em produção: api3.azapfy.com.br e
+# db-beta "inalcançáveis" com o IP respondendo normal. Upstreams públicos como
+# primários; os da Hetzner ficam de fallback.
+- name: Diretório de drop-ins do resolved
+  ansible.builtin.file:
+    path: /etc/systemd/resolved.conf.d
+    state: directory
+    mode: '0755'
+
+- name: DNS público primário + fallback Hetzner
+  ansible.builtin.copy:
+    dest: /etc/systemd/resolved.conf.d/10-azapfy-dns.conf
+    content: |
+      [Resolve]
+      DNS=1.1.1.1 8.8.8.8
+      FallbackDNS=185.12.64.1 185.12.64.2
+    mode: '0644'
+  notify: reiniciar systemd-resolved
+
+# --- Pacotes base -------------------------------------------------------------
+- name: Pacotes base
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - ufw
+      - unattended-upgrades
+      - rsync
+      - openssl
+      - python3-debian # exigido pelo deb822_repository
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: fail2ban
+  ansible.builtin.apt:
+    name: fail2ban
+    state: present
+  when: enable_fail2ban
+
+- name: fail2ban ativo
+  ansible.builtin.service:
+    name: fail2ban
+    state: started
+    enabled: true
+  when: enable_fail2ban
+
+- name: Atualizações automáticas de segurança
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    mode: '0644'
+
+# --- Firewall -----------------------------------------------------------------
+# ATENÇÃO: Docker publica portas direto no iptables, BYPASSANDO o UFW. A
+# proteção efetiva dos containers é (a) nenhuma porta publicada no compose de
+# produção e (b) o firewall da Hetzner (Terraform). O UFW cobre o próprio host.
+- name: UFW — libera SSH/HTTP/HTTPS
+  community.general.ufw:
+    rule: allow
+    port: '{{ item }}'
+    proto: tcp
+  loop: ['22', '80', '443']
+
+- name: UFW ligado (default deny incoming)
+  community.general.ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+
+# --- Swap (a VPS tem 4 GB e roda duas stacks) ---------------------------------
+- name: Cria swapfile de {{ swap_size_mb }}MB
+  ansible.builtin.shell: |
+    set -euo pipefail
+    fallocate -l {{ swap_size_mb }}M /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+  args:
+    executable: /bin/bash
+    creates: /swapfile
+
+- name: Swap no fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    line: '/swapfile none swap sw 0 0'
+
+# --- Docker CE + compose plugin (repo oficial; compose ≥ 2.24.4 p/ tags !reset)
+- name: Repositório Docker
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: https://download.docker.com/linux/ubuntu
+    suites: ['{{ ansible_facts["distribution_release"] }}']
+    components: [stable]
+    architectures: ["{{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else 'arm64' }}"]
+    signed_by: https://download.docker.com/linux/ubuntu/gpg
+
+- name: Docker CE + compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Docker ativo
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: '{{ deploy_user }} no grupo docker'
+  ansible.builtin.user:
+    name: '{{ deploy_user }}'
+    groups: docker
+    append: true
+
+# O grupo docker só vale em conexão nova — força reconexão para tasks seguintes.
+- name: Reconecta para aplicar o grupo docker
+  ansible.builtin.meta: reset_connection

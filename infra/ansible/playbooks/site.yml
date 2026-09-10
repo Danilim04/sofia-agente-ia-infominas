@@ -1,0 +1,14 @@
+---
+# ESTADO da VM do bot (role base): user deploy, hardening, firewall, docker,
+# diretório da stack. O deploy da aplicação NÃO passa por aqui — é a pipeline
+# (deploy/deploy-remote.sh). Rodado como 1º job do .github/workflows/deploy.yml
+# (ou local, para depurar).
+#
+# A VM é compartilhada com a stack omni-route: a role converge o MESMO estado
+# que a role base de lá (idempotente nos dois sentidos) e só acrescenta o que
+# é nosso (/opt/azapfy-bot, chave do CI).
+- name: Estado base da VM do bot
+  hosts: bot
+  become: true
+  roles:
+    - base

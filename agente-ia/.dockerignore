@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+**/__pycache__/
+chroma_db/
+tests/
+.env
+.env.*
+!.env.example
+.chainlit/
+*.md
+!docs/*.md
+.pytest_cache/

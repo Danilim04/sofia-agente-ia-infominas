@@ -1,0 +1,6 @@
+.env
+*.db
+*.db-shm
+*.db-wal
+/bot
+/cmd/bot/bot

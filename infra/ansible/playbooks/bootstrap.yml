@@ -1,0 +1,44 @@
+---
+# PRIMEIRA execução numa VM onde a chave do CI ainda não entra: conecta como
+# root (com uma chave que já tenha acesso) e autoriza a chave do deploy.
+# Depois disso, todo acesso do Ansible/pipeline é via user deploy.
+#
+# A chave tem espaços, então o -e PRECISA do formato JSON — em key=value o
+# Ansible corta no primeiro espaço e a var chega como só "ssh-ed25519":
+#   ansible-playbook playbooks/bootstrap.yml \
+#     -e "{\"deploy_ssh_public_key\": \"$(cat ~/.ssh/azapfy_deploy.pub)\"}"
+- name: Prepara o acesso do Ansible na VM do bot
+  hosts: bot
+  remote_user: root
+  gather_facts: false
+  vars:
+    deploy_user: deploy
+  tasks:
+    - name: Valida a chave pública recebida
+      ansible.builtin.assert:
+        that:
+          - deploy_ssh_public_key is defined
+          - deploy_ssh_public_key | trim is match('^(ssh|ecdsa)-')
+          - deploy_ssh_public_key | trim | split(' ') | length >= 2
+        fail_msg: >-
+          deploy_ssh_public_key vazia ou truncada — use o formato JSON:
+          -e "{\"deploy_ssh_public_key\": \"$(cat ~/.ssh/azapfy_deploy.pub)\"}"
+
+    - name: Usuário {{ deploy_user }}
+      ansible.builtin.user:
+        name: '{{ deploy_user }}'
+        shell: /bin/bash
+        groups: sudo
+        append: true
+
+    - name: Sudo sem senha
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/90-azapfy-deploy
+        content: '{{ deploy_user }} ALL=(ALL) NOPASSWD:ALL'
+        mode: '0440'
+        validate: 'visudo -cf %s'
+
+    - name: Chave SSH autorizada
+      ansible.posix.authorized_key:
+        user: '{{ deploy_user }}'
+        key: '{{ deploy_ssh_public_key }}'
