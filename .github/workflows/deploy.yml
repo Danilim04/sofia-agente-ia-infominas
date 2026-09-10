@@ -3,8 +3,9 @@
 #
 # Ordem (exigência do fluxo): 1º o ANSIBLE converge o estado da VM
 # (configure-server.yml via workflow_call), 2º o job de deploy roda o script
-# deploy/deploy-remote.sh — build das 2 imagens, docker save|load pra VPS,
-# .env renderizado dos secrets, compose up e healthcheck pela rede do Chatwoot.
+# deploy/deploy-remote.sh --build-on-host — rsync das fontes, build das 2
+# imagens NA VM (ela é ARM64; o runner é x86_64), .env renderizado dos
+# secrets, compose up e healthcheck pela rede do Chatwoot.
 # O `go vet`/`go test` do gateway corre em paralelo ao Ansible como portão.
 #
 # Rollback = Run workflow com uma version antiga (as imagens das últimas 3
@@ -12,11 +13,14 @@
 #
 # Secrets exigidos: SSH_PRIVATE_KEY · OPENROUTER_API_KEY · MONGO_URI ·
 #                   WEBHOOK_TOKEN · TOOLS_API_TOKEN · PGVECTOR_PASSWORD
-# Opcionais:        SAC_API_TOKEN · SAC_SERVICE_COD · CHATWOOT_API_TOKEN
+# Opcionais:        DOCS_API_KEY (sem ela o sync da base aborta) ·
+#                   SAC_API_TOKEN · SAC_SERVICE_COD · CHATWOOT_API_TOKEN
 #                   (a fonte primária do token do Chatwoot é o ESTADO da VM,
 #                   .chatwoot-token — gravado pela pipeline configure-chatwoot)
 #                   LANGFUSE_PUBLIC_KEY · LANGFUSE_SECRET_KEY · LANGFUSE_HOST
 #                   (tracing; vazios = desligado. HOST default = cloud EU)
+# Variables:        INBOX_ID (caixa do Chatwoot que o bot atende; vazio = 0 =
+#                   todas — a pipeline configure-chatwoot lista as caixas)
 # ==============================================================================
 name: Deploy
 
@@ -88,29 +92,14 @@ jobs:
           printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_bot
           chmod 600 ~/.ssh/id_bot
 
-      # Build AQUI (com cache entre runs) — o deploy-remote.sh recebe
-      # --skip-build e só transporta/sobe. Rodado fora do CI, o script builda.
-      - uses: docker/setup-buildx-action@v3
-      - name: Build brain (cache gha)
-        uses: docker/build-push-action@v6
-        with:
-          context: agente-ia
-          load: true
-          tags: azapfy-bot:brain-${{ steps.ver.outputs.version }}
-          cache-from: type=gha,scope=brain
-          cache-to: type=gha,scope=brain,mode=max
-      - name: Build gateway (cache gha)
-        uses: docker/build-push-action@v6
-        with:
-          context: backend
-          load: true
-          tags: azapfy-bot:gateway-${{ steps.ver.outputs.version }}
-          cache-from: type=gha,scope=gateway
-          cache-to: type=gha,scope=gateway,mode=max
-
+      # O build NÃO acontece aqui: a VM é ARM64 e o runner é x86_64. O
+      # deploy-remote.sh --build-on-host manda as fontes por rsync e builda
+      # nativamente na VM (deploy/build-on-host.sh), com cache de camadas lá.
       - name: Renderiza o .env de produção
         env:
           IMAGE_TAG: ${{ steps.ver.outputs.version }}
+          # Caixa do Chatwoot atendida pelo bot (GitHub variable; vazia = 0 = todas).
+          INBOX_ID: ${{ vars.INBOX_ID }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MONGO_URI: ${{ secrets.MONGO_URI }}
           WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
@@ -139,4 +128,4 @@ jobs:
             --version '${{ steps.ver.outputs.version }}' \
             --env-file "$RUNNER_TEMP/prod.env" \
             --key ~/.ssh/id_bot \
-            --skip-build
+            --build-on-host

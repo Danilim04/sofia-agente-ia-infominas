@@ -8,7 +8,7 @@
 #      índice do RAG POPULADO (rag_chunks > 0) — com VECTOR_BACKEND=pgvector,
 #      índice vazio = bot que não sabe nada; silêncio não passa
 #   1. gateway /health respondendo (processo vivo, Mongo e Postgres no boot)
-#   2. brain   /health respondendo (grafo compilado, Chroma aberto)
+#   2. brain   /health respondendo (grafo compilado; RAG lê o pgvector)
 #   3. gateway alcançável PELA REDE DO CHATWOOT no alias azapfy-bot — é o
 #      caminho do webhook; sem isso o deploy "sobe" mas o bot nunca recebe
 #      mensagem nenhuma. Silêncio não passa.

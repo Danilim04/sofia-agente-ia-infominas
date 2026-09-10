@@ -1,11 +1,10 @@
 # ==============================================================================
-# Cérebro Python (Contrato A) — imagem auto-contida: dependências + docs +
-# ChromaDB JÁ INGERIDO em build-time (o modelo de embeddings local também fica
-# baked no HF_HOME). Nada é baixado em runtime; o container sobe pronto.
-#
-# O ingest roda com OPENROUTER_API_KEY dummy: ele só usa embeddings LOCAIS
-# (sentence-transformers), mas o Settings exige a chave — o valor real chega
-# em runtime via .env do compose e sobrescreve qualquer resquício.
+# Cérebro Python (Contrato A) — dependências + código + docs. NÃO há ingestão
+# em build-time: em produção o índice do RAG vive no Postgres/pgvector e é
+# populado pelo deploy (AzapDocs → pgvector, `src.rag.sync --fonte api`) e pelo
+# cron diário; a imagem só precisa saber CONSULTAR. O Chroma continua
+# disponível como backend legado de dev (VECTOR_BACKEND=chroma) — nesse caso
+# rode `python -m src.rag.ingest` antes, fora da imagem.
 # ==============================================================================
 FROM python:3.12-slim
 
@@ -25,13 +24,6 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch && \
 COPY src/ src/
 COPY docs/ docs/
 COPY server.py .
-
-# docs Markdown → chunks → ChromaDB persistido, SEMPRE com o modelo local
-# fixo (CHROMA_EMBEDDINGS_MODEL em src/rag/ingest.py; baixado para o HF_HOME
-# da imagem). É o índice de rollback offline. Em produção o agente lê o
-# pgvector, embutido pelo OpenRouter (EMBEDDINGS_PROVIDER=openrouter).
-RUN OPENROUTER_API_KEY=dummy-build-ingest \
-    python -m src.rag.ingest --docs-dir docs --persist-dir /app/chroma_db
 
 RUN useradd --uid 10001 --create-home app && chown -R app:app /app
 # /data recebe o checkpointer SQLite (volume brain-data no compose). Criar o

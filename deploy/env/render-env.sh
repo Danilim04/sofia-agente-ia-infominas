@@ -28,8 +28,13 @@ if [ "${#faltando[@]}" -gt 0 ]; then
   exit 1
 fi
 
+# INBOX_ID: caixa do Chatwoot que o bot atende (GitHub *variable*, não secret).
+# Vazio = 0 = todas as caixas da conta. Os ids mudam de instância para
+# instância — a pipeline "Configurar Chatwoot" lista as caixas ao final.
+export INBOX_ID="${INBOX_ID:-0}"
+
 # Lista EXPLÍCITA de substituições — o envsubst não toca em mais nada.
 # Vars OPCIONAIS (fora da lista required, ex.: SAC_*) podem vir vazias: a
 # chave entra vazia e o gateway trata como não configurada.
-vars='$IMAGE_TAG $OPENROUTER_API_KEY $MONGO_URI $CHATWOOT_API_TOKEN $WEBHOOK_TOKEN $TOOLS_API_TOKEN $PGVECTOR_PASSWORD $DOCS_API_KEY $SYNC_ALERTA_WEBHOOK $SAC_API_TOKEN $SAC_SERVICE_COD $LANGFUSE_PUBLIC_KEY $LANGFUSE_SECRET_KEY $LANGFUSE_HOST'
+vars='$IMAGE_TAG $OPENROUTER_API_KEY $MONGO_URI $CHATWOOT_API_TOKEN $WEBHOOK_TOKEN $TOOLS_API_TOKEN $PGVECTOR_PASSWORD $DOCS_API_KEY $SYNC_ALERTA_WEBHOOK $SAC_API_TOKEN $SAC_SERVICE_COD $LANGFUSE_PUBLIC_KEY $LANGFUSE_SECRET_KEY $LANGFUSE_HOST $INBOX_ID'
 envsubst "$vars" < prod.env.tpl

@@ -177,9 +177,11 @@ o agente: `google/gemini-3.7-flash` (mais novo/barato) ou
 índice pgvector** vêm de `EMBEDDINGS_PROVIDER`: em produção `openrouter`
 com `openai/text-embedding-3-small` (multilíngue, 1536 dims, ~US$0,02/1M
 tokens, pelo `/embeddings` do OpenRouter com a mesma chave); em dev/testes
-`local` (`sentence-transformers`, offline). O **Chroma embutido na imagem**
-(rollback) é sempre local com `CHROMA_EMBEDDINGS_MODEL` (`ingest.py`),
-independente do provider — nunca misture os dois espaços vetoriais.
+`local` (`sentence-transformers`, offline). O Chroma (backend legado de dev,
+`python -m src.rag.ingest`) é sempre local com `CHROMA_EMBEDDINGS_MODEL`
+(`ingest.py`), independente do provider — nunca misture os dois espaços
+vetoriais. **A imagem docker não embute índice nenhum**: em produção só existe
+o pgvector, populado pelo deploy e pelo cron.
 
 ### Persona "Zapin" (voz "Azapfy Suporte")
 
@@ -279,6 +281,20 @@ duplicata ou envelope de relay:
   `---`; cada bolha vira uma mensagem, com pausa `BOLHA_PAUSA`=1.5s entre
   elas) + `FormatWhatsApp` (`**`→`*`, `#`→negrito, `[t](u)`→`t: u`) +
   `QuebrarMensagem` (`REPLY_MAX_CHARS`=900) em todo `send()` (F3/F12).
+
+### Deploy (VM compartilhada com o omni-route)
+
+Produção roda numa VM **ARM64 / Debian 13** provisionada pela Azapfy (IP na
+fonte única `infra/ansible/inventories/prod/hosts.yml`), ao lado da stack
+omni-route (Chatwoot/Traefik/Evolution na rede docker `omniroute_default`). O
+gateway entra nessa rede com o alias `azapfy-bot`; nada do bot publica porta
+na internet. Como o runner do GitHub é x86_64, **as imagens são construídas na
+própria VM** (`deploy/deploy-remote.sh --build-on-host` → rsync das fontes
+rastreadas → `deploy/build-on-host.sh`). Estado da VM = Ansible (role `base`,
+funciona em Ubuntu e Debian); deploy = `.github/workflows/deploy.yml`; bot no
+Chatwoot = `configure-chatwoot.yml` (`setup-bot.sh`, pela API do omni-route).
+Detalhes e lista de secrets/variables em `deploy/README.md`. O root
+`infra/terraform` descreve a VM Hetzner antiga e não gerencia a atual.
 
 ### Observabilidade (logs)
 

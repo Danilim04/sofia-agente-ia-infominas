@@ -36,7 +36,7 @@ AGENT_MAX_ITERACOES=5
 # LLM; multilíngue; ~US$0,02 por 1M tokens — a base inteira custa < 1 centavo).
 # Trocar provider/modelo aqui = o deploy reconstrói o índice sozinho
 # (--reconstruir-se-modelo-mudou). Rollback offline: EMBEDDINGS_PROVIDER=local
-# + EMBEDDINGS_MODEL=sentence-transformers/all-MiniLM-L6-v2 (ou VECTOR_BACKEND=chroma).
+# + EMBEDDINGS_MODEL=sentence-transformers/all-MiniLM-L6-v2 (índice refeito no pgvector).
 EMBEDDINGS_PROVIDER=openrouter
 EMBEDDINGS_MODEL=openai/text-embedding-3-small
 # CHECKPOINT_DB_PATH vem do docker-compose.yml (volume brain-data:/data)
@@ -47,7 +47,7 @@ EMBEDDINGS_MODEL=openai/text-embedding-3-small
 PGVECTOR_PASSWORD=${PGVECTOR_PASSWORD}
 # Backend de LEITURA do RAG (virada feita em 2026-09-04): o agente lê o índice
 # do pgvector, populado pela ingestão do deploy + cron diário (AzapDocs).
-# Rollback = chroma (índice baked na imagem, só os docs/*.md do repo) + deploy.
+# A imagem NÃO embute índice Chroma: pgvector é o único backend em produção.
 VECTOR_BACKEND=pgvector
 
 # --- Cérebro: fonte da base de conhecimento (AzapDocs, Contrato B) ------------
@@ -84,10 +84,11 @@ PUBLIC_BASE_URL=http://azapfy-bot:8080
 LABEL_BOT=fila-bot
 LABEL_HUMANO=fila-humano
 # Caixa de entrada cujas conversas NOVAS o gateway etiqueta com fila-bot no
-# conversation_created (5 = caixa "whatsapp-daniel-teste" da conta Omni Route,
-# a caixa que o bot atende desde 2026-09-04 — a antiga 3 "whatsapp-infodesk"
-# foi removida do Chatwoot; 0 = todas).
-INBOX_ID=5
+# conversation_created. O id é ESPECÍFICO da instância do Chatwoot (na VM
+# antiga era 5, "whatsapp-daniel-teste"); vem da GitHub variable INBOX_ID
+# (vazia = 0 = todas as caixas). A pipeline "Configurar Chatwoot" lista as
+# caixas existentes ao final — use o id de lá.
+INBOX_ID=${INBOX_ID}
 CONFIRM_FIELD=email
 MAX_TENTATIVAS=3
 IDENTITY_TTL=24h

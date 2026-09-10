@@ -84,11 +84,21 @@
 # aos containers). Sintoma real visto em produção: api3.azapfy.com.br e
 # db-beta "inalcançáveis" com o IP respondendo normal. Upstreams públicos como
 # primários; os da Hetzner ficam de fallback.
+#
+# Só se aplica onde o systemd-resolved EXISTE (Ubuntu). No Debian 13 da VM
+# atual ele não vem instalado (resolv.conf estático do provedor) — as tasks
+# são puladas em vez de quebrar no handler.
+- name: systemd-resolved está instalado?
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/system/systemd-resolved.service
+  register: resolved_unit
+
 - name: Diretório de drop-ins do resolved
   ansible.builtin.file:
     path: /etc/systemd/resolved.conf.d
     state: directory
     mode: '0755'
+  when: resolved_unit.stat.exists
 
 - name: DNS público primário + fallback Hetzner
   ansible.builtin.copy:
@@ -99,6 +109,7 @@
       FallbackDNS=185.12.64.1 185.12.64.2
     mode: '0644'
   notify: reiniciar systemd-resolved
+  when: resolved_unit.stat.exists
 
 # --- Pacotes base -------------------------------------------------------------
 - name: Pacotes base
@@ -154,7 +165,7 @@
     policy: deny
     direction: incoming
 
-# --- Swap (a VPS tem 4 GB e roda duas stacks) ---------------------------------
+# --- Swap (rede de segurança: a VM roda duas stacks; no-op se /swapfile já existe)
 - name: Cria swapfile de {{ swap_size_mb }}MB
   ansible.builtin.shell: |
     set -euo pipefail
@@ -172,15 +183,17 @@
     line: '/swapfile none swap sw 0 0'
 
 # --- Docker CE + compose plugin (repo oficial; compose ≥ 2.24.4 p/ tags !reset)
-- name: Repositório Docker
+# O repo é escolhido pela distro real (ubuntu OU debian) e pela arquitetura
+# (amd64 OU arm64) — a VM atual é Debian 13 arm64; a anterior era Ubuntu amd64.
+- name: Repositório Docker ({{ ansible_facts["distribution"] }} {{ ansible_facts["distribution_release"] }})
   ansible.builtin.deb822_repository:
     name: docker
     types: [deb]
-    uris: https://download.docker.com/linux/ubuntu
+    uris: 'https://download.docker.com/linux/{{ ansible_facts["distribution"] | lower }}'
     suites: ['{{ ansible_facts["distribution_release"] }}']
     components: [stable]
     architectures: ["{{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else 'arm64' }}"]
-    signed_by: https://download.docker.com/linux/ubuntu/gpg
+    signed_by: 'https://download.docker.com/linux/{{ ansible_facts["distribution"] | lower }}/gpg'
 
 - name: Docker CE + compose plugin
   ansible.builtin.apt:

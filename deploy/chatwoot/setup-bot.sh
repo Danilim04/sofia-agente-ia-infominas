@@ -176,6 +176,12 @@ ME="$(curl -sf "$API/api/auth/workspace/me" -H "Authorization: Bearer $BOT_JWT")
 echo "→ verificação omni-route (workspace/me do bot): $(echo "$ME" \
   | jq -c '{email: (.user.email // .email), role: (.user.role // .role), conta: (.chatwoot.accountId // null)}')"
 
+# --- 8. Caixas de entrada da conta — para escolher o INBOX_ID do .env ---------
+INBOX_ATUAL="$(envval "$BOT_ENV" INBOX_ID)"
+echo "→ caixas de entrada da conta $ACC (INBOX_ID atual no .env: ${INBOX_ATUAL:-?}; 0 = todas):"
+curl -sf "$CW/api/v1/accounts/$ACC/inboxes" -H "api_access_token: $ADMIN_CW_TOKEN" \
+  | jq -r '.payload[] | "   id=\(.id)  \(.name)  [\(.channel_type)]"' || echo "   (não consegui listar)"
+
 # Arquivos de estado pertencem ao user deploy do host, não ao root do container.
 [ -n "${HOST_UID:-}" ] && chown "${HOST_UID}:${HOST_GID:-$HOST_UID}" \
   "$STATE/.chatwoot-token" "$STATE/.zapin-credentials" || true
