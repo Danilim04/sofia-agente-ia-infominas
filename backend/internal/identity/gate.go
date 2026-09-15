@@ -55,7 +55,7 @@ type Resultado struct {
 // é transitório: some quando a identidade é confirmada (não vai para o cache).
 type gateData struct {
 	Login        string        `json:"login,omitempty"`
-	Tentativas   int           `json:"tentativas,omitempty"`
+	Tentativas   int           `json:"tentativas,omitempty"` // erros acumulados no episódio (login + confirmação)
 	Perfil       *mongo.Perfil `json:"perfil,omitempty"`
 	ConfirmField string        `json:"confirm_field,omitempty"`
 	ConfirmValue string        `json:"confirm_value,omitempty"`
@@ -283,11 +283,15 @@ func (g *Gate) tratarLogin(ctx context.Context, convID int64, phone, mensagem st
 		g.log.Warn("sem dado de confirmação no cadastro; identificando sem confirmar", "conversation_id", convID)
 		return g.identificar(ctx, convID, phone, &perfil)
 	}
+	// O contador de erros é do EPISÓDIO de identificação, não da fase: os
+	// erros de login gastos até aqui continuam valendo na confirmação, para que
+	// o teto (MAX_TENTATIVAS) seja o total de erros antes da fila humana.
 	ngd := gateData{
 		Login:        login,
 		Perfil:       &perfil,
 		ConfirmField: g.confirmField,
 		ConfirmValue: normalizar(expected),
+		Tentativas:   gd.Tentativas,
 	}
 	g.salvarGate(ctx, convID, store.GateAguardConfirm, ngd)
 	g.log.Info("login resolvido, pedindo confirmação", "conversation_id", convID, "login", login, "confirm_field", g.confirmField)

@@ -50,7 +50,7 @@ type Config struct {
 
 	// Identidade / gate.
 	ConfirmField  string        // dado pedido na confirmação: "email" (default) | "nome"
-	MaxTentativas int           // tentativas de login/confirmação antes de rotear p/ humano
+	MaxTentativas int           // erros de identificação (login + confirmação, acumulados) antes de rotear p/ humano
 	IdentityTTL   time.Duration // validade do cache telefone→perfil (base própria)
 	GateFalhaTTL  time.Duration // após esse tempo, GateFalha expira e a identificação recomeça (F1)
 

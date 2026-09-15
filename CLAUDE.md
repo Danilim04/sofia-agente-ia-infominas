@@ -256,7 +256,18 @@ duplicata ou envelope de relay:
   webhook.
 - **Higiene de envelope** (`StripAssinatura`): assinatura de relay
   (`**Fulano:**`) é removida antes do gate/cérebro (F2).
-- **Gate**: `GateFalha` expira (`GATE_FALHA_TTL`=1h — F1); confirmação tolera
+- **Grupos de WhatsApp são ignorados** (`EhGrupo` em `chatwoot/types.go`,
+  checado em `HandleMessageCreated` e em `adotarConversa`): JID `…@g.us` no
+  `identifier` do contato, nome do contato terminando em `(GROUP)` (convenção
+  do Evolution), "telefone" com >15 dígitos ou no formato antigo
+  `criador-timestamp`, ou atributo `is_group` explícito. A mensagem é
+  descartada na borda (sem gate, sem cérebro, sem etiqueta de fila). O
+  payload real do incidente de 2026-09-14 está em
+  `backend/internal/chatwoot/grupo_test.go` (`payloadGrupoReal`).
+- **Gate**: o teto `MAX_TENTATIVAS` (=3) é de erros **acumulados no
+  episódio** (login + confirmação — o contador não zera ao passar de fase);
+  no 3º erro a conversa vai para a fila humana. `GateFalha` expira
+  (`GATE_FALHA_TTL`=1h — F1); confirmação tolera
   texto ao redor do dado (`confereConfirmacao`); login resolve e-mail/CPF
   embutidos em frase deterministicamente antes de cair no extractor de IA (F2).
   Conversa identificada com o cache `identities` vencido (`IDENTITY_TTL`=24h)

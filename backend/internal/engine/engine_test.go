@@ -99,3 +99,76 @@ func TestEventoStatusChangedResolvidoApagaGate(t *testing.T) {
 		t.Fatalf("status_changed resolved: esperava gate apagado, ainda existe %+v", gs)
 	}
 }
+
+// TestMensagemDeGrupoNaoEntraNaFila: o bot não responde grupo de WhatsApp. A
+// mensagem é descartada na borda — nenhum worker de conversa é criado (sem
+// gate, sem cérebro, sem resposta).
+func TestMensagemDeGrupoNaoEntraNaFila(t *testing.T) {
+	e, _ := engineComStore(t)
+	ctx := context.Background()
+
+	msg := &chatwoot.MessageCreated{
+		MessageType: chatwoot.MessageIncoming,
+		Content:     "alguém sabe se o app caiu?",
+		SourceID:    "waid-grupo-1",
+		Sender:      chatwoot.Sender{Type: "contact", Name: "Fulano", Identifier: "120363041234567890@g.us"},
+	}
+	msg.Conversation.ID = 50
+	msg.Conversation.Meta.Sender = chatwoot.Contact{Name: "Grupo Logística", Identifier: "120363041234567890@g.us"}
+
+	e.HandleMessageCreated(ctx, msg)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.filas[50]; ok {
+		t.Fatal("mensagem de grupo não pode abrir fila/worker de conversa")
+	}
+}
+
+// TestConversaDeGrupoNaoEhAdotada: conversation_created de grupo na caixa do
+// bot não recebe a etiqueta da fila do bot.
+func TestConversaDeGrupoNaoEhAdotada(t *testing.T) {
+	e, _ := engineComStore(t)
+	e.cfg.LabelBot = "fila-bot"
+	ctx := context.Background()
+
+	conv := chatwoot.Conversation{ID: 51}
+	conv.Meta.Sender = chatwoot.Contact{Name: "Grupo", PhoneNumber: "+120363041234567890"}
+	if e.adotarConversa(ctx, &conv) {
+		t.Fatal("conversa de grupo não pode ser adotada pela fila do bot")
+	}
+}
+
+// TestPayloadRealDeGrupoNaoEntraNaFila repete o incidente de 2026-09-14
+// (conversa 5, grupo de teste) com o webhook real: hoje a engine descarta na
+// borda, mesmo com a conversa já etiquetada como fila-bot.
+func TestPayloadRealDeGrupoNaoEntraNaFila(t *testing.T) {
+	e, _ := engineComStore(t)
+	e.cfg.LabelBot = "fila-bot"
+	ctx := context.Background()
+
+	var msg chatwoot.MessageCreated
+	if err := json.Unmarshal([]byte(payloadGrupoReal), &msg); err != nil {
+		t.Fatal(err)
+	}
+	e.HandleMessageCreated(ctx, &msg)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.filas[msg.Conversation.ID]; ok {
+		t.Fatal("payload real de grupo não pode abrir fila/worker de conversa")
+	}
+}
+
+// payloadGrupoReal: cópia do fixture de internal/chatwoot (telefone mascarado).
+const payloadGrupoReal = `{
+ "event": "message_created", "id": 118,
+ "content": "**+55 (31) 9999-0000 - Participante Teste:**\n\nteste",
+ "message_type": "incoming", "private": false, "source_id": "WAID:3EB03E00F600330A1AADC8",
+ "sender": {"id": 3, "identifier": "120363428192696101@g.us", "name": " (GROUP)", "phone_number": null, "additional_attributes": {}},
+ "conversation": {
+  "id": 5, "inbox_id": 3, "labels": ["fila-bot"], "status": "open", "additional_attributes": {},
+  "meta": {"sender": {"id": 3, "identifier": "120363428192696101@g.us", "name": " (GROUP)", "phone_number": null, "type": "contact"}, "assignee": null}
+ },
+ "account": {"id": 1, "name": "Omni Route"}
+}`

@@ -235,13 +235,113 @@ func (ev *ConversationUpdated) LabelJustAdded(target string) bool {
 
 // Conversation reúne os campos da conversa que o bot utiliza.
 type Conversation struct {
-	ID               int64          `json:"id"`
-	AccountID        int64          `json:"account_id"`
-	InboxID          int64          `json:"inbox_id"`
-	Status           string         `json:"status"`
-	Labels           []string       `json:"labels"`
-	Meta             Meta           `json:"meta"`
-	CustomAttributes map[string]any `json:"custom_attributes"`
+	ID                   int64          `json:"id"`
+	AccountID            int64          `json:"account_id"`
+	InboxID              int64          `json:"inbox_id"`
+	Status               string         `json:"status"`
+	Labels               []string       `json:"labels"`
+	Meta                 Meta           `json:"meta"`
+	CustomAttributes     map[string]any `json:"custom_attributes"`
+	AdditionalAttributes map[string]any `json:"additional_attributes"`
+}
+
+// EhGrupo informa se a conversa é de um GRUPO de WhatsApp (e não de um
+// contato individual). O bot nunca responde grupo: não há um cliente para
+// identificar, e uma resposta ali vaza para todos os participantes.
+//
+// Os relays (Evolution/Baileys/WAHA) não têm um campo padronizado, então a
+// detecção é por evidência — qualquer uma basta:
+//   - identifier do contato termina em "@g.us" (JID de grupo do WhatsApp);
+//   - nome do contato termina em "(GROUP)" (convenção do Evolution);
+//   - o "telefone" não é um número: mais de 15 dígitos (teto do E.164 —
+//     JIDs de grupo têm 18) ou o formato antigo "criador-timestamp";
+//   - atributo is_group/isGroup/group verdadeiro no contato ou na conversa.
+func (c *Conversation) EhGrupo() bool {
+	return contatoEhGrupo(c.Meta.Sender.Identifier, c.Meta.Sender.PhoneNumber, c.Meta.Sender.Name, c.Meta.Sender.AdditionalAttributes) ||
+		atributoGrupo(c.AdditionalAttributes)
+}
+
+// EhGrupo informa se a mensagem veio de um grupo — olha o sender da mensagem
+// e, em fallback, o contato da conversa.
+func (m *MessageCreated) EhGrupo() bool {
+	return contatoEhGrupo(m.Sender.Identifier, m.Sender.PhoneNumber, m.Sender.Name, m.Sender.AdditionalAttributes) ||
+		m.Conversation.EhGrupo()
+}
+
+const sufixoJIDGrupo = "@g.us"
+
+func contatoEhGrupo(identifier, phone, nome string, attrs map[string]any) bool {
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(identifier)), sufixoJIDGrupo) {
+		return true
+	}
+	// Evolution nomeia o contato do grupo como "<assunto> (GROUP)" — e só
+	// " (GROUP)" quando não consegue ler o assunto (payload real, 2026-09-14).
+	if strings.HasSuffix(strings.ToUpper(strings.TrimSpace(nome)), "(GROUP)") {
+		return true
+	}
+	if telefoneEhJIDDeGrupo(phone) {
+		return true
+	}
+	return atributoGrupo(attrs)
+}
+
+// telefoneEhJIDDeGrupo reconhece um id de grupo que o relay gravou no campo
+// phone_number: "120363xxxxxxxxxxxx" (18 dígitos, além do teto de 15 do
+// E.164) ou "5511999999999-1234567890" (formato antigo, com hífen entre dois
+// blocos de dígitos).
+func telefoneEhJIDDeGrupo(phone string) bool {
+	p := strings.TrimSpace(phone)
+	p = strings.TrimSuffix(strings.ToLower(p), sufixoJIDGrupo)
+	if p == "" {
+		return false
+	}
+	digitos := 0
+	for _, r := range p {
+		if r >= '0' && r <= '9' {
+			digitos++
+		}
+	}
+	if digitos > 15 {
+		return true
+	}
+	// Formato antigo: dois blocos de dígitos separados por hífen.
+	if i := strings.IndexByte(p, '-'); i > 0 && i < len(p)-1 {
+		a, b := strings.TrimPrefix(p[:i], "+"), p[i+1:]
+		if soDigitos(a) && soDigitos(b) && len(b) >= 9 {
+			return true
+		}
+	}
+	return false
+}
+
+func soDigitos(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// atributoGrupo procura uma marca explícita de grupo nos atributos livres que
+// alguns relays preenchem.
+func atributoGrupo(attrs map[string]any) bool {
+	for _, k := range []string{"is_group", "isGroup", "group", "grupo"} {
+		switch v := attrs[k].(type) {
+		case bool:
+			if v {
+				return true
+			}
+		case string:
+			if s := strings.ToLower(strings.TrimSpace(v)); s == "true" || s == "1" || s == "yes" || s == "sim" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Meta carrega o contato (sender) e o agente designado da conversa.
@@ -252,10 +352,12 @@ type Meta struct {
 
 // Contact é o cliente final.
 type Contact struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	Email       string `json:"email"`
-	PhoneNumber string `json:"phone_number"`
+	ID                   int64          `json:"id"`
+	Name                 string         `json:"name"`
+	Email                string         `json:"email"`
+	PhoneNumber          string         `json:"phone_number"`
+	Identifier           string         `json:"identifier"` // id na origem (JID no WhatsApp: "...@s.whatsapp.net" | "...@g.us")
+	AdditionalAttributes map[string]any `json:"additional_attributes"`
 }
 
 // User é um agente/atendente.
@@ -266,11 +368,13 @@ type User struct {
 
 // Sender é o autor de uma mensagem (contato ou agente).
 type Sender struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	Email       string `json:"email"`
-	PhoneNumber string `json:"phone_number"`
-	Type        string `json:"type"` // "contact" | "user"
+	ID                   int64          `json:"id"`
+	Name                 string         `json:"name"`
+	Email                string         `json:"email"`
+	PhoneNumber          string         `json:"phone_number"`
+	Identifier           string         `json:"identifier"`
+	AdditionalAttributes map[string]any `json:"additional_attributes"`
+	Type                 string         `json:"type"` // "contact" | "user"
 }
 
 // IsContact informa se o remetente é o cliente final. Campo vazio é tratado

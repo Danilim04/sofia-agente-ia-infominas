@@ -475,3 +475,43 @@ func TestSaudacaoAbertura(t *testing.T) {
 		}
 	}
 }
+
+func TestGateErrosAcumulamEntreLoginEConfirmacao(t *testing.T) {
+	// O teto de tentativas é do EPISÓDIO: 2 logins errados + login certo + 1
+	// confirmação errada = 3 erros → fila humana. Antes, o contador zerava ao
+	// entrar na confirmação e o cliente podia errar até 5 vezes.
+	g, _ := newGate(t, fakeRepo{docs: map[string]mongo.UsuarioDoc{"10596693664": docDaniel()}})
+	ctx := context.Background()
+	const conv = int64(31)
+	const phone = "5511000000031"
+
+	g.Process(ctx, conv, phone, "oi") // pede login
+	if r := g.Process(ctx, conv, phone, "naoexiste"); r.Acao != AcaoPerguntar {
+		t.Fatalf("erro 1 (login): esperava perguntar, veio %q", r.Acao)
+	}
+	if r := g.Process(ctx, conv, phone, "naoexiste2"); r.Acao != AcaoPerguntar {
+		t.Fatalf("erro 2 (login): esperava perguntar, veio %q", r.Acao)
+	}
+	if r := g.Process(ctx, conv, phone, "10596693664"); r.Acao != AcaoPerguntar {
+		t.Fatalf("login certo: esperava pedir confirmação, veio %q", r.Acao)
+	}
+	if r := g.Process(ctx, conv, phone, "email@errado.com"); r.Acao != AcaoRotearHumano || r.Reply != msgFalhaConfirmacao {
+		t.Fatalf("erro 3 (confirmação): esperava rotear humano, veio %q %q", r.Acao, r.Reply)
+	}
+}
+
+func TestGateConfirmacaoCertaAposErrosDeLoginIdentifica(t *testing.T) {
+	// Errar 2 logins não impede de identificar quando o 3º passo dá certo.
+	g, _ := newGate(t, fakeRepo{docs: map[string]mongo.UsuarioDoc{"10596693664": docDaniel()}})
+	ctx := context.Background()
+	const conv = int64(32)
+	const phone = "5511000000032"
+
+	g.Process(ctx, conv, phone, "oi")
+	g.Process(ctx, conv, phone, "naoexiste")
+	g.Process(ctx, conv, phone, "naoexiste2")
+	g.Process(ctx, conv, phone, "10596693664")
+	if r := g.Process(ctx, conv, phone, "daniel.ferraz@azapfy.com.br"); r.Acao != AcaoSaudar {
+		t.Fatalf("confirmação certa: esperava saudar, veio %q", r.Acao)
+	}
+}

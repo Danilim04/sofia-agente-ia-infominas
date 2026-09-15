@@ -70,6 +70,13 @@ func (e *Engine) HandleMessageCreated(ctx context.Context, msg *chatwoot.Message
 	if !msg.MessageType.IsIncoming() || !msg.Sender.IsContact() || msg.Private {
 		return
 	}
+	// Grupo de WhatsApp: o bot não responde (não há cliente a identificar e a
+	// resposta iria para todos os participantes). Fica antes da adoção de
+	// etiqueta para a conversa nem entrar na fila do bot.
+	if msg.EhGrupo() {
+		e.log.Info("mensagem de grupo ignorada", "conversation_id", convID)
+		return
+	}
 	// Gate de etiqueta (opcional): só atua na fila do bot. Vazio = processa tudo.
 	if e.cfg.LabelBot != "" && !chatwoot.HasLabel(msg.Conversation.Labels, e.cfg.LabelBot) {
 		// O Chatwoot REABRE conversa resolvida quando o contato volta a
@@ -207,8 +214,9 @@ func (e *Engine) HandleConversationCreated(ctx context.Context, ev *chatwoot.Con
 }
 
 // adotarConversa aplica a LabelBot se a conversa for elegível: na caixa do bot
-// (INBOX_ID; 0 = todas) e sem NENHUMA etiqueta de fila — nem bot (nada a
-// fazer) nem humano (a conversa é da equipe). Devolve true se etiquetou.
+// (INBOX_ID; 0 = todas), de um contato individual (grupo nunca é adotado) e
+// sem NENHUMA etiqueta de fila — nem bot (nada a fazer) nem humano (a
+// conversa é da equipe). Devolve true se etiquetou.
 func (e *Engine) adotarConversa(ctx context.Context, conv *chatwoot.Conversation) bool {
 	if e.cfg.LabelBot == "" {
 		return false
@@ -216,6 +224,10 @@ func (e *Engine) adotarConversa(ctx context.Context, conv *chatwoot.Conversation
 	if e.cfg.InboxID != 0 && conv.InboxID != e.cfg.InboxID {
 		e.log.Debug("conversa fora da caixa do bot",
 			"conversation_id", conv.ID, "inbox_id", conv.InboxID)
+		return false
+	}
+	if conv.EhGrupo() {
+		e.log.Info("conversa de grupo não adotada pela fila do bot", "conversation_id", conv.ID)
 		return false
 	}
 	if chatwoot.HasLabel(conv.Labels, e.cfg.LabelBot) ||
