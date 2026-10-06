@@ -26,9 +26,11 @@ type fakeSAC struct {
 	cfg         sac.Config
 	criarErr    error
 	prioErr     error
+	relatorErr  error // falha em BuscarRelator (listagem dos chamados do relator)
 	chamados    []sac.Chamado
 	criados     []sac.NovoChamado
 	prioridades []string
+	buscas      int // vezes que BuscarRelator foi chamado
 }
 
 func (f *fakeSAC) GrupoEmp() string      { return "AZAPERS" }
@@ -48,6 +50,10 @@ func (f *fakeSAC) DefinirPrioridade(_ context.Context, _, prioridade string) err
 	return f.prioErr
 }
 func (f *fakeSAC) BuscarRelator(_ context.Context, _ string) ([]sac.Chamado, error) {
+	f.buscas++
+	if f.relatorErr != nil {
+		return nil, f.relatorErr
+	}
 	return f.chamados, nil
 }
 func (f *fakeSAC) LinkChamado(cod, grupo, proto string) string {
@@ -482,6 +488,122 @@ func TestCriarLogaEmpresaDoChamado(t *testing.T) {
 	linha := linhaDeLog(t, &buf, "chamado aberto via bot")
 	if linha["empresa"] != "MEARIM" || linha["protocolo"] != "ZPRS25207690" {
 		t.Fatalf("log do chamado sem a empresa do cliente: %+v", linha)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ZB-2 — listar os chamados do relator ANTES de preparar/abrir outro. Caso de
+// produção (conversa #45): o cliente citou um protocolo existente e o bot
+// abriu um chamado novo; nada consultava os abertos.
+// ---------------------------------------------------------------------------
+
+func pedidoPadrao(extra map[string]any) map[string]any {
+	req := map[string]any{
+		"telefone": "5531983857490", "conversation_id": "45", "categoria": "APLICATIVO",
+		"ocorrencia": "LENTIDÃO OU TRAVAMENTOS", "resumo": "App travando", "descricao": "Trava ao bipar nota",
+	}
+	for k, v := range extra {
+		req[k] = v
+	}
+	return req
+}
+
+func chamadoAberto(protocolo string) sac.Chamado {
+	ch := sac.Chamado{Protocolo: protocolo, GrupoEmp: "AZAPERS", Status: "PENDENTE", DtAbertura: "2026-09-29 10:00:00"}
+	ch.Incidente.Resumo = "APP TRAVANDO"
+	ch.Incidente.Categoria = "APLICATIVO"
+	ch.Incidente.Ocorrencia = "LENTIDÃO OU TRAVAMENTOS"
+	return ch
+}
+
+// TestPrepararECriarComChamadoAbertoDevolvemAbertosERecusam: relator com um
+// chamado em aberto (e um concluído, que não conta) → /preparar e /criar
+// recusam com `chamado_aberto`, devolvendo os abertos (protocolo, resumo,
+// link) para o modelo mostrá-los; nada é criado.
+func TestPrepararECriarComChamadoAbertoDevolvemAbertosERecusam(t *testing.T) {
+	f := &fakeSAC{cfg: cfgPadrao(), chamados: []sac.Chamado{
+		chamadoAberto("ZPRS25208011"),
+		{Protocolo: "ZPRS25207000", GrupoEmp: "AZAPERS", Status: "CONCLUIDO"},
+	}}
+	h := novoHandler(t, f, true)
+	for _, path := range []string{"/tools/sac/preparar", "/tools/sac/criar"} {
+		_, out := do(t, h, path, tokenTeste, pedidoPadrao(nil))
+		if out["status"] != false || out["motivo"] != "chamado_aberto" {
+			t.Fatalf("%s: esperava recusa chamado_aberto: %+v", path, out)
+		}
+		abertos, _ := out["chamados_abertos"].([]any)
+		if len(abertos) != 1 || out["total"] != float64(1) {
+			t.Fatalf("%s: esperava 1 chamado aberto na recusa: %+v", path, out)
+		}
+		ch := abertos[0].(map[string]any)
+		if ch["protocolo"] != "ZPRS25208011" || ch["resumo"] != "APP TRAVANDO" ||
+			!strings.Contains(ch["link"].(string), "/AZAPERS/ZPRS25208011") {
+			t.Fatalf("%s: chamado aberto incompleto: %+v", path, ch)
+		}
+		if erro, _ := out["erro"].(string); !strings.Contains(erro, "novo_chamado=true") {
+			t.Fatalf("%s: a recusa precisa ensinar o pedido explícito ao cérebro: %+v", path, out)
+		}
+	}
+	if len(f.criados) != 0 || len(f.prioridades) != 0 {
+		t.Fatalf("relator com chamado aberto não pode gerar chamado novo: %+v", f.criados)
+	}
+	if f.buscas != 2 {
+		t.Fatalf("esperava uma consulta ao relator por chamada, veio %d", f.buscas)
+	}
+}
+
+// TestPedidoExplicitoDeNovoChamadoPassaEVaiNaProposta: com `novo_chamado=true`
+// o dry-run aprova (a proposta carrega o pedido) e a abertura, repetindo-o,
+// cria o chamado mesmo com outro em aberto.
+func TestPedidoExplicitoDeNovoChamadoPassaEVaiNaProposta(t *testing.T) {
+	f := &fakeSAC{cfg: cfgPadrao(), chamados: []sac.Chamado{chamadoAberto("ZPRS25208011")}}
+	h := novoHandler(t, f, true)
+	_, out := do(t, h, "/tools/sac/preparar", tokenTeste, pedidoPadrao(map[string]any{"novo_chamado": true}))
+	if out["status"] != true {
+		t.Fatalf("preparar com pedido explícito deveria passar: %+v", out)
+	}
+	proposta, _ := out["proposta"].(map[string]any)
+	if proposta["novo_chamado"] != true {
+		t.Fatalf("proposta deveria carregar novo_chamado=true: %+v", proposta)
+	}
+	_, out = do(t, h, "/tools/sac/criar", tokenTeste, pedidoPadrao(map[string]any{"novo_chamado": true}))
+	if out["status"] != true || len(f.criados) != 1 {
+		t.Fatalf("criar com pedido explícito deveria abrir: %+v criados=%d", out, len(f.criados))
+	}
+}
+
+// TestSemChamadoAbertoNaoExigePedidoExplicito: relator sem nada em aberto
+// (só concluídos) segue como antes — a proposta sai com novo_chamado=false.
+func TestSemChamadoAbertoNaoExigePedidoExplicito(t *testing.T) {
+	f := &fakeSAC{cfg: cfgPadrao(), chamados: []sac.Chamado{
+		{Protocolo: "ZPRS25207000", GrupoEmp: "AZAPERS", Status: "CONCLUIDO"},
+	}}
+	h := novoHandler(t, f, true)
+	_, out := do(t, h, "/tools/sac/preparar", tokenTeste, pedidoPadrao(nil))
+	if out["status"] != true {
+		t.Fatalf("sem chamado aberto o preparo deveria passar: %+v", out)
+	}
+	if proposta, _ := out["proposta"].(map[string]any); proposta["novo_chamado"] != false {
+		t.Fatalf("proposta deveria sair com novo_chamado=false: %+v", proposta)
+	}
+	if _, out = do(t, h, "/tools/sac/criar", tokenTeste, pedidoPadrao(nil)); out["status"] != true || len(f.criados) != 1 {
+		t.Fatalf("sem chamado aberto a abertura deveria passar: %+v", out)
+	}
+}
+
+// TestFalhaAoListarChamadosDoRelatorRecusa: sem conseguir conferir os abertos,
+// o gateway não prepara nem abre (não abre no escuro) e explica o motivo.
+func TestFalhaAoListarChamadosDoRelatorRecusa(t *testing.T) {
+	f := &fakeSAC{cfg: cfgPadrao(), relatorErr: errSimulado{}}
+	h := novoHandler(t, f, true)
+	for _, path := range []string{"/tools/sac/preparar", "/tools/sac/criar"} {
+		_, out := do(t, h, path, tokenTeste, pedidoPadrao(nil))
+		if out["status"] != false || out["motivo"] != "chamados_indisponiveis" {
+			t.Fatalf("%s: esperava recusa chamados_indisponiveis: %+v", path, out)
+		}
+	}
+	if len(f.criados) != 0 {
+		t.Fatalf("não deveria ter criado chamado: %+v", f.criados)
 	}
 }
 

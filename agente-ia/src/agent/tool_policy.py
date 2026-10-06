@@ -279,6 +279,108 @@ def _exigir_proposta_confirmada(state: Mapping[str, Any]) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Chamado novo só com pedido explícito; protocolo citado nunca vira chamado
+# novo (ZB-2). O gateway lista os abertos do relator antes de preparar/abrir e
+# recusa com `chamado_aberto` a menos que a tool leve `novo_chamado=true`.
+# Esse argumento é do modelo — então aqui o código confere se o CLIENTE pediu
+# mesmo um chamado novo nesta mensagem (ou confirmou a pergunta do agente
+# sobre isso). E uma mensagem que cita um protocolo é sobre um chamado
+# EXISTENTE: preparar é recusado e o modelo é mandado listar.
+# ---------------------------------------------------------------------------
+
+#: Protocolo do SAC na fala do cliente (ex.: ZPRS25208011): letras + 6..12
+#: dígitos colados. Romaneios (4-XXXXXX, RCF-XXXXXX) e NFs (só dígitos) não casam.
+PROTOCOLO_RE = re.compile(r"\b[A-Za-z]{2,6}\d{6,12}\b")
+
+_PEDIDO_NOVO_CHAMADO_RE = re.compile(
+    r"\b(novo|outro|mais um|segundo|um novo|um outro) (chamado|ticket)\b"
+    r"|\b(chamado|ticket) (novo|separado|a parte)\b"
+    r"|\babr(e|a|ir|indo) (um |mais um |outro |um outro |um novo )?(novo|outro)\b"
+    r"|\b(criar?|registrar?|cria|registra) (um |mais um |um outro |um novo )?(novo|outro)\b"
+)
+
+_PERGUNTA_NOVO_CHAMADO_RE = re.compile(
+    r"\b(novo|outro|mais um) chamado\b|\bchamado novo\b|\bmesmo assim\b"
+)
+
+
+def protocolo_citado(texto: Any) -> str | None:
+    """Protocolo de chamado presente na mensagem, se houver (maiúsculo)."""
+    if not isinstance(texto, str):
+        return None
+    m = PROTOCOLO_RE.search(texto)
+    return m.group(0).upper() if m else None
+
+
+def _ultima_resposta_do_agente_antes_da_mensagem_atual(
+    state: Mapping[str, Any],
+) -> str:
+    """Texto da última resposta do agente ANTES da mensagem atual do cliente."""
+    msgs = list(state.get("messages") or [])
+    idx = None
+    for i in range(len(msgs) - 1, -1, -1):
+        if isinstance(msgs[i], HumanMessage):
+            idx = i
+            break
+    if not idx:
+        return ""
+    for m in reversed(msgs[:idx]):
+        if isinstance(m, HumanMessage):
+            return ""
+        conteudo = getattr(m, "content", None)
+        if m.type == "ai" and isinstance(conteudo, str) and conteudo.strip():
+            return conteudo
+        if m.type == "ai" and isinstance(conteudo, list):
+            texto = "".join(b.get("text", "") for b in conteudo if isinstance(b, dict))
+            if texto.strip():
+                return texto
+    return ""
+
+
+def cliente_pediu_novo_chamado(state: Mapping[str, Any]) -> bool:
+    """True se o cliente pediu EXPLICITAMENTE um chamado novo: na própria
+    mensagem ("quero abrir outro chamado") ou confirmando ("sim") a pergunta
+    do agente que mencionou um chamado novo / "mesmo assim"."""
+    atual = _normalizar(_ultima_mensagem_do_cliente(state))
+    if _PEDIDO_NOVO_CHAMADO_RE.search(atual):
+        return True
+    if eh_confirmacao_explicita(atual):
+        pergunta = _normalizar(_ultima_resposta_do_agente_antes_da_mensagem_atual(state))
+        return bool(_PERGUNTA_NOVO_CHAMADO_RE.search(pergunta))
+    return False
+
+
+def _validar_pedido_de_novo_chamado(
+    valor: Any, state: Mapping[str, Any]
+) -> str | None:
+    """`novo_chamado=true` só com pedido explícito do cliente, checado por código."""
+    if not valor:
+        return None
+    if cliente_pediu_novo_chamado(state):
+        return None
+    return (
+        "novo_chamado=true só vale quando o CLIENTE pediu explicitamente um chamado "
+        "novo nesta mensagem (ex.: 'quero abrir outro chamado') ou confirmou sua "
+        "pergunta sobre abrir um novo — ele não fez isso; mostre os chamados abertos "
+        "(protocolo, resumo e link), pergunte se o problema é de um deles e só "
+        "repita com novo_chamado=true se ele pedir um novo"
+    )
+
+
+def _exigir_sem_protocolo_citado(state: Mapping[str, Any]) -> str | None:
+    """Mensagem do cliente com protocolo é sobre um chamado EXISTENTE."""
+    protocolo = protocolo_citado(_ultima_mensagem_do_cliente(state))
+    if not protocolo:
+        return None
+    return (
+        f"o cliente citou o protocolo {protocolo} — isso é um chamado EXISTENTE, "
+        "não um pedido de chamado novo: chame listar_chamados_abertos, mostre o "
+        "link desse chamado e oriente a continuar pelo chat dele; não prepare um "
+        "chamado novo a partir desta mensagem"
+    )
+
+
+# ---------------------------------------------------------------------------
 # A política em si — uma linha por tool exposta ao agente
 # ---------------------------------------------------------------------------
 
@@ -307,7 +409,11 @@ POLITICAS: dict[str, PoliticaTool] = {
             "telefone": _telefone_da_sessao,
             "conversation_id": _conversation_id_da_sessao,
         },
-        validar={"empresa": _validar_empresa_da_sessao},
+        validar={
+            "empresa": _validar_empresa_da_sessao,
+            "novo_chamado": _validar_pedido_de_novo_chamado,
+        },
+        exigir=_exigir_sem_protocolo_citado,
     ),
     "abrir_chamado_suporte": PoliticaTool(
         injetar={

@@ -280,3 +280,132 @@ def test_tools_node_recusa_da_politica_vira_toolmessage():
     # A tool NÃO executou (nenhuma chamada HTTP aconteceu — sem stub, teria
     # falhado com erro de rede genérico em vez da recusa).
     assert "escopo" in content
+
+
+# ---------------------------------------------------------------------------
+# ZB-2 — chamado novo só com pedido explícito do cliente (checado por código);
+# protocolo citado pelo cliente nunca vira chamado novo.
+# ---------------------------------------------------------------------------
+
+_ARGS_PREPARAR = {"resumo": "x", "descricao": "y", "categoria": "C", "ocorrencia": "O"}
+
+
+def _estado_preparar(mensagens: list) -> dict:
+    return {"identidade": _IDENTIDADE_AZAPERS, "telefone": "5531999990000", "messages": mensagens}
+
+
+def test_novo_chamado_false_nao_exige_nada():
+    args, erro = aplicar_politica(
+        "preparar_abertura_chamado",
+        {**_ARGS_PREPARAR, "novo_chamado": False},
+        _estado_preparar([HumanMessage(content="o app trava, abre um chamado")]),
+    )
+    assert erro is None and args["novo_chamado"] is False
+
+
+@pytest.mark.parametrize(
+    "mensagem",
+    ["abre um chamado", "Esse", "o app trava de novo", "sim", "pode abrir", "preciso de ajuda"],
+)
+def test_novo_chamado_true_sem_pedido_do_cliente_e_recusado(mensagem):
+    """O modelo decidiu sozinho que é um chamado novo: a política recusa e
+    manda mostrar os abertos."""
+    _, erro = aplicar_politica(
+        "preparar_abertura_chamado",
+        {**_ARGS_PREPARAR, "novo_chamado": True},
+        _estado_preparar(
+            [HumanMessage(content="o app trava"), AIMessage(content="Entendi. Em qual tela?"), HumanMessage(content=mensagem)]
+        ),
+    )
+    assert erro is not None and "novo_chamado=true" in erro and "chamados abertos" in erro
+
+
+@pytest.mark.parametrize(
+    "mensagem",
+    [
+        "quero abrir outro chamado",
+        "pode abrir um novo chamado, esse é outro problema",
+        "Abre outro, por favor",
+        "preciso de mais um chamado",
+        "cria um chamado novo pra isso",
+        "não é esse, abre um novo",
+    ],
+)
+def test_novo_chamado_true_com_pedido_explicito_na_mensagem_passa(mensagem):
+    args, erro = aplicar_politica(
+        "preparar_abertura_chamado",
+        {**_ARGS_PREPARAR, "novo_chamado": True},
+        _estado_preparar([HumanMessage(content=mensagem)]),
+    )
+    assert erro is None and args["novo_chamado"] is True
+
+
+def test_novo_chamado_true_passa_quando_cliente_confirma_pergunta_sobre_chamado_novo():
+    """O agente mostrou o aberto e perguntou se quer um novo mesmo assim; o
+    'sim' do cliente é o pedido explícito."""
+    msgs = [
+        HumanMessage(content="o app trava"),
+        AIMessage(
+            content="Você já tem o chamado ZPRS25208011 (APP TRAVANDO) em aberto: https://sac/x. "
+            "É sobre ele, ou quer abrir um novo chamado mesmo assim?"
+        ),
+        HumanMessage(content="Sim, pode abrir"),
+    ]
+    _, erro = aplicar_politica(
+        "preparar_abertura_chamado", {**_ARGS_PREPARAR, "novo_chamado": True}, _estado_preparar(msgs)
+    )
+    assert erro is None
+
+
+def test_novo_chamado_true_com_sim_a_outra_pergunta_e_recusado():
+    """'sim' responde a outra pergunta do agente — não é pedido de chamado novo."""
+    msgs = [
+        HumanMessage(content="o app trava"),
+        AIMessage(content="O erro aparece ao bipar a nota?"),
+        HumanMessage(content="sim"),
+    ]
+    _, erro = aplicar_politica(
+        "preparar_abertura_chamado", {**_ARGS_PREPARAR, "novo_chamado": True}, _estado_preparar(msgs)
+    )
+    assert erro is not None
+
+
+@pytest.mark.parametrize(
+    "mensagem, protocolo",
+    [
+        ("ZPRS25208011", "ZPRS25208011"),
+        ("o chamado zprs25208011 ainda não foi atendido", "ZPRS25208011"),
+        ("Esse aqui: ZPRS25208011, abre outro igual", "ZPRS25208011"),
+    ],
+)
+def test_preparar_recusado_quando_cliente_cita_protocolo(mensagem, protocolo):
+    """Protocolo citado é chamado EXISTENTE: preparar não roda (nem com
+    novo_chamado=true) e o modelo é mandado listar."""
+    for novo in (False, True):
+        _, erro = aplicar_politica(
+            "preparar_abertura_chamado",
+            {**_ARGS_PREPARAR, "novo_chamado": novo},
+            _estado_preparar([HumanMessage(content=mensagem)]),
+        )
+        assert erro is not None, mensagem
+        assert protocolo in erro and "listar_chamados_abertos" in erro
+
+
+@pytest.mark.parametrize(
+    "mensagem",
+    ["abre um chamado, o app trava", "romaneio 4-123456 não aparece", "RCF-123456 sumiu", "NF 35210912345678 não baixou"],
+)
+def test_preparar_passa_sem_protocolo_na_mensagem(mensagem):
+    """Romaneio, NF e números soltos não são protocolo de chamado."""
+    _, erro = aplicar_politica(
+        "preparar_abertura_chamado", dict(_ARGS_PREPARAR), _estado_preparar([HumanMessage(content=mensagem)])
+    )
+    assert erro is None, mensagem
+
+
+def test_protocolo_citado_normaliza_para_maiusculo():
+    from src.agent.tool_policy import protocolo_citado
+
+    assert protocolo_citado("protocolo zprs25208011, por favor") == "ZPRS25208011"
+    assert protocolo_citado("4-123456") is None
+    assert protocolo_citado(None) is None

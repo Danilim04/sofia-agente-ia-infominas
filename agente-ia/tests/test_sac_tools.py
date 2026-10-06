@@ -261,3 +261,56 @@ def test_sem_conversation_id_no_estado_envia_vazio(captura):
     )
     node({"messages": [ai], "telefone": "5531999990000"})
     assert chamadas[-1]["json"]["conversation_id"] == ""
+
+
+# ---------------------------------------------------------------------------
+# ZB-2: `novo_chamado` — o único argumento novo visível ao modelo em
+# `preparar`; vai ao gateway no dry-run e, pela proposta, na abertura.
+# ---------------------------------------------------------------------------
+
+
+def test_preparar_envia_novo_chamado_false_por_padrao(captura):
+    chamadas, estado = captura
+    estado["resposta"] = {"status": True, "proposta": dict(_PROPOSTA)}
+    preparar_abertura_chamado.invoke(
+        {"resumo": "r", "descricao": "d", "categoria": "c", "ocorrencia": "o", "telefone": "1"}
+    )
+    assert chamadas[-1]["json"]["novo_chamado"] is False
+    preparar_abertura_chamado.invoke(
+        {"resumo": "r", "descricao": "d", "categoria": "c", "ocorrencia": "o", "novo_chamado": True, "telefone": "1"}
+    )
+    assert chamadas[-1]["json"]["novo_chamado"] is True
+
+
+def test_abrir_repassa_novo_chamado_da_proposta(captura):
+    chamadas, estado = captura
+    estado["resposta"] = {"status": True, "protocolo": "ZP1", "link": "http://x"}
+    abrir_chamado_suporte.invoke({"proposta": {**_PROPOSTA, "novo_chamado": True}, "telefone": "1"})
+    assert chamadas[-1]["json"]["novo_chamado"] is True
+    abrir_chamado_suporte.invoke({"proposta": dict(_PROPOSTA), "telefone": "1"})
+    assert chamadas[-1]["json"]["novo_chamado"] is False
+
+
+def test_novo_chamado_e_visivel_ao_modelo_so_em_preparar():
+    assert "novo_chamado" in preparar_abertura_chamado.tool_call_schema.model_fields
+    assert not abrir_chamado_suporte.tool_call_schema.model_fields
+
+
+def test_tools_node_novo_chamado_sem_pedido_do_cliente_nao_chega_ao_gateway(captura):
+    """A política (ZB-2) barra `novo_chamado=true` inventado pelo modelo antes
+    de qualquer chamada HTTP."""
+    chamadas, _ = captura
+    node = make_tools_node(SAC_TOOLS)
+    ai = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "preparar_abertura_chamado",
+                "id": "call-1",
+                "args": {"resumo": "r", "descricao": "d", "categoria": "c", "ocorrencia": "o", "novo_chamado": True},
+            }
+        ],
+    )
+    out = node({"messages": [HumanMessage(content="o app trava"), ai], "telefone": "1"})
+    assert "recusado_pela_politica" in out["messages"][0].content
+    assert not chamadas
