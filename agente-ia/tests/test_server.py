@@ -214,3 +214,109 @@ def test_processar_chat_respeita_prazo_do_turno(monkeypatch):
     assert resp.erro.classe == "transitoria"
     assert "prazo" in resp.erro.causa.lower()
     assert g.concluiu is False  # o grafo foi interrompido, não seguiu sozinho
+
+
+# ---------------------------------------------------------------------------
+# ZB-1: conversa RESOLVIDA no Chatwoot = fim do episódio também no cérebro —
+# `POST /encerrar-episodio` limpa a proposta de chamado pendente da conversa
+# (o Chatwoot reutiliza a conversa; uma proposta antiga não pode ser
+# "confirmada" por uma mensagem qualquer do episódio seguinte).
+# ---------------------------------------------------------------------------
+
+
+def _grafo_real_com_proposta(monkeypatch, thread_id: str, proposta):
+    """Grafo real (LLM falso, MemorySaver) com um turno rodado e a proposta
+    no estado persistido do `thread_id`."""
+    from unittest.mock import MagicMock
+
+    from src.agent import nodes
+    from src.agent.graph import build_graph
+
+    monkeypatch.setattr(
+        nodes,
+        "avaliar_entrada",
+        lambda texto, **_: {"is_safe": True, "categoria": "suporte", "motivo": "t"},
+    )
+    fake = MagicMock(name="FakeLLM")
+    fake.bind_tools.return_value = fake
+    fake.invoke.side_effect = [AIMessage(content="Posso abrir?"), AIMessage(content="ok")]
+    g = build_graph(
+        llm=fake, tools=[], buscar_chunks=lambda q: {"encontrado": False, "total": 0, "chunks": []}
+    )
+    cfg = {"configurable": {"thread_id": thread_id}}
+    g.invoke(
+        {"telefone": "1", "proposta_chamado": proposta, "messages": [HumanMessage(content="oi")]},
+        config=cfg,
+    )
+    return g, cfg, fake
+
+
+def test_encerrar_episodio_limpa_proposta_pendente_e_preserva_historico(monkeypatch):
+    proposta = {"resumo": "X", "criada_em": "2026-10-06T12:00:00+00:00", "turno": 1}
+    g, cfg, fake = _grafo_real_com_proposta(monkeypatch, "conv-45", proposta)
+    assert g.get_state(cfg).values["proposta_chamado"] == proposta
+
+    resp = asyncio.run(server.encerrar_episodio(g, "conv-45"))
+
+    assert resp.status == "ok" and resp.proposta_limpa is True
+    estado = g.get_state(cfg)
+    assert estado.values["proposta_chamado"] is None
+    assert estado.next == ()  # nada pendente para o próximo turno
+    assert len(estado.values["messages"]) == 2  # histórico intacto
+
+    # O turno seguinte roda normal (1 chamada de LLM) e segue sem proposta.
+    out = g.invoke({"messages": [HumanMessage(content="Esse")]}, config=cfg)
+    assert fake.invoke.call_count == 2
+    assert out["proposta_chamado"] is None
+    assert len(out["messages"]) == 4
+
+
+def test_encerrar_episodio_sem_proposta_nao_mexe_no_estado(monkeypatch):
+    g, cfg, _ = _grafo_real_com_proposta(monkeypatch, "conv-46", None)
+    antes = g.get_state(cfg)
+
+    resp = asyncio.run(server.encerrar_episodio(g, "conv-46"))
+
+    assert resp.proposta_limpa is False
+    assert g.get_state(cfg).config == antes.config  # nenhum checkpoint novo
+
+
+def test_encerrar_episodio_conversa_desconhecida_e_inocuo(monkeypatch):
+    g, _, _ = _grafo_real_com_proposta(monkeypatch, "conv-47", None)
+    resp = asyncio.run(server.encerrar_episodio(g, "nunca-existiu"))
+    assert resp.status == "ok" and resp.proposta_limpa is False
+    assert g.get_state({"configurable": {"thread_id": "nunca-existiu"}}).values == {}
+
+
+def test_endpoint_encerrar_episodio(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    proposta = {"resumo": "X", "criada_em": "2026-10-06T12:00:00+00:00", "turno": 1}
+    g, cfg, _ = _grafo_real_com_proposta(monkeypatch, "48", proposta)
+    monkeypatch.setattr(server, "_GRAPH", g)
+    client = TestClient(server.app)
+
+    r = client.post("/encerrar-episodio", json={"conversation_id": "48"})
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok", "proposta_limpa": True}
+    assert g.get_state(cfg).values["proposta_chamado"] is None
+
+    # Segunda vez: nada a limpar, continua 200.
+    r = client.post("/encerrar-episodio", json={"conversation_id": "48"})
+    assert r.status_code == 200 and r.json()["proposta_limpa"] is False
+
+
+def test_endpoint_encerrar_episodio_falha_vira_500_com_corpo(monkeypatch, caplog):
+    from fastapi.testclient import TestClient
+
+    class _GrafoQuebrado:
+        async def aget_state(self, config):
+            raise RuntimeError("checkpointer fora")
+
+    monkeypatch.setattr(server, "_GRAPH", _GrafoQuebrado())
+    client = TestClient(server.app)
+    with caplog.at_level(logging.ERROR):
+        r = client.post("/encerrar-episodio", json={"conversation_id": "49"})
+    assert r.status_code == 500
+    assert r.json() == {"status": "erro", "proposta_limpa": False}
+    assert any("episodio_erro conversation_id=49" in m for m in caplog.messages)

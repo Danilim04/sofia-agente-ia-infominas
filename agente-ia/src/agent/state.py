@@ -26,9 +26,16 @@ gateway — nunca é argumento do modelo.
 
 `proposta_chamado` é a proposta de abertura VALIDADA pelo dry-run do gateway
 (`/tools/sac/preparar`): persiste entre turnos (a confirmação do cliente vem
-no turno seguinte) até ser consumida por uma abertura bem-sucedida ou
-substituída por um novo preparo. `abrir_chamado_suporte` executa EXATAMENTE
-esta proposta — o modelo não redigita nada entre a confirmação e a execução.
+no turno seguinte) até ser consumida por uma abertura bem-sucedida,
+substituída por um novo preparo ou limpa quando a conversa é RESOLVIDA no
+Chatwoot (o gateway chama `POST /encerrar-episodio` — a conversa é reutilizada
+quando o contato volta a escrever, e uma proposta antiga não pode sobreviver
+ao episódio). Ela carrega o carimbo `criada_em` (ISO 8601 UTC) e `turno`
+(nº de mensagens do cliente quando foi preparada): `abrir_chamado_suporte`
+só executa dentro da validade (15 min), no turno SEGUINTE e com confirmação
+explícita do cliente checada por código (`tool_policy.py`, ZB-1). Executa
+EXATAMENTE esta proposta — o modelo não redigita nada entre a confirmação e a
+execução.
 """
 
 from __future__ import annotations

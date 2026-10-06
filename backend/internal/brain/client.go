@@ -188,6 +188,41 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 	return &out, nil
 }
 
+// EncerrarEpisodioRequest é o corpo de POST /encerrar-episodio.
+type EncerrarEpisodioRequest struct {
+	ConversationID string `json:"conversation_id"`
+}
+
+// EncerrarEpisodio avisa o cérebro que a conversa foi RESOLVIDA no Chatwoot:
+// ele limpa a proposta de chamado pendente daquela conversa (ZB-1). O Chatwoot
+// reutiliza a conversa quando o contato volta a escrever, e uma proposta de
+// um episódio anterior não pode ser "confirmada" por uma mensagem qualquer do
+// seguinte. O histórico da conversa no cérebro fica intacto. Qualquer status
+// >= 400 (ou falha de transporte) é erro — quem chama só loga: a validade da
+// proposta no cérebro é a rede de segurança.
+func (c *Client) EncerrarEpisodio(ctx context.Context, conversationID string) error {
+	payload, err := json.Marshal(EncerrarEpisodioRequest{ConversationID: conversationID})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/encerrar-episodio", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("brain /encerrar-episodio: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("brain /encerrar-episodio: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // ExtractLoginRequest é o corpo de POST /extract-login.
 type ExtractLoginRequest struct {
 	Mensagem string `json:"mensagem"`

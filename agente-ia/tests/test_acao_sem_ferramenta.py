@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -407,7 +408,14 @@ def test_e2e_grafo_abertura_real_de_chamado_mantem_resposta(monkeypatch):
         {
             "telefone": "5531999990000",
             "identidade": _IDENTIDADE,
-            "proposta_chamado": {"resumo": "APP TRAVANDO", "categoria": "APLICATIVO"},
+            # Proposta carimbada (ZB-1): preparada no turno anterior, dentro
+            # da validade — "pode abrir" neste turno é a confirmação explícita.
+            "proposta_chamado": {
+                "resumo": "APP TRAVANDO",
+                "categoria": "APLICATIVO",
+                "criada_em": datetime.now(timezone.utc).isoformat(),
+                "turno": 0,
+            },
             "messages": [HumanMessage(content="pode abrir")],
         },
         config={"configurable": {"thread_id": "ze2-com-tool"}},

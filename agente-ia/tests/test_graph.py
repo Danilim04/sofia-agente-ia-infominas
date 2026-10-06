@@ -782,3 +782,308 @@ def test_output_guardrail_mascara_vazamento_interno():
     )
     out = nodes.output_guardrail_node({"messages": [ultima], "fontes_usadas": []})
     assert out["messages"][0].content == RESPOSTA_ERRO_INTERNO
+
+# ===========================================================================
+# ZB-1 — Consentimento real antes de abrir chamado: a proposta vence (15 min)
+# e `abrir` só vale com confirmação explícita do cliente, checada por CÓDIGO,
+# na mensagem SEGUINTE à proposta. Caso de produção (conversa #45): proposta
+# antiga + cliente cita "ZPRS25208011" e responde "Esse" → chamado novo
+# aberto sem consentimento. Aqui nada disso chega ao gateway.
+# ===========================================================================
+
+from datetime import datetime, timedelta, timezone
+
+from src.agent import tool_policy
+from src.tools import sac_tools
+from src.tools.sac_tools import SAC_TOOLS
+
+_PROPOSTA_ZB = {
+    "resumo": "APP TRAVANDO AO BIPAR",
+    "descricao": "O app trava ao bipar a nota",
+    "categoria": "APLICATIVO",
+    "ocorrencia": "LENTIDÃO OU TRAVAMENTOS",
+    "prioridade": "MEDIA",
+    "empresa": "AZAPERS",
+    "prazo": 1,
+}
+
+_IDENTIDADE_ZB = {
+    "encontrado": True,
+    "login": "10596693664",
+    "nome": "Daniel",
+    "empresas": [
+        {"grupo_empresa": "AZAPERS", "grupo_user": "COLABORADOR", "area": "SAC", "bases": []}
+    ],
+}
+
+
+def _proposta_carimbada(idade: timedelta = timedelta(minutes=1), turno: int = 0) -> dict:
+    """Proposta como o `tools_node` a guarda: com `criada_em` e `turno`."""
+    criada = datetime.now(timezone.utc) - idade
+    return {**_PROPOSTA_ZB, "criada_em": criada.isoformat(), "turno": turno}
+
+
+class _GatewayFalso:
+    """Stub de `httpx.post` para o gateway Go: conta aberturas e responde."""
+
+    def __init__(self):
+        self.chamadas: list[str] = []
+
+    def __call__(self, url, json=None, headers=None, timeout=None):
+        self.chamadas.append(url.rsplit("/", 1)[-1])
+        if url.endswith("/tools/sac/preparar"):
+            payload = {"status": True, "proposta": dict(_PROPOSTA_ZB)}
+        elif url.endswith("/tools/sac/criar"):
+            payload = {"status": True, "protocolo": "ZPRS25208029", "link": "https://sac/x"}
+        else:
+            payload = {"status": True, "total": 0, "chamados": []}
+
+        class _Resp:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return payload
+
+        return _Resp()
+
+    @property
+    def aberturas(self) -> int:
+        return self.chamadas.count("criar")
+
+
+def _tc_abrir(id_: str = "tc-abrir") -> AIMessage:
+    return AIMessage(
+        content="", tool_calls=[{"id": id_, "name": "abrir_chamado_suporte", "args": {}}]
+    )
+
+
+def _tc_preparar(id_: str = "tc-prep") -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": id_,
+                "name": "preparar_abertura_chamado",
+                "args": {
+                    "resumo": "App travando ao bipar",
+                    "descricao": "O app trava ao bipar a nota",
+                    "categoria": "APLICATIVO",
+                    "ocorrencia": "LENTIDÃO OU TRAVAMENTOS",
+                },
+            }
+        ],
+    )
+
+
+def _resultado_abrir(out: dict) -> str:
+    """Conteúdo do ToolMessage de `abrir` do turno (recusa ou resultado)."""
+    tms = [
+        m
+        for m in out["messages"]
+        if isinstance(m, ToolMessage) and m.name == "abrir_chamado_suporte"
+    ]
+    assert tms, "esperava um ToolMessage de abrir_chamado_suporte"
+    return tms[-1].content
+
+
+@pytest.fixture
+def gateway(monkeypatch) -> _GatewayFalso:
+    gw = _GatewayFalso()
+    monkeypatch.setattr(sac_tools.httpx, "post", gw)
+    return gw
+
+
+def _grafo_zb(monkeypatch, scripted: list[AIMessage]):
+    _passa_seguranca(monkeypatch)
+    fake = _fake_llm(scripted=scripted)
+    return build_graph(llm=fake, tools=SAC_TOOLS, buscar_chunks=_sem_rag), fake
+
+
+def test_zb1_proposta_vencida_recusa_abrir_mesmo_com_sim(monkeypatch, gateway):
+    """Proposta de 16 min atrás: o 'sim' do cliente não abre mais nada."""
+    g, _ = _grafo_zb(monkeypatch, [_tc_abrir(), AIMessage(content="ok, preparo de novo")])
+    out = g.invoke(
+        {
+            "telefone": "5531999990000",
+            "identidade": _IDENTIDADE_ZB,
+            "proposta_chamado": _proposta_carimbada(idade=timedelta(minutes=16), turno=0),
+            "messages": [HumanMessage(content="sim")],
+        },
+        config={"configurable": {"thread_id": "zb1-vencida"}},
+    )
+    recusa = _resultado_abrir(out)
+    assert "recusado_pela_politica" in recusa and "venceu" in recusa
+    assert gateway.aberturas == 0
+    assert out["proposta_chamado"] is not None  # não foi consumida
+
+
+def test_zb1_proposta_dentro_da_validade_ainda_vale(monkeypatch, gateway):
+    g, _ = _grafo_zb(monkeypatch, [_tc_abrir(), AIMessage(content="Pronto! Abri o chamado.")])
+    out = g.invoke(
+        {
+            "telefone": "5531999990000",
+            "identidade": _IDENTIDADE_ZB,
+            "proposta_chamado": _proposta_carimbada(idade=timedelta(minutes=14), turno=0),
+            "messages": [HumanMessage(content="pode abrir")],
+        },
+        config={"configurable": {"thread_id": "zb1-14min"}},
+    )
+    assert '"status": true' in _resultado_abrir(out)
+    assert gateway.aberturas == 1
+    assert out["proposta_chamado"] is None  # consumida pela abertura
+
+
+@pytest.mark.parametrize(
+    "mensagem",
+    [
+        "Esse",  # conversa #45: apontava um protocolo existente
+        "ZPRS25208011",  # conversa #45: protocolo citado pelo cliente
+        "esse mesmo, o ZPRS25208011",
+        "sim, mas muda a prioridade para alta",
+        "não",
+        "pode abrir? qual o prazo?",
+        "o app voltou a funcionar",
+        "obrigado",
+        "isso",
+    ],
+)
+def test_zb1_mensagem_que_nao_e_confirmacao_explicita_recusa_abrir(
+    monkeypatch, gateway, mensagem
+):
+    """A proposta está válida e no turno certo; só a mensagem não confirma —
+    quem decide é o código, não o modelo (que aqui INSISTE em abrir)."""
+    g, _ = _grafo_zb(monkeypatch, [_tc_abrir(), AIMessage(content="entendi")])
+    out = g.invoke(
+        {
+            "telefone": "5531999990000",
+            "identidade": _IDENTIDADE_ZB,
+            "proposta_chamado": _proposta_carimbada(turno=0),
+            "messages": [HumanMessage(content=mensagem)],
+        },
+        config={"configurable": {"thread_id": f"zb1-nao-confirma-{abs(hash(mensagem))}"}},
+    )
+    recusa = _resultado_abrir(out)
+    assert "recusado_pela_politica" in recusa and "confirmação explícita" in recusa
+    assert gateway.aberturas == 0, mensagem
+    assert out["proposta_chamado"] is not None
+
+
+def test_zb1_abrir_no_mesmo_turno_do_preparar_e_recusado(monkeypatch, gateway):
+    """O modelo prepara e tenta abrir na mesma rodada, sem o cliente ver o
+    resumo: a abertura é recusada e a proposta fica guardada para o próximo
+    turno (carimbada com este turno)."""
+    g, _ = _grafo_zb(
+        monkeypatch,
+        [_tc_preparar(), _tc_abrir(), AIMessage(content="Vou registrar isto. Posso abrir?")],
+    )
+    out = g.invoke(
+        {
+            "telefone": "5531999990000",
+            "identidade": _IDENTIDADE_ZB,
+            "messages": [HumanMessage(content="o app trava ao bipar, abre um chamado")],
+        },
+        config={"configurable": {"thread_id": "zb1-mesmo-turno"}},
+    )
+    recusa = _resultado_abrir(out)
+    assert "recusado_pela_politica" in recusa and "NESTE turno" in recusa
+    assert gateway.chamadas == ["preparar"]  # nada chegou ao /criar
+    assert out["proposta_chamado"]["turno"] == 1
+    assert out["proposta_chamado"]["criada_em"]
+
+
+def test_zb1_confirmacao_fora_do_turno_seguinte_e_recusada(monkeypatch, gateway):
+    """Proposta do turno 1; a conversa seguiu (turnos 2 e 3) e só então vem
+    um 'sim' — não é mais a resposta à proposta."""
+    g, _ = _grafo_zb(monkeypatch, [_tc_abrir(), AIMessage(content="preparo de novo")])
+    out = g.invoke(
+        {
+            "telefone": "5531999990000",
+            "identidade": _IDENTIDADE_ZB,
+            "proposta_chamado": _proposta_carimbada(turno=1),
+            "messages": [
+                HumanMessage(content="o app trava"),
+                AIMessage(content="Posso abrir o chamado assim?"),
+                HumanMessage(content="qual o prazo?"),
+                AIMessage(content="O prazo é de 1 dia útil. Abro?"),
+                HumanMessage(content="sim"),
+            ],
+        },
+        config={"configurable": {"thread_id": "zb1-fora-de-ordem"}},
+    )
+    recusa = _resultado_abrir(out)
+    assert "recusado_pela_politica" in recusa and "SEGUINTE" in recusa
+    assert gateway.aberturas == 0
+
+
+def test_zb1_proposta_sem_carimbo_e_recusada(monkeypatch, gateway):
+    """Proposta persistida por uma versão anterior (sem criada_em/turno) não
+    vale: o modelo tem de preparar de novo."""
+    g, _ = _grafo_zb(monkeypatch, [_tc_abrir(), AIMessage(content="preparo de novo")])
+    out = g.invoke(
+        {
+            "telefone": "5531999990000",
+            "identidade": _IDENTIDADE_ZB,
+            "proposta_chamado": dict(_PROPOSTA_ZB),
+            "messages": [HumanMessage(content="sim")],
+        },
+        config={"configurable": {"thread_id": "zb1-sem-carimbo"}},
+    )
+    assert "recusado_pela_politica" in _resultado_abrir(out)
+    assert gateway.aberturas == 0
+
+
+def test_zb1_fluxo_feliz_preparar_turno_n_confirmar_turno_n_mais_1(monkeypatch, gateway):
+    """Dois turnos reais no grafo: preparar (turno 1) → 'Sim!' (turno 2) → abre."""
+    g, _ = _grafo_zb(
+        monkeypatch,
+        [
+            _tc_preparar(),
+            AIMessage(content="Vou registrar APP TRAVANDO AO BIPAR (prazo 1 dia). Posso abrir?"),
+            _tc_abrir(),
+            AIMessage(content="Pronto! Abri o chamado ZPRS25208029: https://sac/x"),
+        ],
+    )
+    cfg = {"configurable": {"thread_id": "zb1-feliz"}}
+    out1 = g.invoke(
+        {
+            "telefone": "5531999990000",
+            "identidade": _IDENTIDADE_ZB,
+            "messages": [HumanMessage(content="o app trava ao bipar, abre um chamado")],
+        },
+        config=cfg,
+    )
+    assert out1["proposta_chamado"]["turno"] == 1
+    assert gateway.aberturas == 0
+
+    out2 = g.invoke({"messages": [HumanMessage(content="Sim!")]}, config=cfg)
+    assert gateway.aberturas == 1
+    assert out2["proposta_chamado"] is None
+    assert out2["messages"][-1].content.startswith("Pronto! Abri o chamado ZPRS25208029")
+
+
+def test_zb1_tools_node_carimba_a_proposta_com_criada_em_e_turno(gateway):
+    node = nodes.make_tools_node(SAC_TOOLS)
+    antes = datetime.now(timezone.utc)
+    out = node(
+        {
+            "telefone": "5531999990000",
+            "messages": [
+                HumanMessage(content="a"),
+                AIMessage(content="?"),
+                HumanMessage(content="b"),
+                _tc_preparar(),
+            ],
+        }
+    )
+    proposta = out["proposta_chamado"]
+    assert proposta["turno"] == 2  # duas mensagens do cliente no histórico
+    criada = datetime.fromisoformat(proposta["criada_em"])
+    assert criada.tzinfo is not None and antes <= criada <= datetime.now(timezone.utc)
+    assert {k: v for k, v in proposta.items() if k not in ("criada_em", "turno")} == _PROPOSTA_ZB
+    # O que o modelo vê é o resultado do gateway, sem o carimbo.
+    assert "criada_em" not in out["messages"][0].content
+
+
+def test_zb1_validade_da_proposta_e_15_minutos():
+    assert tool_policy.PROPOSTA_VALIDADE == timedelta(minutes=15)

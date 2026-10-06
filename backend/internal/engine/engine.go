@@ -34,7 +34,14 @@ type ChatwootAPI interface {
 // BrainAPI é o que a engine usa do cérebro (satisfeito por *brain.Client).
 type BrainAPI interface {
 	Chat(ctx context.Context, req brain.ChatRequest) (*brain.ChatResponse, error)
+	// EncerrarEpisodio limpa a proposta de chamado pendente da conversa
+	// resolvida (ZB-1).
+	EncerrarEpisodio(ctx context.Context, conversationID string) error
 }
+
+// prazoEncerrarEpisodio limita a chamada ao cérebro na resolução da conversa:
+// é limpeza best-effort num worker de webhook, não pode segurar a fila.
+const prazoEncerrarEpisodio = 5 * time.Second
 
 // Engine reúne as dependências do orquestrador.
 type Engine struct {
@@ -377,18 +384,35 @@ func (e *Engine) HandleConversationStatusChanged(ctx context.Context, ev *chatwo
 	e.encerrarEpisodio(ctx, ev.ID)
 }
 
-// encerrarEpisodio apaga o estado do gate da conversa resolvida. Resolver é o
+// encerrarEpisodio apaga o estado do gate da conversa resolvida e manda o
+// cérebro limpar a proposta de chamado pendente dela (ZB-1). Resolver é o
 // fim do episódio: o Chatwoot REUTILIZA a conversa quando o contato volta a
 // escrever, e sem isto uma conversa em GateFalha ("roteada") ficaria muda
-// até o GATE_FALHA_TTL vencer — cliente com chamado novo sem resposta. O cache
-// telefone→perfil (`identities`) NÃO é tocado: quem já se identificou volta
-// direto ao cérebro na próxima mensagem, sem novo login.
+// até o GATE_FALHA_TTL vencer — cliente com chamado novo sem resposta — e uma
+// proposta de chamado do episódio anterior poderia ser "confirmada" por uma
+// mensagem qualquer do seguinte (conversa #45). O cache telefone→perfil
+// (`identities`) NÃO é tocado: quem já se identificou volta direto ao cérebro
+// na próxima mensagem, sem novo login. As duas limpezas são independentes: a
+// falha de uma não impede a outra.
 func (e *Engine) encerrarEpisodio(ctx context.Context, convID int64) {
 	if err := e.st.DeleteGate(ctx, convID); err != nil {
 		e.log.Error("apagar estado do gate ao resolver", "conversation_id", convID, "err", err)
+	} else {
+		e.log.Info("conversa resolvida: estado do gate apagado", "conversation_id", convID)
+	}
+	if e.brain == nil {
 		return
 	}
-	e.log.Info("conversa resolvida: estado do gate apagado", "conversation_id", convID)
+	bctx, cancel := context.WithTimeout(ctx, prazoEncerrarEpisodio)
+	defer cancel()
+	if err := e.brain.EncerrarEpisodio(bctx, strconv.FormatInt(convID, 10)); err != nil {
+		// Best-effort: a validade da proposta no cérebro (15 min) é a rede de
+		// segurança quando esta limpeza não chega lá.
+		e.log.Warn("conversa resolvida: cérebro não limpou a proposta de chamado",
+			"conversation_id", convID, "err", err)
+		return
+	}
+	e.log.Info("conversa resolvida: proposta de chamado pendente limpa no cérebro", "conversation_id", convID)
 }
 
 // HandleConversationCreated coloca conversas novas na fila do bot: aplica a

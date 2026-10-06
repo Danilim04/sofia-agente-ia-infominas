@@ -86,6 +86,7 @@ def preparar_abertura_chamado(
     ocorrencia: str,
     prioridade: str = "MEDIA",
     empresa: str = "",
+    novo_chamado: bool = False,
     telefone: Annotated[str, InjectedToolArg] = "",
     conversation_id: Annotated[str, InjectedToolArg] = "",
 ) -> dict[str, Any]:
@@ -96,10 +97,18 @@ def preparar_abertura_chamado(
     vier motivo "ocorrencia_invalida", a resposta traz a lista `ocorrencias`
     válidas — escolha a que melhor casa e chame de novo AGORA, sem envolver o
     cliente. Se vier "empresa_ambigua", pergunte de qual das empresas DO
-    CLIENTE é o chamado e repita passando `empresa`.
+    CLIENTE é o chamado e repita passando `empresa`. Se vier "chamado_aberto",
+    o cliente JÁ TEM chamado(s) em aberto (lista `chamados_abertos`, com
+    protocolo, resumo e link): mostre-os e pergunte se o problema é de um
+    deles — não abra outro por conta própria; só repita com
+    `novo_chamado=true` se o cliente pedir explicitamente um chamado NOVO.
+    "sem_email"/"sem_empresa": o cadastro não permite abrir por aqui — explique
+    o motivo (está em `erro`) e ofereça um atendente.
 
     Com status true, apresente ao cliente o resumo do que será registrado (da
-    `proposta`) e peça confirmação; só então chame `abrir_chamado_suporte`.
+    `proposta`) e peça um "sim"/"pode abrir"; só na mensagem SEGUINTE dele, se
+    for essa confirmação, chame `abrir_chamado_suporte`. A proposta vale 15
+    minutos.
 
     Args:
         resumo: título curto do problema (1 linha). Será registrado em MAIÚSCULAS.
@@ -110,12 +119,17 @@ def preparar_abertura_chamado(
             URGENTE só quando o impacto for claramente alto (operação parada).
         empresa: informe SÓ quando o cliente tiver mais de uma empresa e o
             sistema pedir para desambiguar (motivo "empresa_ambigua").
+        novo_chamado: True SÓ quando o cliente pediu explicitamente um chamado
+            NOVO apesar de já ter chamado em aberto (motivo "chamado_aberto").
+            Nunca decida isso por ele.
 
     Returns:
         dict: status (bool); em sucesso, proposta {resumo, descricao, categoria,
-        ocorrencia, prioridade, empresa, prazo}. Em falha, erro e às vezes
-        motivo ("ocorrencia_invalida" com `ocorrencias` | "empresa_ambigua"
-        com `empresas` | "campo_invalido" | "nao_identificado").
+        ocorrencia, prioridade, empresa, prazo, novo_chamado}. Em falha, erro e
+        às vezes motivo ("ocorrencia_invalida" com `ocorrencias` |
+        "empresa_ambigua" com `empresas` | "chamado_aberto" com
+        `chamados_abertos` | "campo_invalido" | "sem_email" | "sem_empresa" |
+        "nao_identificado").
     """
     return _post(
         "/tools/sac/preparar",
@@ -128,6 +142,7 @@ def preparar_abertura_chamado(
             "ocorrencia": ocorrencia,
             "prioridade": prioridade,
             "grupo_emp": empresa,
+            "novo_chamado": bool(novo_chamado),
         },
     )
 
@@ -142,9 +157,11 @@ def abrir_chamado_suporte(
 
     AÇÃO COM EFEITO COLATERAL (LLM08): cria um chamado real. Só chame DEPOIS de
     `preparar_abertura_chamado` ter retornado status true E de o cliente
-    confirmar explicitamente (ex.: "pode abrir", "sim"). Não recebe argumentos:
-    o chamado criado é EXATAMENTE a proposta preparada — para mudar qualquer
-    coisa (resumo, prioridade...), prepare de novo antes de abrir.
+    confirmar explicitamente NA MENSAGEM SEGUINTE (só "pode abrir", "sim",
+    "ok" — um protocolo, "esse", uma pergunta ou um pedido de mudança NÃO
+    confirmam e o sistema recusa). Não recebe argumentos: o chamado criado é
+    EXATAMENTE a proposta preparada — para mudar qualquer coisa (resumo,
+    prioridade...), prepare de novo antes de abrir.
 
     Returns:
         dict: status (bool); em sucesso, protocolo, link (URL do chat do
@@ -163,6 +180,9 @@ def abrir_chamado_suporte(
             "ocorrencia": proposta.get("ocorrencia", ""),
             "prioridade": proposta.get("prioridade", "MEDIA"),
             "grupo_emp": proposta.get("empresa", ""),
+            # Pedido explícito de chamado novo conferido no preparo (ZB-2): a
+            # abertura o repete para o gateway reconferir os abertos.
+            "novo_chamado": bool(proposta.get("novo_chamado", False)),
         },
     )
 

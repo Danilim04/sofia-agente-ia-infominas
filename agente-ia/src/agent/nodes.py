@@ -45,7 +45,7 @@ from src.agent.prompts import (
     SYSTEM_PROMPT_AGENTE,
 )
 from src.agent.state import AgentState
-from src.agent.tool_policy import aplicar_politica
+from src.agent.tool_policy import aplicar_politica, carimbar_proposta
 from src.config import get_settings
 from src.security.input_guardrails import avaliar_entrada
 from src.security.output_guardrails import (
@@ -568,10 +568,13 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
                 }
 
             # Fluxo em duas fases do chamado: o dry-run aprovado vira estado
-            # (é ELE que a abertura executa); a abertura bem-sucedida o consome.
+            # (é ELE que a abertura executa), carimbado com `criada_em`/`turno`
+            # — a política de `abrir` exige proposta válida (15 min) e a
+            # confirmação explícita do cliente no turno seguinte (ZB-1); a
+            # abertura bem-sucedida o consome.
             if nome == "preparar_abertura_chamado" and isinstance(resultado, dict):
                 if resultado.get("status") and resultado.get("proposta"):
-                    proposta_chamado = dict(resultado["proposta"])
+                    proposta_chamado = carimbar_proposta(resultado["proposta"], state)
             elif nome == "abrir_chamado_suporte" and isinstance(resultado, dict):
                 if resultado.get("status"):
                     proposta_chamado = None
