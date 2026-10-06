@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"bot-azapfy/internal/alerta"
 	"bot-azapfy/internal/brain"
 	"bot-azapfy/internal/chatwoot"
 	"bot-azapfy/internal/store"
@@ -93,6 +94,15 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, conv *chatwoot.Conver
 	}); err != nil {
 		e.log.Error("registrar falha", "id_ocorrencia", id, "conversation_id", conv.ID, "err", err)
 	}
+	// Alertas (ZC-7): turno do cérebro que terminou em falha conta na taxa;
+	// falha definitiva/técnica alerta na hora.
+	if t.Origem == OrigemCerebro || t.Origem == OrigemDisjuntor {
+		e.vigia.Turno(false)
+	}
+	e.vigia.FalhaRegistrada(alerta.Falha{
+		ID: id, ConversationID: conv.ID, Origem: t.Origem, Classe: t.Classe,
+		Causa: t.Causa, Link: e.linkConversa(conv.ID),
+	})
 
 	msg := t.Mensagem
 	if msg == "" {

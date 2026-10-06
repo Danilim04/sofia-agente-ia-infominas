@@ -17,6 +17,7 @@ type Config struct {
 	PublicBaseURL string // URL pública (só para montar a URL do webhook nos logs)
 
 	ChatwootBaseURL   string
+	ChatwootPublicURL string // URL que um humano abre no navegador (links de alerta); vazio = ChatwootBaseURL
 	ChatwootAccountID string
 	ChatwootAPIToken  string
 	WebhookSecret     string
@@ -55,6 +56,11 @@ type Config struct {
 	// tentativa e a conversa é transferida (ZC-5). Default 45s.
 	TurnoTeto time.Duration
 
+	// Alertas ao responsável (ZC-7): a decisão de QUANDO alertar é do pacote
+	// alerta; o destino é o log `zapin_alerta` + este webhook opcional
+	// (POST JSON {"text": ...}). Vazio = só log.
+	AlertaWebhookURL string
+
 	// Identidade / gate.
 	ConfirmField  string        // dado pedido na confirmação: "email" (default) | "nome"
 	MaxTentativas int           // erros de identificação (login + confirmação, acumulados) antes de rotear p/ humano
@@ -89,6 +95,8 @@ func Load() (*Config, error) {
 		LogLevel:          strings.ToLower(getenv("LOG_LEVEL", "info")),
 		PublicBaseURL:     strings.TrimRight(getenv("PUBLIC_BASE_URL", ""), "/"),
 		ChatwootBaseURL:   strings.TrimRight(getenv("CHATWOOT_BASE_URL", ""), "/"),
+		ChatwootPublicURL: strings.TrimRight(getenv("CHATWOOT_PUBLIC_URL", ""), "/"),
+		AlertaWebhookURL:  strings.TrimSpace(getenv("ALERTA_WEBHOOK_URL", "")),
 		ChatwootAccountID: getenv("CHATWOOT_ACCOUNT_ID", ""),
 		ChatwootAPIToken:  getenv("CHATWOOT_API_TOKEN", ""),
 		WebhookSecret:     getenv("WEBHOOK_SECRET", ""),

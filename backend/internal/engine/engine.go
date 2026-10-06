@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"bot-azapfy/internal/alerta"
 	"bot-azapfy/internal/brain"
 	"bot-azapfy/internal/chatwoot"
 	"bot-azapfy/internal/config"
@@ -50,6 +51,8 @@ type Engine struct {
 	esperasRetry []time.Duration
 	dormir       func(ctx context.Context, d time.Duration) bool
 	disjuntor    *disjuntor
+	// vigia decide quando alertar o responsável (ZC-7) — pode ser nil.
+	vigia *alerta.Vigia
 
 	// Coalescência/serialização por conversa (F11) — ver coalescer.go.
 	baseCtx      context.Context
@@ -64,7 +67,7 @@ func New(cfg *config.Config, cw ChatwootAPI, gate *identity.Gate, brainClient Br
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Engine{
+	e := &Engine{
 		cfg:          cfg,
 		cw:           cw,
 		gate:         gate,
@@ -80,6 +83,32 @@ func New(cfg *config.Config, cw ChatwootAPI, gate *identity.Gate, brainClient Br
 		debounceTeto: cfg.DebounceTeto,
 		filas:        make(map[int64]chan inbound),
 	}
+	e.ligarVigia(alerta.NovaVigia(alerta.Padrao(cfg.AlertaWebhookURL, log), nil))
+	return e
+}
+
+// ligarVigia instala a vigia de alertas (ZC-7) e o gancho do disjuntor. Os
+// testes trocam por uma vigia com notificador falso.
+func (e *Engine) ligarVigia(v *alerta.Vigia) {
+	e.vigia = v
+	if v != nil && e.agora != nil {
+		v.Agora = e.agora
+	}
+	e.disjuntor.aoAbrir = func(chave, causa string, ate time.Time) {
+		e.vigia.DisjuntorAberto(chave, causa, ate)
+	}
+}
+
+// linkConversa monta o link da conversa no painel do Chatwoot para os alertas.
+func (e *Engine) linkConversa(convID int64) string {
+	base := e.cfg.ChatwootPublicURL
+	if base == "" {
+		base = e.cfg.ChatwootBaseURL
+	}
+	if base == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/app/accounts/%s/conversations/%d", base, e.cfg.ChatwootAccountID, convID)
 }
 
 // Start registra o contexto-raiz dos workers por conversa (cancelado no
@@ -351,6 +380,7 @@ func (e *Engine) encaminhar(ctx context.Context, conv *chatwoot.Conversation, ph
 		if err == nil {
 			resp = r
 			e.disjuntor.sucesso()
+			e.vigia.Turno(true)
 			break
 		}
 		t := transferenciaPorErroDoCerebro(err)

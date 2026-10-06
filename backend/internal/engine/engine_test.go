@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"bot-azapfy/internal/alerta"
 	"bot-azapfy/internal/brain"
 	"bot-azapfy/internal/chatwoot"
 	"bot-azapfy/internal/config"
@@ -220,7 +221,40 @@ func (r *relogioFalso) dormir(_ context.Context, d time.Duration) bool {
 func comRelogioFalso(e *Engine) *relogioFalso {
 	r := &relogioFalso{agora: time.Date(2026, 10, 2, 9, 11, 0, 0, time.UTC)}
 	e.agora, e.dormir = r.now, r.dormir
+	if e.vigia != nil {
+		e.vigia.Agora = r.now
+	}
 	return r
+}
+
+// notificadorFalso captura os alertas da vigia (ZC-7/ZC-8).
+type notificadorFalso struct {
+	mu      sync.Mutex
+	alertas []alerta.Alerta
+}
+
+func (n *notificadorFalso) Notificar(_ context.Context, a alerta.Alerta) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.alertas = append(n.alertas, a)
+}
+
+func (n *notificadorFalso) doTipo(tipo string) []alerta.Alerta {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var out []alerta.Alerta
+	for _, a := range n.alertas {
+		if a.Tipo == tipo {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func comNotificadorFalso(e *Engine) *notificadorFalso {
+	n := &notificadorFalso{}
+	e.ligarVigia(alerta.NovaVigia(n, e.agora))
+	return n
 }
 
 func erroTransitorio() *brain.Erro {
@@ -783,5 +817,69 @@ func TestEnvioSegueQuandoReconferenciaFalha(t *testing.T) {
 
 	if got := cw.mensagens(112, false); len(got) != 1 || got[0] != "oi" {
 		t.Fatalf("fail-open: resposta devia sair, veio %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ZC-7: alertas ao responsável
+// ---------------------------------------------------------------------------
+
+// TestFalhaDefinitivaDoCerebroAlerta: 402 → um alerta `falha_definitiva` com o
+// ID da ocorrência e o link da conversa; nada de alerta no caminho feliz.
+func TestFalhaDefinitivaDoCerebroAlerta(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	e.cfg.ChatwootBaseURL, e.cfg.ChatwootAccountID = "http://chatwoot:3000", "1"
+	e.cfg.ChatwootPublicURL = "https://painel.exemplo"
+	comRelogioFalso(e)
+	n := comNotificadorFalso(e)
+
+	br.respostas = []func() (*brain.ChatResponse, error){responde("ok")}
+	turno(e, 120, e.agora())
+	if len(n.alertas) != 0 {
+		t.Fatalf("caminho feliz não alerta: %+v", n.alertas)
+	}
+
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(&brain.Erro{
+		Classe: brain.ClasseDefinitiva, IDOcorrencia: "ZPF-20261002-0911-55", Causa: "saldo do OpenRouter insuficiente (402)", Status: 500,
+	})}
+	turno(e, 121, e.agora())
+	al := n.doTipo(alerta.TipoFalhaDefinitiva)
+	if len(al) != 1 || al[0].IDOcorrencia != "ZPF-20261002-0911-55" || al[0].ConversationID != 121 {
+		t.Fatalf("esperava 1 alerta de falha definitiva com o ID do cérebro: %+v", n.alertas)
+	}
+	if al[0].Link != "https://painel.exemplo/app/accounts/1/conversations/121" {
+		t.Fatalf("link da conversa (URL pública) inesperado: %q", al[0].Link)
+	}
+}
+
+// TestTransitoriaEsgotadaNaoAlertaDefinitivaMasContaNaTaxa: transitória não
+// gera alerta de definitiva; 3 turnos com falha em 15 min geram o de taxa.
+func TestTransitoriaEsgotadaContaNaTaxa(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	comRelogioFalso(e)
+	n := comNotificadorFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio())}
+	for conv := int64(130); conv < 133; conv++ {
+		turno(e, conv, e.agora())
+	}
+	if len(n.doTipo(alerta.TipoFalhaDefinitiva)) != 0 {
+		t.Fatalf("transitória não é falha definitiva: %+v", n.alertas)
+	}
+	if len(n.doTipo(alerta.TipoTaxaDeFalhas)) != 1 {
+		t.Fatalf("3 turnos falhos em 15 min deviam gerar 1 alerta de taxa: %+v", n.alertas)
+	}
+}
+
+// TestDisjuntorAbertoAlertaUmaVez: a 3ª falha igual abre o disjuntor e alerta.
+func TestDisjuntorAbertoAlertaUmaVez(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	comRelogioFalso(e)
+	n := comNotificadorFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+	for conv := int64(140); conv < 144; conv++ { // a 4ª já cai no disjuntor
+		turno(e, conv, e.agora())
+	}
+	if al := n.doTipo(alerta.TipoDisjuntorAberto); len(al) != 1 || !strings.Contains(al[0].Texto, "402") {
+		t.Fatalf("esperava exatamente 1 alerta de disjuntor aberto: %+v", n.alertas)
 	}
 }

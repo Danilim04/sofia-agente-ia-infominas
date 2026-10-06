@@ -143,3 +143,10 @@ TEAM_HUMANO_ID=${TEAM_HUMANO_ID}
 # Teto do turno desde a mensagem do cliente (coalescência + cérebro + novas
 # tentativas em falha transitória: 2 s e 5 s). Falha definitiva não repete.
 TURNO_TETO=45s
+# Alertas ao responsável (falha definitiva, >5% de turnos com falha em 15 min,
+# disjuntor aberto, etiqueta reportar-zapin): sempre no log `zapin_alerta`;
+# opcionalmente POST JSON {"text": ...} nesta URL (GitHub Secret; vazio = só log).
+ALERTA_WEBHOOK_URL=${ALERTA_WEBHOOK_URL}
+# URL pública do Chatwoot (link da conversa nos alertas; CHATWOOT_BASE_URL é
+# interna à rede docker). GitHub variable; vazia = usa a interna.
+CHATWOOT_PUBLIC_URL=${CHATWOOT_PUBLIC_URL}
