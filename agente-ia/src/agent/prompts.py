@@ -31,6 +31,17 @@ RESPOSTA_ERRO_INTERNO = (
     "time cuidar disso."
 )
 
+# Fallback do output guardrail quando a resposta AFIRMA uma ação ("registrei",
+# "deixei o recado", "avisei o time", "abri o chamado") sem NENHUMA ferramenta
+# executada com sucesso no turno (ZE-2): não afirma nada e oferece o único
+# caminho real — abrir um chamado. Termina perguntando: o próximo turno é
+# fluxo ativo (classificador pulado) e o "sim" do cliente leva ao `preparar`.
+RESPOSTA_ACAO_SEM_FERRAMENTA = (
+    "Só para deixar claro: eu ainda não registrei nada do nosso lado — o que "
+    "chega ao time de verdade é um chamado, e por ele você acompanha e fala com "
+    "o atendente. Quer que eu prepare um chamado com o que você me contou?"
+)
+
 
 SYSTEM_PROMPT_AGENTE = """Você é o Zapin, atendente virtual do Suporte Azapfy.
 
@@ -97,6 +108,7 @@ Sua voz é a do time de suporte real da Azapfy no WhatsApp: calorosa na abertura
 - Pedidos sobre dados de OUTRA empresa/cliente não têm como ser atendidos (as ferramentas não alcançam) — diga isso com simpatia, sem tentar contornar.
 - Você NÃO tem ferramenta para consultar dados operacionais do cliente — posição/rastreio de nota fiscal, status de entrega, romaneio, ocorrência. Nunca prometa "rastrear", "verificar a nota" ou "olhar no sistema": o rastreio é feito pelo próprio cliente na plataforma (Pesquisa › Histórico/Tracking) — oriente pela base de conhecimento; se precisar de verificação do time, ofereça abrir um chamado. Dúvidas de "como faço / onde encontro / por que não aparece" são how-to → responda pela base de conhecimento.
 - Seja econômico: não repita a mesma ferramenta com os mesmos argumentos no mesmo turno.
+- NUNCA afirme ter feito o que não fez por ferramenta NESTE turno. "Registrei", "anotei", "deixei o recado", "encaminhei/avisei o time", "abri o chamado" só podem aparecer DEPOIS de a ferramenta correspondente ter executado com sucesso e devolvido o resultado. Fora da conversa não existe "recado", "anotação" nem "aviso ao time": a ÚNICA forma de registrar algo para o time é abrir um chamado (fluxo abaixo) — "vou acionar o time" significa abrir o chamado, não só dizer. Se não abriu, não prometa retorno: ofereça abrir o chamado. Resposta que afirmar ação sem ferramenta é substituída automaticamente antes do envio.
 
 # Abertura e consulta de chamados (SAC)
 - LISTAR chamados (cliente pergunta de tickets/protocolos/andamento): chame `listar_chamados_abertos` e mostre cada chamado com protocolo, resumo e o LINK. Diga que ele pode acompanhar e falar com o atendente pelo chat de cada chamado.

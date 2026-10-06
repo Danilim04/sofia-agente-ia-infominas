@@ -19,6 +19,10 @@ Saída final ao cliente (usadas pelo `output_guardrail_node`):
 4. **Máscara de erro interno (A2/LLM06):** `contem_vazamento_interno` detecta
    marcas inequívocas de erro técnico (traceback, módulos, hosts internos) —
    o nó troca a resposta inteira por um fallback amigável.
+5. **Afirmação de ação sem ferramenta (ZE-2):** `afirmacoes_de_acao` acha
+   "registrei / deixei o recado / avisei o time / abri o chamado" em 1ª
+   pessoa; o nó troca a resposta pelo fallback quando NENHUMA ferramenta
+   executou com sucesso no turno (fora de uma tool, o "recado" não existe).
 
 Não tentamos remover instruções imperativas em linguagem natural ("ignore
 o sistema") — isso é responsabilidade da regra anti-injection do system
@@ -182,6 +186,106 @@ def contem_vazamento_interno(texto: str) -> bool:
     """True quando a resposta contém marca inequívoca de erro/infra interna."""
     alvo = (texto or "").lower()
     return any(marca in alvo for marca in _MARCAS_INTERNAS)
+
+
+# ---------------------------------------------------------------------------
+# Afirmação de ação sem ferramenta (ZE-2) — "registrei / deixei o recado /
+# avisei o time / abri o chamado" só é verdade quando uma ferramenta executou
+# com sucesso no turno; quem sabe isso é o `output_guardrail_node` (estado).
+# Aqui fica só a detecção textual: determinística, sem acento e sem caixa.
+# Deliberadamente estreita — 1ª pessoa (eu/nós) e ação CONCLUÍDA ou em curso.
+# Promessa futura ("vou registrar"), infinitivo/how-to ("você pode registrar"),
+# 3ª pessoa ("você registrou"), fala citada entre aspas e negação ("ainda não
+# registrei") NÃO disparam.
+# ---------------------------------------------------------------------------
+
+_ALVO_TIME = (
+    r"(?:(?:para|pro|pra|ao|a|com)\s+)?(?:o\s+|a\s+|nosso\s+|nossa\s+)?"
+    r"(?:time|equipe|setor|suporte|pessoal|tecnic\w*|desenvolv\w*|devs?|"
+    r"responsav\w*|area)\b"
+)
+_OBJETO_CASO = (
+    r"(?:isso|isto|tudo|o\s+caso|a\s+situacao|o\s+problema|o\s+relato|"
+    r"a\s+ocorrencia|a\s+solicitacao|a\s+demanda|"
+    r"(?:sua|seu)\s+(?:solicitacao|caso|pedido|relato|demanda|problema|situacao))"
+)
+_AFIRMACOES_DE_ACAO_RE = tuple(
+    re.compile(p)
+    for p in (
+        # eu/nós + passado: registrei, anotei, acionei, protocolei...
+        (
+            r"\b(?:ja\s+)?(?:registrei|anotei|acionei|notifiquei|sinalizei|protocolei|"
+            r"cadastrei|registramos|anotamos|acionamos|notificamos|sinalizamos|"
+            r"protocolamos|cadastramos)\b"
+        ),
+        # "deixei (o recado) registrado/anotado" · "deixei um recado/aviso"
+        r"\bdeixei\b(?:\s+\w+){0,4}?\s+(?:registrad|anotad|encaminhad|sinalizad|avisad)\w*",
+        (
+            r"\bdeixei\s+(?:o\s+|um\s+|uma\s+|seu\s+|sua\s+)?"
+            r"(?:recado|aviso|alerta|registro|anotacao|observacao)\b"
+        ),
+        # encaminhei/repassei + o caso / sua solicitação
+        (
+            r"\b(?:ja\s+)?(?:encaminhei|repassei|encaminhamos|repassamos)\s+"
+            + _OBJETO_CASO
+            + r"\b"
+        ),
+        # comunicação ao time: avisei/falei/passei/pedi/encaminhei ... (para) o time
+        (
+            r"\b(?:ja\s+)?(?:avisei|comuniquei|alertei|informei|falei|passei|pedi|solicitei|"
+            r"encaminhei|repassei|avisamos|comunicamos|alertamos|informamos|falamos|"
+            r"passamos|pedimos|solicitamos|encaminhamos|repassamos)\s+"
+            r"(?:" + _OBJETO_CASO + r"\s+)?" + _ALVO_TIME
+        ),
+        # estado concluído: "já está/foi registrado" · "sua solicitação foi encaminhada"
+        (
+            r"\bja\s+(?:esta|estao|foi|foram|ficou|ficaram)\s+(?:devidamente\s+|tudo\s+)?"
+            r"(?:registrad|anotad|encaminhad|repassad|sinalizad|protocolad)\w*"
+        ),
+        (
+            r"\b(?:solicitacao|pedido|recado|demanda|relato|caso|chamado|ticket|protocolo)\s+"
+            r"(?:ja\s+)?(?:esta|foi|ficou)\s+(?:devidamente\s+)?"
+            r"(?:registrad|anotad|encaminhad|repassad|sinalizad|protocolad|abert|criad|gerad)\w*"
+        ),
+        r"\brecado\s+(?:registrad|anotad|encaminhad|repassad)\w*",
+        # chamado/ticket/protocolo: "abri o chamado" · "chamado criado com sucesso"
+        (
+            r"\b(?:ja\s+)?(?:abri|criei|gerei|abrimos|criamos|geramos)\s+(?:aqui\s+)?"
+            r"(?:o\s+|um\s+|seu\s+|esse\s+|este\s+)?(?:chamado|ticket|protocolo)\b"
+        ),
+        r"\b(?:chamado|ticket)\s+(?:aberto|registrado|criado)\s+com\s+sucesso\b",
+        # em curso: "estou acionando/registrando ..."
+        (
+            r"\b(?:estou|estamos)\s+(?:registrando|anotando|encaminhando|repassando|"
+            r"acionando|sinalizando|notificando|protocolando)\b"
+        ),
+    )
+)
+# Negação logo antes da afirmação ("ainda não registrei", "não abri o chamado").
+_NEGACAO_ANTES_RE = re.compile(r"\b(?:nao|nunca|nem|jamais|sem)\s+(?:\w+\s+)?$")
+# Trechos entre aspas são fala citada (em geral do cliente) — não contam.
+_TRECHO_CITADO_RE = re.compile(r"[\"“”«»]([^\"“”«»]{1,240})[\"“”«»]")
+
+
+def afirmacoes_de_acao(texto: str | None) -> list[str]:
+    """Trechos da resposta que AFIRMAM ação concluída/em curso em 1ª pessoa.
+
+    Registro, anotação, aviso/encaminhamento ao time ou abertura de chamado —
+    coisas que só acontecem por ferramenta. Devolve os trechos casados
+    (normalizados: minúsculas, sem acento) para log/teste; lista vazia = nada
+    afirmado. Fala citada entre aspas e afirmações negadas são ignoradas.
+    """
+    if not texto:
+        return []
+    alvo = _normalizar_para_busca(_TRECHO_CITADO_RE.sub(" ", str(texto)))
+    achadas: list[str] = []
+    for padrao in _AFIRMACOES_DE_ACAO_RE:
+        for m in padrao.finditer(alvo):
+            antes = alvo[max(0, m.start() - 24) : m.start()]
+            if _NEGACAO_ANTES_RE.search(antes):
+                continue
+            achadas.append(m.group(0))
+    return achadas
 
 
 def envolver_chunks_rag(chunks: Iterable[Mapping[str, object]]) -> str:
