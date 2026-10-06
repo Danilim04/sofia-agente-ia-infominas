@@ -1,8 +1,10 @@
 package identity
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -513,5 +515,135 @@ func TestGateConfirmacaoCertaAposErrosDeLoginIdentifica(t *testing.T) {
 	g.Process(ctx, conv, phone, "10596693664")
 	if r := g.Process(ctx, conv, phone, "daniel.ferraz@azapfy.com.br"); r.Acao != AcaoSaudar {
 		t.Fatalf("confirmação certa: esperava saudar, veio %q", r.Acao)
+	}
+}
+
+// ZG-1: cadastro SEM o dado de confirmação (e-mail) não pode ser identificado
+// só pelo login — quem soubesse o login de outra pessoa via os chamados dela
+// (conversas #28, #59, #82). Sem segunda verificação possível, a saída segura é
+// a fila humana: nada de saudação, nada de perfil, nada no cache do telefone.
+func TestGateCadastroSemEmailNaoIdentificaSoPeloLogin(t *testing.T) {
+	semEmail := docDaniel()
+	semEmail.Email = ""
+	g, st := newGate(t, fakeRepo{docs: map[string]mongo.UsuarioDoc{"10596693664": semEmail}})
+	ctx := context.Background()
+	const conv = int64(41)
+	const phone = "5511000000041"
+
+	g.Process(ctx, conv, phone, "oi") // pede login
+	r := g.Process(ctx, conv, phone, "10596693664")
+	if r.Acao != AcaoRotearHumano || r.Reply != msgSemDadoConfirmacao {
+		t.Fatalf("login de cadastro sem e-mail: esperava rotear humano, veio %q reply=%q", r.Acao, r.Reply)
+	}
+	if r.Perfil != nil {
+		t.Fatalf("não pode devolver perfil sem confirmação: %+v", r.Perfil)
+	}
+	ci, err := st.GetIdentity(ctx, phone)
+	if err != nil {
+		t.Fatalf("getIdentity: %v", err)
+	}
+	if ci != nil {
+		t.Fatalf("telefone não pode entrar no cache de identidade sem confirmação: %+v", ci)
+	}
+	// Conversa já roteada: a próxima mensagem NÃO vai ao cérebro.
+	if r := g.Process(ctx, conv, phone, "quais são os meus chamados?"); r.Acao != AcaoIgnorar {
+		t.Fatalf("pós-roteamento: esperava ignorar, veio %q", r.Acao)
+	}
+}
+
+// ZG-1 (contraprova): cadastro COM e-mail segue o fluxo de confirmação atual —
+// pede o e-mail, só identifica (e só cacheia) depois de o dado conferir.
+func TestGateCadastroComEmailSegueConfirmacao(t *testing.T) {
+	g, st := newGate(t, fakeRepo{docs: map[string]mongo.UsuarioDoc{"10596693664": docDaniel()}})
+	ctx := context.Background()
+	const conv = int64(42)
+	const phone = "5511000000042"
+
+	g.Process(ctx, conv, phone, "oi")
+	r := g.Process(ctx, conv, phone, "10596693664")
+	if r.Acao != AcaoPerguntar || !strings.Contains(r.Reply, "e-mail") {
+		t.Fatalf("cadastro com e-mail: esperava pedir confirmação do e-mail, veio %q reply=%q", r.Acao, r.Reply)
+	}
+	if ci, _ := st.GetIdentity(ctx, phone); ci != nil {
+		t.Fatalf("antes de confirmar não pode haver cache: %+v", ci)
+	}
+	if r := g.Process(ctx, conv, phone, "daniel.ferraz@azapfy.com.br"); r.Acao != AcaoSaudar {
+		t.Fatalf("e-mail confere: esperava saudar, veio %q", r.Acao)
+	}
+	if ci, _ := st.GetIdentity(ctx, phone); ci == nil {
+		t.Fatal("após confirmar, o telefone deve estar no cache de identidade")
+	}
+}
+
+// ZG-2 (LGPD): o log de nível INFO do gate não pode trazer login/e-mail em
+// claro — só a forma mascarada (3 últimos caracteres). Captura o logger em
+// INFO e percorre o fluxo feliz, o cache, o login via IA e o acesso inativo.
+func TestGateLogInfoNaoExpoeLogin(t *testing.T) {
+	var buf bytes.Buffer
+	logInfo := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	st, err := store.NewSQLite(filepath.Join(t.TempDir(), "gate.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	joao := docDaniel()
+	joao.Login = "joao.silva"
+	inativo := mongo.UsuarioDoc{Login: "inativo999", Nome: "Fulano", Email: "f@x.com",
+		Grupos: map[string]mongo.GrupoDoc{"AZAPFY": {Ativo: false}}}
+	repo := fakeRepo{docs: map[string]mongo.UsuarioDoc{
+		"10596693664": docDaniel(), "joao.silva": joao, "inativo999": inativo,
+	}}
+	extractor := fakeExtractor{respostas: map[string]string{"meu login é o joao": "joao.silva"}}
+	g := New(st, repo, "email", 3, time.Hour, time.Hour, extractor, logInfo)
+	ctx := context.Background()
+
+	// Fluxo feliz (login resolvido + identidade confirmada) e cache em conversa nova.
+	g.Process(ctx, 51, "5511000000051", "oi")
+	g.Process(ctx, 51, "5511000000051", "10596693664")
+	if r := g.Process(ctx, 51, "5511000000051", "daniel.ferraz@azapfy.com.br"); r.Acao != AcaoSaudar {
+		t.Fatalf("setup: esperava saudar, veio %q", r.Acao)
+	}
+	if r := g.Process(ctx, 52, "5511000000051", "oi de novo"); r.Acao != AcaoEncaminhar {
+		t.Fatalf("setup: esperava cache hit, veio %q", r.Acao)
+	}
+	// Login extraído por IA.
+	g.Process(ctx, 53, "5511000000053", "oi")
+	if r := g.Process(ctx, 53, "5511000000053", "meu login é o joao"); r.Acao != AcaoPerguntar {
+		t.Fatalf("setup: esperava pedir confirmação, veio %q", r.Acao)
+	}
+	// Login sem empresa ativa.
+	g.Process(ctx, 54, "5511000000054", "oi")
+	if r := g.Process(ctx, 54, "5511000000054", "inativo999"); r.Acao != AcaoRotearHumano {
+		t.Fatalf("setup: esperava rotear humano, veio %q", r.Acao)
+	}
+
+	logs := buf.String()
+	for _, segredo := range []string{"10596693664", "daniel.ferraz@azapfy.com.br", "joao.silva", "inativo999"} {
+		if strings.Contains(logs, segredo) {
+			t.Errorf("log INFO expõe %q em claro:\n%s", segredo, logs)
+		}
+	}
+	// A linha continua existindo, com o login mascarado (correlação sem PII).
+	for _, quer := range []string{"identidade confirmada", "login=********664", "identidade via cache", "login extraído por IA", "login_extraido=*******lva", "login sem empresa ativa"} {
+		if !strings.Contains(logs, quer) {
+			t.Errorf("esperava %q no log INFO:\n%s", quer, logs)
+		}
+	}
+}
+
+func TestMascararLogin(t *testing.T) {
+	casos := map[string]string{
+		"":                            "",
+		"ab":                          "**",
+		"abc":                         "***",
+		"10596693664":                 "********664",
+		"daniel.ferraz@azapfy.com.br": "************************.br",
+		"  joao  ":                    "*oao",
+	}
+	for in, quer := range casos {
+		if got := mascararLogin(in); got != quer {
+			t.Errorf("mascararLogin(%q) = %q, esperava %q", in, got, quer)
+		}
 	}
 }

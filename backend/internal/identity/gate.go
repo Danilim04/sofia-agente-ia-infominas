@@ -76,6 +76,7 @@ const (
 	msgErroTemporario        = "Opa, tive um problema aqui no sistema e não consegui consultar agora. Consegue tentar de novo em instantes, por gentileza? 🙏"
 	msgConfirmacaoNaoConfere = "Esse dado não bateu com o que tenho aqui no cadastro. Consegue conferir e me enviar de novo, por gentileza?"
 	msgFalhaConfirmacao      = "Não consegui confirmar a sua identidade por aqui, mas fica tranquilo: vou te transferir para um atendente da equipe continuar com você. 🙏"
+	msgSemDadoConfirmacao    = "Para a sua segurança, eu confirmo a identidade por um dado do cadastro — e o seu cadastro não tem esse dado por aqui. Vou te encaminhar para um atendente da equipe continuar o atendimento, tudo bem? 🙏"
 )
 
 // saudacaoAbertura devolve a saudação da casa conforme o período do dia em
@@ -186,7 +187,7 @@ func (g *Gate) Process(ctx context.Context, convID int64, phone, mensagem string
 	default: // novo
 		if p := g.cacheHit(ctx, phone); p != nil {
 			g.salvarGate(ctx, convID, store.GateIdentificado, gateData{Perfil: p})
-			g.log.Info("identidade via cache (base própria)", "conversation_id", convID, "login", p.Login)
+			g.log.Info("identidade via cache (base própria)", "conversation_id", convID, "login", mascararLogin(p.Login))
 			return Resultado{Acao: AcaoEncaminhar, Perfil: p}
 		}
 		return g.iniciar(ctx, convID, phone)
@@ -273,15 +274,21 @@ func (g *Gate) tratarLogin(ctx context.Context, convID int64, phone, mensagem st
 	perfil := mongo.Projetar(doc)
 	if !perfil.TemEmpresaAtiva() {
 		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
-		g.log.Info("login sem empresa ativa", "conversation_id", convID, "login", login)
+		g.log.Info("login sem empresa ativa", "conversation_id", convID, "login", mascararLogin(login))
 		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemAcesso}
 	}
 
 	expected, pergunta := g.alvoConfirmacao(doc)
 	if expected == "" {
-		// Sem dado para confirmar: identifica direto (não há como confirmar).
-		g.log.Warn("sem dado de confirmação no cadastro; identificando sem confirmar", "conversation_id", convID)
-		return g.identificar(ctx, convID, phone, &perfil)
+		// ZG-1: sem dado verificável no cadastro não existe segunda verificação —
+		// identificar só pelo login deixava quem soubesse o login de outra pessoa
+		// ver os chamados dela (conversas #28, #59, #82). Saída segura: fila
+		// humana, sem gravar nada no cache telefone→perfil. (Esses cadastros
+		// também não conseguem abrir chamado — ZA-2 recusa sem e-mail.)
+		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
+		g.log.Info("cadastro sem dado de confirmação; roteando para humano",
+			"conversation_id", convID, "confirm_field", g.confirmField)
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemDadoConfirmacao}
 	}
 	// O contador de erros é do EPISÓDIO de identificação, não da fase: os
 	// erros de login gastos até aqui continuam valendo na confirmação, para que
@@ -294,7 +301,7 @@ func (g *Gate) tratarLogin(ctx context.Context, convID int64, phone, mensagem st
 		Tentativas:   gd.Tentativas,
 	}
 	g.salvarGate(ctx, convID, store.GateAguardConfirm, ngd)
-	g.log.Info("login resolvido, pedindo confirmação", "conversation_id", convID, "login", login, "confirm_field", g.confirmField)
+	g.log.Info("login resolvido, pedindo confirmação", "conversation_id", convID, "login", mascararLogin(login), "confirm_field", g.confirmField)
 	return Resultado{Acao: AcaoPerguntar, Reply: pergunta}
 }
 
@@ -316,7 +323,7 @@ func (g *Gate) tratarConfirmacao(ctx context.Context, convID int64, phone, mensa
 func (g *Gate) identificar(ctx context.Context, convID int64, phone string, perfil *mongo.Perfil) Resultado {
 	g.renovarCache(ctx, phone, perfil)
 	g.salvarGate(ctx, convID, store.GateIdentificado, gateData{Perfil: perfil})
-	g.log.Info("identidade confirmada", "conversation_id", convID, "login", perfil.Login)
+	g.log.Info("identidade confirmada", "conversation_id", convID, "login", mascararLogin(perfil.Login))
 	return Resultado{Acao: AcaoSaudar, Reply: saudacao(perfil)}
 }
 
@@ -386,7 +393,9 @@ func (g *Gate) resolverLogin(ctx context.Context, convID int64, mensagem string)
 	if strings.TrimSpace(extraido) == "" {
 		return mongo.UsuarioDoc{}, "", false, nil
 	}
-	g.log.Info("login extraído por IA", "conversation_id", convID, "login_extraido", extraido)
+	// ZG-2: o valor em claro só em DEBUG; em INFO fica mascarado.
+	g.log.Info("login extraído por IA", "conversation_id", convID, "login_extraido", mascararLogin(extraido))
+	g.log.Debug("login extraído por IA (valor)", "conversation_id", convID, "login_extraido", extraido)
 	return g.tentarCandidatos(ctx, extraido)
 }
 
@@ -470,6 +479,18 @@ func cpfCnpjDigitos(s string) string {
 		}
 	}
 	return digitos.String()
+}
+
+// mascararLogin esconde o login nos logs de nível INFO (ZG-2 / LGPD): só os 3
+// últimos caracteres ficam visíveis — o suficiente para correlacionar linhas
+// da mesma conversa, não para recompor um CPF ou e-mail. Mesma convenção de
+// `_mascarar` em agente-ia/server.py.
+func mascararLogin(login string) string {
+	r := []rune(strings.TrimSpace(login))
+	if len(r) <= 3 {
+		return strings.Repeat("*", len(r))
+	}
+	return strings.Repeat("*", len(r)-3) + string(r[len(r)-3:])
 }
 
 // normalizar deixa a comparação de confirmação tolerante a caixa e espaços.

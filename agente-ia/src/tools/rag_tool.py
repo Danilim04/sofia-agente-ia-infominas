@@ -43,12 +43,15 @@ def buscar_chunks(pergunta: str) -> dict[str, Any]:
         }
 
     settings = get_settings()
-    logger.info("rag_query top_k=%s pergunta=%r", settings.rag_top_k, pergunta)
+    # ZG-2 / LGPD: o texto do cliente não entra em INFO/WARNING — só em DEBUG.
+    logger.info("rag_query top_k=%s pergunta_chars=%d", settings.rag_top_k, len(pergunta))
+    logger.debug("rag_query_texto pergunta=%r", pergunta)
     try:
         retriever = get_retriever(k=settings.rag_top_k)
         docs = retriever.invoke(pergunta)
     except Exception as exc:  # noqa: BLE001 — fail-soft com log
-        logger.warning("rag_falhou pergunta=%r erro=%s", pergunta, exc)
+        logger.warning("rag_falhou pergunta_chars=%d erro=%s", len(pergunta), exc)
+        logger.debug("rag_falhou_texto pergunta=%r", pergunta)
         return {
             "encontrado": False,
             "total": 0,
