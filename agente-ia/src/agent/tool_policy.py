@@ -136,7 +136,10 @@ POLITICAS: dict[str, PoliticaTool] = {
         },
         exigir=_exigir_proposta_preparada,
     ),
-    # Rastreio de NF (mock, futura MCP): escopo = grupos da sessão, injetado.
+    # Rastreio de NF: a tool mock SAIU da lista canônica (ZE-1, rodada 1 — não
+    # é exposta ao modelo). A política fica como rede de segurança F7: se uma
+    # integração real entrar com o mesmo nome, o escopo continua injetado da
+    # sessão, nunca argumento do LLM.
     "rastrear_nota_fiscal": PoliticaTool(
         injetar={"grupos_emp_sessao": grupos_da_sessao},
     ),
