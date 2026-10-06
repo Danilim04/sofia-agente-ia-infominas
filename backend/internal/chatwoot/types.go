@@ -110,6 +110,42 @@ type MessageCreated struct {
 	Sender       Sender       `json:"sender"`
 	Conversation Conversation `json:"conversation"`
 	Account      Account      `json:"account"`
+	Attachments  []Attachment `json:"attachments"` // áudio/imagem/arquivo; `content` costuma vir vazio
+}
+
+// Attachment é um anexo da mensagem (áudio, imagem, vídeo, documento...). O
+// bot não lê anexo: a mensagem vai para um atendente (ZD-2).
+type Attachment struct {
+	ID        int64  `json:"id"`
+	FileType  string `json:"file_type"` // audio | image | video | file | location | contact | fallback ...
+	Extension string `json:"extension"`
+	DataURL   string `json:"data_url"`
+	FileSize  int64  `json:"file_size"`
+}
+
+// Tipos de anexo que o Chatwoot emite em file_type.
+const (
+	AnexoAudio   = "audio"
+	AnexoImagem  = "image"
+	AnexoVideo   = "video"
+	AnexoArquivo = "file"
+)
+
+// TemAnexo informa se a mensagem carrega ao menos um anexo.
+func (m *MessageCreated) TemAnexo() bool { return len(m.Attachments) > 0 }
+
+// TipoAnexo devolve o file_type do primeiro anexo ("audio", "image",
+// "file"...), normalizado; vazio sem anexo. Anexo sem file_type conta como
+// arquivo genérico.
+func (m *MessageCreated) TipoAnexo() string {
+	if len(m.Attachments) == 0 {
+		return ""
+	}
+	t := strings.ToLower(strings.TrimSpace(m.Attachments[0].FileType))
+	if t == "" {
+		return AnexoArquivo
+	}
+	return t
 }
 
 // Phone devolve o telefone do contato que originou a mensagem, tentando o

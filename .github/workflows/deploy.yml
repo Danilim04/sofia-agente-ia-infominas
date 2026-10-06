@@ -19,8 +19,9 @@
 #                   .chatwoot-token — gravado pela pipeline configure-chatwoot)
 #                   LANGFUSE_PUBLIC_KEY · LANGFUSE_SECRET_KEY · LANGFUSE_HOST
 #                   (tracing; vazios = desligado. HOST default = cloud EU)
-# Variables:        INBOX_ID (caixa do Chatwoot que o bot atende; vazio = 0 =
-#                   todas — a pipeline configure-chatwoot lista as caixas)
+# Variables:        INBOX_ID (caixa do Chatwoot que o bot atende; OBRIGATÓRIA e
+#                   > 0 — o render-env.sh aborta o deploy sem ela; a pipeline
+#                   configure-chatwoot lista as caixas)
 # ==============================================================================
 name: Deploy
 
@@ -98,7 +99,8 @@ jobs:
       - name: Renderiza o .env de produção
         env:
           IMAGE_TAG: ${{ steps.ver.outputs.version }}
-          # Caixa do Chatwoot atendida pelo bot (GitHub variable; vazia = 0 = todas).
+          # Caixa do Chatwoot atendida pelo bot (GitHub variable; obrigatória e > 0 —
+          # vazia/0 aborta o deploy, senão o bot atenderia todas as caixas).
           INBOX_ID: ${{ vars.INBOX_ID }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MONGO_URI: ${{ secrets.MONGO_URI }}

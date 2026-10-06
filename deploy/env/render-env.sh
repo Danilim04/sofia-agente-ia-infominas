@@ -29,9 +29,17 @@ if [ "${#faltando[@]}" -gt 0 ]; then
 fi
 
 # INBOX_ID: caixa do Chatwoot que o bot atende (GitHub *variable*, não secret).
-# Vazio = 0 = todas as caixas da conta. Os ids mudam de instância para
-# instância — a pipeline "Configurar Chatwoot" lista as caixas ao final.
-export INBOX_ID="${INBOX_ID:-0}"
+# OBRIGATÓRIA e > 0 em produção (ZD-2): com 0 o gateway atende TODAS as caixas
+# da conta — foi assim que o bot respondeu numa caixa que não era dele. Os ids
+# mudam de instância para instância — a pipeline "Configurar Chatwoot" lista as
+# caixas ao final; grave o id na variable INBOX_ID e rode o Deploy de novo.
+case "${INBOX_ID:-}" in
+  ''|*[!0-9]*|0)
+    echo "ERRO: INBOX_ID='${INBOX_ID:-}' — em produção a caixa do bot é obrigatória (inteiro > 0)." >&2
+    echo "      Rode a pipeline 'Configurar Chatwoot' para listar as caixas e grave o id na variable INBOX_ID." >&2
+    exit 1 ;;
+esac
+export INBOX_ID
 
 # Lista EXPLÍCITA de substituições — o envsubst não toca em mais nada.
 # Vars OPCIONAIS (fora da lista required, ex.: SAC_*) podem vir vazias: a

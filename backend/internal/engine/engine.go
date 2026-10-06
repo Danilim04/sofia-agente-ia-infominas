@@ -134,6 +134,14 @@ func (e *Engine) HandleMessageCreated(ctx context.Context, msg *chatwoot.Message
 		e.log.Info("mensagem de grupo ignorada", "conversation_id", convID)
 		return
 	}
+	// Caixa fixa (ZD-2): com INBOX_ID definido o bot só atende a própria caixa
+	// — mensagem de outra caixa é ignorada mesmo que a conversa tenha fila-bot
+	// (etiqueta aplicada à mão ou por uma regra antiga). 0 = todas (só dev).
+	if !e.cfg.AtendeTodasAsCaixas() && msg.Conversation.InboxID != e.cfg.InboxID {
+		e.log.Info("mensagem ignorada: conversa fora da caixa do bot",
+			"conversation_id", convID, "inbox_id", msg.Conversation.InboxID, "inbox_bot", e.cfg.InboxID)
+		return
+	}
 	// Responsável humano (ZD-1): conversa atribuída a um atendente é da
 	// equipe — o bot não responde nem adota, mesmo que ainda tenha fila-bot
 	// (o atendente se atribuiu sem trocar a etiqueta). Aqui a etiqueta é
@@ -162,7 +170,10 @@ func (e *Engine) HandleMessageCreated(ctx context.Context, msg *chatwoot.Message
 	// Higiene de envelope (F2): o gate/cérebro veem a fala, não a assinatura
 	// que o relay grudou ("**Fulano:**\n...").
 	content := StripAssinatura(msg.Content)
-	if content == "" {
+	// Mensagem só com anexo (áudio/imagem/arquivo) NÃO é descartada (ZD-2):
+	// segue para a fila e vira aviso + transferência no worker. Vazia de
+	// verdade (sem texto e sem anexo) continua ignorada.
+	if content == "" && !msg.TemAnexo() {
 		return
 	}
 
@@ -198,6 +209,25 @@ func (e *Engine) HandleMessageCreated(ctx context.Context, msg *chatwoot.Message
 		phone:      msg.Phone(),
 		content:    content,
 		recebidoEm: recebido,
+		anexo:      msg.TipoAnexo(),
+	})
+}
+
+// transferirPorAnexo avisa o cliente que o Zapin não lê anexo e passa a
+// conversa à equipe pelo caminho único (ZC-3). Se o gate já roteou a conversa
+// (GateFalha — atendente já avisado), só loga: nada de segunda transferência.
+func (e *Engine) transferirPorAnexo(ctx context.Context, conv *chatwoot.Conversation, tipo string) {
+	if gs, err := e.st.GetGate(ctx, conv.ID); err == nil && gs != nil && gs.State == store.GateFalha {
+		e.log.Info("anexo em conversa já roteada para a equipe: sem nova transferência",
+			"conversation_id", conv.ID, "anexo", tipo)
+		return
+	}
+	e.log.Info("anexo recebido: avisando o cliente e transferindo", "conversation_id", conv.ID, "anexo", tipo)
+	e.TransferirParaHumano(ctx, conv, Transferencia{
+		Origem:   OrigemAnexo,
+		Causa:    "cliente enviou " + descreveAnexo(tipo) + " — o Zapin não lê anexos",
+		Detalhe:  "file_type=" + tipo,
+		Mensagem: MsgAnexo(tipo),
 	})
 }
 
@@ -257,6 +287,16 @@ func (e *Engine) processarLote(ctx context.Context, lote []inbound) {
 	}
 	ultimo := lote[len(lote)-1]
 	convID := ultimo.conv.ID
+
+	// Anexo na rajada (ZD-2): o bot não lê áudio/imagem/arquivo — avisa o
+	// cliente e transfere, sem gate e sem cérebro. Conversa já roteada
+	// (GateFalha) não transfere de novo.
+	for _, m := range lote {
+		if m.anexo != "" {
+			e.transferirPorAnexo(ctx, &ultimo.conv, m.anexo)
+			return
+		}
+	}
 
 	textos := make([]string, 0, len(lote))
 	for _, m := range lote {

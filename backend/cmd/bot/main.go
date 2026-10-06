@@ -62,6 +62,11 @@ func main() {
 		_ = repo.Close(shutdownCtx)
 	}()
 
+	if cfg.AtendeTodasAsCaixas() {
+		log.Warn("INBOX_ID=0: o gateway atende TODAS as caixas da conta — em produção defina a caixa do bot (ZD-2)")
+	} else {
+		log.Info("caixa do bot fixada", "inbox_id", cfg.InboxID)
+	}
 	cw := chatwoot.NewClient(cfg.ChatwootBaseURL, cfg.ChatwootAccountID, cfg.ChatwootAPIToken)
 	descobrirUsuarioDoBot(ctx, cfg, cw, log)
 	brainClient := brain.NewClient(cfg.BrainBaseURL, cfg.BrainTimeout)
