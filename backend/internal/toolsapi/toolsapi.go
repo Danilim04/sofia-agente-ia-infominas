@@ -74,7 +74,8 @@ const (
 // ---------------------------------------------------------------------------
 
 type reqTelefone struct {
-	Telefone string `json:"telefone"`
+	Telefone       string `json:"telefone"`
+	ConversationID string `json:"conversation_id"` // opcional: id da conversa (Contrato A), só para correlação nos logs
 }
 
 func (h *Handler) handleTipos(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +89,7 @@ func (h *Handler) handleTipos(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, err := h.sac.BuscarConfig(r.Context(), h.sac.GrupoEmp())
 	if err != nil {
-		h.log.Error("toolsapi tipos: buscarConfig", "err", err)
+		h.log.Error("toolsapi tipos: buscarConfig", "conversation_id", req.ConversationID, "err", err)
 		writeJSON(w, http.StatusOK, map[string]any{"status": false, "erro": "não consegui consultar as opções de chamado agora"})
 		return
 	}
@@ -115,26 +116,28 @@ func opcoesOcorrencias(cfg sac.Config) []map[string]any {
 }
 
 type reqCriar struct {
-	Telefone   string `json:"telefone"`
-	GrupoEmp   string `json:"grupo_emp"` // opcional: desambigua quando o usuário tem várias empresas
-	Categoria  string `json:"categoria"`
-	Ocorrencia string `json:"ocorrencia"`
-	Prioridade string `json:"prioridade"`
-	Resumo     string `json:"resumo"`
-	Descricao  string `json:"descricao"`
+	Telefone       string `json:"telefone"`
+	ConversationID string `json:"conversation_id"` // opcional: id da conversa (Contrato A), só para correlação nos logs
+	GrupoEmp       string `json:"grupo_emp"`       // opcional: desambigua quando o usuário tem várias empresas
+	Categoria      string `json:"categoria"`
+	Ocorrencia     string `json:"ocorrencia"`
+	Prioridade     string `json:"prioridade"`
+	Resumo         string `json:"resumo"`
+	Descricao      string `json:"descricao"`
 }
 
 // pedidoValidado é o resultado da análise campo a campo de um pedido de
 // abertura: conteúdo sanitizado, empresa resolvida contra o perfil e
 // classificação autoritativa da config do SAC.
 type pedidoValidado struct {
-	telefone     string
-	resumo       string
-	descricao    string
-	clienteGrupo string
-	prioridade   string
-	tipo         sac.Tipo
-	perfil       *mongo.Perfil
+	telefone       string
+	conversationID string // só para correlação nos logs (pode vir vazio)
+	resumo         string
+	descricao      string
+	clienteGrupo   string
+	prioridade     string
+	tipo           sac.Tipo
+	perfil         *mongo.Perfil
 }
 
 // validarCriar decodifica e analisa CADA campo do pedido, sem confiar no
@@ -152,6 +155,17 @@ func (h *Handler) validarCriar(w http.ResponseWriter, r *http.Request) (*pedidoV
 	if !ok {
 		return nil, false
 	}
+	// O SAC exige o e-mail do relator (cod_relator) e devolve 422 sem ele.
+	// Cadastro sem e-mail é recusado AQUI — antes de qualquer chamada ao SAC
+	// (inclusive a de config) — com um motivo que o cérebro sabe explicar. O
+	// e-mail vem do cadastro, nunca da conversa: pedir ao cliente não resolve.
+	if strings.TrimSpace(perfil.Email) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": false, "motivo": "sem_email",
+			"erro": "o cadastro do cliente não tem e-mail e o SAC exige e-mail para abrir chamado — não é possível abrir por aqui; explique isso ao cliente, oriente-o a regularizar o e-mail do cadastro e ofereça encaminhar a um atendente (não peça o e-mail na conversa: o dado tem que vir do cadastro)",
+		})
+		return nil, false
+	}
 	// Conteúdo do LLM é analisado campo a campo, nunca repassado cru: controle
 	// fora, resumo vira 1 linha, e texto que sobrevive à limpeza é obrigatório.
 	resumo, resumoTruncado := sanitizarTexto(req.Resumo, resumoMax, true)
@@ -167,6 +181,17 @@ func (h *Handler) validarCriar(w http.ResponseWriter, r *http.Request) (*pedidoV
 		h.log.Warn("toolsapi criar: conteúdo truncado no teto",
 			"resumo_truncado", resumoTruncado, "descricao_truncada", descTruncada)
 	}
+	// A empresa do chamado (incidente.empresa) é SEMPRE uma do perfil do
+	// cliente — nunca a equipe (SAC_GRUPO_EMP) nem um valor fixo. Perfil sem
+	// grupo não tem como abrir chamado: recusa com motivo próprio (não é caso
+	// de desambiguação).
+	if len(gruposDe(perfil)) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": false, "motivo": "sem_empresa",
+			"erro": "o cadastro do cliente não tem empresa ativa vinculada, e o chamado precisa ser aberto em nome de uma empresa — não é possível abrir por aqui; explique isso ao cliente e ofereça encaminhar a um atendente",
+		})
+		return nil, false
+	}
 	clienteGrupo, ok := escolherGrupo(perfil, req.GrupoEmp)
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -178,7 +203,7 @@ func (h *Handler) validarCriar(w http.ResponseWriter, r *http.Request) (*pedidoV
 
 	cfg, err := h.sac.BuscarConfig(r.Context(), h.sac.GrupoEmp())
 	if err != nil {
-		h.log.Error("toolsapi criar: buscarConfig", "err", err)
+		h.log.Error("toolsapi criar: buscarConfig", "conversation_id", req.ConversationID, "err", err)
 		writeJSON(w, http.StatusOK, map[string]any{"status": false, "erro": "não consegui validar a categoria agora"})
 		return nil, false
 	}
@@ -197,7 +222,8 @@ func (h *Handler) validarCriar(w http.ResponseWriter, r *http.Request) (*pedidoV
 			"proposta", req.Prioridade, "usada", prioridade)
 	}
 	return &pedidoValidado{
-		telefone: telefone, resumo: resumo, descricao: descricao,
+		telefone: telefone, conversationID: strings.TrimSpace(req.ConversationID),
+		resumo: resumo, descricao: descricao,
 		clienteGrupo: clienteGrupo, prioridade: prioridade, tipo: tipo, perfil: perfil,
 	}, true
 }
@@ -244,7 +270,10 @@ func (h *Handler) handleCriar(w http.ResponseWriter, r *http.Request) {
 		Descricao:    p.descricao,
 	})
 	if err != nil {
-		h.log.Error("toolsapi criar: sac.Criar", "err", err)
+		// O erro do cliente SAC já traz o corpo da resposta higienizado (sem
+		// dado pessoal); o id da conversa liga a falha ao atendimento.
+		h.log.Error("toolsapi criar: sac.Criar", "conversation_id", p.conversationID,
+			"empresa", p.clienteGrupo, "err", err)
 		writeJSON(w, http.StatusOK, map[string]any{"status": false, "erro": "não consegui abrir o chamado agora"})
 		return
 	}
@@ -252,14 +281,16 @@ func (h *Handler) handleCriar(w http.ResponseWriter, r *http.Request) {
 	prioridadeDefinida := false
 	if err := h.sac.DefinirPrioridade(r.Context(), proto, prioridade); err != nil {
 		// Best-effort: o chamado já existe; só a prioridade não foi setada.
-		h.log.Warn("toolsapi criar: prioridade não definida", "protocolo", proto, "err", err)
+		h.log.Warn("toolsapi criar: prioridade não definida", "conversation_id", p.conversationID,
+			"protocolo", proto, "err", err)
 	} else {
 		prioridadeDefinida = true
 	}
 
 	link := h.sac.LinkChamado(perfil.Email, h.sac.GrupoEmp(), proto)
-	h.log.Info("chamado aberto via bot", "protocolo", proto, "categoria", tipo.Categoria,
-		"ocorrencia", tipo.Nome, "prioridade", prioridade, "prioridade_definida", prioridadeDefinida)
+	h.log.Info("chamado aberto via bot", "conversation_id", p.conversationID, "protocolo", proto,
+		"empresa", p.clienteGrupo, "categoria", tipo.Categoria, "ocorrencia", tipo.Nome,
+		"prioridade", prioridade, "prioridade_definida", prioridadeDefinida)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":              true,
 		"protocolo":           proto,
@@ -286,7 +317,7 @@ func (h *Handler) handleListar(w http.ResponseWriter, r *http.Request) {
 	}
 	chamados, err := h.sac.BuscarRelator(r.Context(), perfil.Email)
 	if err != nil {
-		h.log.Error("toolsapi listar: buscarRelator", "err", err)
+		h.log.Error("toolsapi listar: buscarRelator", "conversation_id", req.ConversationID, "err", err)
 		writeJSON(w, http.StatusOK, map[string]any{"status": false, "erro": "não consegui consultar seus chamados agora"})
 		return
 	}
@@ -339,8 +370,9 @@ func (h *Handler) resolver(w http.ResponseWriter, ctx context.Context, telefone 
 	return &perfil, true
 }
 
-// escolherGrupo decide o incidente.cliente. Com 1 empresa, usa-a; com várias,
-// exige `grupoPedido` ∈ empresas do usuário. Devolve ok=false se ambíguo.
+// escolherGrupo decide a empresa do chamado (incidente.empresa). Com 1 empresa,
+// usa-a; com várias, exige `grupoPedido` ∈ empresas do usuário. Devolve
+// ok=false se ambíguo (ou sem empresa alguma).
 func escolherGrupo(p *mongo.Perfil, grupoPedido string) (string, bool) {
 	grupos := gruposDe(p)
 	if len(grupos) == 0 {
