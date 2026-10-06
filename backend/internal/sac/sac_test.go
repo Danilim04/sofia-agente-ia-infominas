@@ -3,9 +3,11 @@ package sac
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,7 +23,6 @@ func fakeSAC(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server)
 		PortalURL:  "https://atendimento.azapfy.com.br",
 		ServiceCod: "10596693664",
 		GrupoEmp:   "AZAPERS",
-		Empresa:    "AZAPFY",
 		Timezone:   "America/Sao_Paulo",
 		ConfigTTL:  time.Minute,
 	})
@@ -51,7 +52,7 @@ func TestCriarSucessoComAvisoSMTP(t *testing.T) {
 
 	proto, err := c.Criar(context.Background(), NovoChamado{
 		NomeRelator: "DANIEL", Email: "daniel.ferraz@azapfy.com.br", Telefone: "31983857490",
-		ClienteGrupo: "AZAPERS", Categoria: "APLICATIVO", Ocorrencia: "LENTIDÃO OU TRAVAMENTOS",
+		ClienteGrupo: "MEARIM", Categoria: "APLICATIVO", Ocorrencia: "LENTIDÃO OU TRAVAMENTOS",
 		Item: "PROBLEMA", Prazo: 1, Resumo: "Teste", Descricao: "Teste",
 	})
 	if err != nil {
@@ -60,13 +61,87 @@ func TestCriarSucessoComAvisoSMTP(t *testing.T) {
 	if proto != "ZPRS25207690" {
 		t.Fatalf("protocolo inesperado: %q", proto)
 	}
-	// Confere que o payload leva os campos que tornam o chamado "pronto".
+	// Confere que o payload leva os campos que tornam o chamado "pronto":
+	// equipe (desk) em grupo_emp e a empresa do CLIENTE em incidente.empresa.
 	inc, _ := gotBody["incidente"].(map[string]any)
 	if gotBody["grupo_emp"] != "AZAPERS" || gotBody["setor"] != "SUPORTE" {
 		t.Fatalf("grupo_emp/setor errados: %+v", gotBody)
 	}
-	if inc["categoria"] != "APLICATIVO" || inc["empresa"] != "AZAPFY" || inc["cliente"] != "AZAPERS" {
+	if inc["categoria"] != "APLICATIVO" || inc["empresa"] != "MEARIM" {
 		t.Fatalf("incidente mal montado: %+v", inc)
+	}
+	if _, tem := inc["cliente"]; tem {
+		t.Fatalf("incidente.cliente não existe no contrato do SAC (a empresa do cliente vai em incidente.empresa): %+v", inc)
+	}
+}
+
+// TestCriarContratoEmpresaDoCliente é o teste de contrato do payload de
+// `criar`: a EQUIPE (grupo_emp) é fixa — AZAPERS, o desk — e a EMPRESA do
+// incidente é a do cliente (grupo do perfil), sem valor fixo e sem o campo
+// `cliente`, que o SAC ignora. Dois perfis de empresas diferentes garantem que
+// um valor fixo não passa. A fixture é SINTÉTICA, no formato que o cliente
+// envia hoje (o chamado real ZPRS25208042 citado no backlog não está no repo).
+func TestCriarContratoEmpresaDoCliente(t *testing.T) {
+	for _, empresa := range []string{"MEARIM", "TRANSPORTES EXEMPLO"} {
+		t.Run(empresa, func(t *testing.T) {
+			var gotBody map[string]any
+			c, _ := fakeSAC(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/sac/incidente/criar" {
+					t.Fatalf("path inesperado: %s", r.URL.Path)
+				}
+				gotBody = decodeBody(t, r)
+				_, _ = io.WriteString(w, `{"status":true,"mensagem":"Incidente registrado com sucesso","protocolo":"ZPRS25208042"}`)
+			})
+			proto, err := c.Criar(context.Background(), NovoChamado{
+				NomeRelator: "MARIA RELATORA", Email: "maria@cliente.example", Telefone: "5531999990000",
+				ClienteGrupo: empresa, Categoria: "APLICATIVO", Ocorrencia: "LENTIDÃO OU TRAVAMENTOS",
+				Item: "PROBLEMA", Prazo: 1, Resumo: "APP TRAVANDO", Descricao: "Trava ao bipar nota",
+			})
+			if err != nil || proto != "ZPRS25208042" {
+				t.Fatalf("Criar: proto=%q err=%v", proto, err)
+			}
+			esperado := map[string]any{
+				"nome_relator":    "MARIA RELATORA",
+				"cod_relator":     "maria@cliente.example",
+				"contato_relator": map[string]any{"email": "maria@cliente.example", "telefone": "5531999990000"},
+				"grupo_emp":       "AZAPERS", // equipe que atende (desk) — fixa
+				"incidente": map[string]any{
+					"resumo":     "APP TRAVANDO",
+					"descricao":  "Trava ao bipar nota",
+					"item":       "PROBLEMA",
+					"categoria":  "APLICATIVO",
+					"ocorrencia": "LENTIDÃO OU TRAVAMENTOS",
+					"empresa":    empresa, // empresa do CLIENTE (grupo do perfil)
+					"icone":      "none",
+					"prazo":      float64(1),
+				},
+				"anexos":     []any{},
+				"status_doc": "",
+				"setor":      "SUPORTE",
+				"timezone":   "America/Sao_Paulo",
+			}
+			if !reflect.DeepEqual(gotBody, esperado) {
+				t.Fatalf("payload fora do contrato: got=%#v want=%#v", gotBody, esperado)
+			}
+		})
+	}
+}
+
+func TestCriarSemEmpresaNaoChamaSAC(t *testing.T) {
+	var hits int32
+	c, _ := fakeSAC(t, func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		_, _ = io.WriteString(w, `{"status":true,"protocolo":"ZP1"}`)
+	})
+	_, err := c.Criar(context.Background(), NovoChamado{
+		NomeRelator: "MARIA RELATORA", Email: "maria@cliente.example", Telefone: "5531999990000",
+		Categoria: "APLICATIVO", Ocorrencia: "LENTIDÃO OU TRAVAMENTOS", Resumo: "x", Descricao: "y",
+	})
+	if !errors.Is(err, ErrSemEmpresa) {
+		t.Fatalf("esperava ErrSemEmpresa (nunca um valor fixo no lugar), veio %v", err)
+	}
+	if atomic.LoadInt32(&hits) != 0 {
+		t.Fatalf("sem empresa do cliente não pode haver chamada ao SAC; hits=%d", hits)
 	}
 }
 
@@ -74,7 +149,7 @@ func TestCriarStatusFalseViraErro(t *testing.T) {
 	c, _ := fakeSAC(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"status":false,"mensagem":"Algo inesperado ocorreu"}`)
 	})
-	if _, err := c.Criar(context.Background(), NovoChamado{Email: "x@y.com"}); err == nil {
+	if _, err := c.Criar(context.Background(), NovoChamado{Email: "x@y.com", ClienteGrupo: "MEARIM"}); err == nil {
 		t.Fatal("esperava erro quando status:false")
 	}
 }

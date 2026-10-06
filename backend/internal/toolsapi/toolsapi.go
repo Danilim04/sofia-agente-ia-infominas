@@ -167,6 +167,17 @@ func (h *Handler) validarCriar(w http.ResponseWriter, r *http.Request) (*pedidoV
 		h.log.Warn("toolsapi criar: conteúdo truncado no teto",
 			"resumo_truncado", resumoTruncado, "descricao_truncada", descTruncada)
 	}
+	// A empresa do chamado (incidente.empresa) é SEMPRE uma do perfil do
+	// cliente — nunca a equipe (SAC_GRUPO_EMP) nem um valor fixo. Perfil sem
+	// grupo não tem como abrir chamado: recusa com motivo próprio (não é caso
+	// de desambiguação).
+	if len(gruposDe(perfil)) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": false, "motivo": "sem_empresa",
+			"erro": "o cadastro do cliente não tem empresa ativa vinculada, e o chamado precisa ser aberto em nome de uma empresa — não é possível abrir por aqui; explique isso ao cliente e ofereça encaminhar a um atendente",
+		})
+		return nil, false
+	}
 	clienteGrupo, ok := escolherGrupo(perfil, req.GrupoEmp)
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -258,8 +269,9 @@ func (h *Handler) handleCriar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	link := h.sac.LinkChamado(perfil.Email, h.sac.GrupoEmp(), proto)
-	h.log.Info("chamado aberto via bot", "protocolo", proto, "categoria", tipo.Categoria,
-		"ocorrencia", tipo.Nome, "prioridade", prioridade, "prioridade_definida", prioridadeDefinida)
+	h.log.Info("chamado aberto via bot", "protocolo", proto, "empresa", p.clienteGrupo,
+		"categoria", tipo.Categoria, "ocorrencia", tipo.Nome, "prioridade", prioridade,
+		"prioridade_definida", prioridadeDefinida)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":              true,
 		"protocolo":           proto,
@@ -339,8 +351,9 @@ func (h *Handler) resolver(w http.ResponseWriter, ctx context.Context, telefone 
 	return &perfil, true
 }
 
-// escolherGrupo decide o incidente.cliente. Com 1 empresa, usa-a; com várias,
-// exige `grupoPedido` ∈ empresas do usuário. Devolve ok=false se ambíguo.
+// escolherGrupo decide a empresa do chamado (incidente.empresa). Com 1 empresa,
+// usa-a; com várias, exige `grupoPedido` ∈ empresas do usuário. Devolve
+// ok=false se ambíguo (ou sem empresa alguma).
 func escolherGrupo(p *mongo.Perfil, grupoPedido string) (string, bool) {
 	grupos := gruposDe(p)
 	if len(grupos) == 0 {

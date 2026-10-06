@@ -116,8 +116,9 @@ BRAIN_TIMEOUT=60s
 SAC_BASE_URL=https://api3.azapfy.com.br
 SAC_PORTAL_URL=https://atendimento.azapfy.com.br
 SAC_SERVICE_COD=${SAC_SERVICE_COD}
+# Equipe (desk) do SAC que atende os chamados do bot. A EMPRESA do chamado
+# (incidente.empresa) é sempre a do cliente, vinda do cadastro — não há valor fixo.
 SAC_GRUPO_EMP=AZAPERS
-SAC_EMPRESA=AZAPERS
 SAC_TIMEZONE=America/Sao_Paulo
 SAC_API_TOKEN=${SAC_API_TOKEN}
 SAC_CONFIG_TTL=10m

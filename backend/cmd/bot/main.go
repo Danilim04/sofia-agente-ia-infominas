@@ -90,7 +90,7 @@ func main() {
 	if cfg.SACBaseURL != "" {
 		sacClient := sac.New(sac.Options{
 			BaseURL: cfg.SACBaseURL, PortalURL: cfg.SACPortalURL, ServiceCod: cfg.SACServiceCod,
-			GrupoEmp: cfg.SACGrupoEmp, Empresa: cfg.SACEmpresa, Timezone: cfg.SACTimezone,
+			GrupoEmp: cfg.SACGrupoEmp, Timezone: cfg.SACTimezone,
 			APIToken: cfg.SACAPIToken, ConfigTTL: cfg.SACConfigTTL,
 		})
 		if cfg.ToolsAPIToken == "" {

@@ -11,12 +11,17 @@
 //     portal (LinkChamado).
 //   - `criar` pode devolver `status:true` com um aviso de e-mail (SMTP) em
 //     `notificacao`: isso NÃO invalida a criação; tratamos status:true como ok.
+//   - No contrato do SAC, `grupo_emp` é a EQUIPE que atende (o desk, ex.:
+//     AZAPERS — fixo, SAC_GRUPO_EMP) e `incidente.empresa` é a EMPRESA DO
+//     CLIENTE (o grupo do perfil escolhido na abertura). Não existe empresa
+//     fixa: sem grupo no perfil, a abertura é recusada antes de chamar o SAC.
 package sac
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -29,8 +34,7 @@ type Options struct {
 	BaseURL    string        // raiz do backend SAC (ex.: https://backdev.azapfy.com.br)
 	PortalURL  string        // raiz do portal p/ montar o link do chat
 	ServiceCod string        // login privilegiado p/ `editar` (define prioridade)
-	GrupoEmp   string        // "desk" do SAC (ex.: AZAPERS) — grupo onde o chamado é aberto
-	Empresa    string        // incidente.empresa (ex.: AZAPFY)
+	GrupoEmp   string        // equipe/desk do SAC (ex.: AZAPERS) — grupo onde o chamado é aberto
 	Timezone   string        // ex.: America/Sao_Paulo
 	APIToken   string        // bearer opcional
 	ConfigTTL  time.Duration // validade do cache de configuração
@@ -45,7 +49,6 @@ type Client struct {
 	portalURL  string
 	serviceCod string
 	grupoEmp   string
-	empresa    string
 	timezone   string
 	apiToken   string
 	now        func() time.Time
@@ -74,10 +77,6 @@ func New(opts Options) *Client {
 	if grupo == "" {
 		grupo = "AZAPERS"
 	}
-	empresa := opts.Empresa
-	if empresa == "" {
-		empresa = "AZAPFY"
-	}
 	tz := opts.Timezone
 	if tz == "" {
 		tz = "America/Sao_Paulo"
@@ -96,7 +95,6 @@ func New(opts Options) *Client {
 		portalURL:  portal,
 		serviceCod: opts.ServiceCod,
 		grupoEmp:   grupo,
-		empresa:    empresa,
 		timezone:   tz,
 		apiToken:   opts.APIToken,
 		now:        now,
@@ -205,7 +203,7 @@ type NovoChamado struct {
 	NomeRelator  string
 	Email        string // cod_relator + contato_relator.email
 	Telefone     string
-	ClienteGrupo string // incidente.cliente (grupo do usuário)
+	ClienteGrupo string // incidente.empresa: empresa (grupo) do cliente, escolhida entre as do perfil
 	Categoria    string
 	Ocorrencia   string
 	Item         string
@@ -214,9 +212,17 @@ type NovoChamado struct {
 	Descricao    string
 }
 
+// ErrSemEmpresa: o chamado não tem a empresa do cliente (incidente.empresa).
+// Nunca usamos um valor fixo no lugar — recusamos antes de chamar o SAC.
+var ErrSemEmpresa = errors.New("sac criar: chamado sem empresa do cliente (incidente.empresa)")
+
 // Criar abre o incidente e devolve o protocolo. status:true é sucesso mesmo com
-// aviso de e-mail (notificacao).
+// aviso de e-mail (notificacao). Pré-condições são checadas ANTES de qualquer
+// requisição: sem empresa do cliente não há chamada ao SAC.
 func (c *Client) Criar(ctx context.Context, ch NovoChamado) (string, error) {
+	if strings.TrimSpace(ch.ClienteGrupo) == "" {
+		return "", ErrSemEmpresa
+	}
 	item := strings.TrimSpace(ch.Item)
 	if item == "" {
 		item = "INCIDENTE" // mesmo default do backend quando o tipo não traz item
@@ -232,10 +238,9 @@ func (c *Client) Criar(ctx context.Context, ch NovoChamado) (string, error) {
 			"item":       item,
 			"categoria":  ch.Categoria,
 			"ocorrencia": ch.Ocorrencia,
-			"empresa":    c.empresa,
+			"empresa":    ch.ClienteGrupo, // empresa do CLIENTE — nunca a equipe nem um valor fixo
 			"icone":      "none",
 			"prazo":      ch.Prazo,
-			"cliente":    ch.ClienteGrupo,
 		},
 		"anexos":     []any{},
 		"status_doc": "",

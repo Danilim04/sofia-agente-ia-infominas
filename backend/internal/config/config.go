@@ -66,8 +66,7 @@ type Config struct {
 	SACBaseURL    string        // raiz do backend SAC (PHP)
 	SACPortalURL  string        // raiz do portal p/ montar o link do chamado
 	SACServiceCod string        // login privilegiado p/ definir prioridade (editar)
-	SACGrupoEmp   string        // desk onde os chamados são abertos (ex.: AZAPERS)
-	SACEmpresa    string        // incidente.empresa (ex.: AZAPFY)
+	SACGrupoEmp   string        // equipe/desk do SAC onde os chamados são abertos (ex.: AZAPERS); a empresa do chamado é a do cliente (perfil) — sem valor fixo
 	SACTimezone   string        // ex.: America/Sao_Paulo
 	SACAPIToken   string        // bearer opcional do backend SAC
 	SACConfigTTL  time.Duration // validade do cache de configuração (categorias/ocorrências)
@@ -102,7 +101,6 @@ func Load() (*Config, error) {
 		SACPortalURL:      strings.TrimRight(getenv("SAC_PORTAL_URL", "https://atendimento.azapfy.com.br"), "/"),
 		SACServiceCod:     getenv("SAC_SERVICE_COD", ""),
 		SACGrupoEmp:       getenv("SAC_GRUPO_EMP", "AZAPERS"),
-		SACEmpresa:        getenv("SAC_EMPRESA", "AZAPFY"),
 		SACTimezone:       getenv("SAC_TIMEZONE", "America/Sao_Paulo"),
 		SACAPIToken:       getenv("SAC_API_TOKEN", ""),
 		ToolsAPIToken:     getenv("TOOLS_API_TOKEN", ""),

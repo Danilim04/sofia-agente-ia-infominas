@@ -1,8 +1,10 @@
 package toolsapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -59,19 +61,36 @@ func cfgPadrao() sac.Config {
 	}
 }
 
+// perfilPadrao é a identidade em cache dos testes: cliente da empresa MEARIM
+// (≠ AZAPERS, a equipe/desk do SAC — assim os testes distinguem a equipe da
+// empresa do cliente).
+func perfilPadrao() mongo.Perfil {
+	return mongo.Perfil{
+		Encontrado: true, Login: "10596693664", Nome: "DANIEL",
+		Email:    "daniel.ferraz@azapfy.com.br",
+		Empresas: []mongo.Empresa{{GrupoEmpresa: "MEARIM"}},
+	}
+}
+
 func novoHandler(t *testing.T, sacClient SACClient, identificado bool) *Handler {
+	t.Helper()
+	if !identificado {
+		return novoHandlerComPerfil(t, sacClient, nil, nil)
+	}
+	perfil := perfilPadrao()
+	return novoHandlerComPerfil(t, sacClient, &perfil, nil)
+}
+
+// novoHandlerComPerfil monta o handler com a identidade dada em cache (nil =
+// ninguém identificado) e um logger opcional (nil = default).
+func novoHandlerComPerfil(t *testing.T, sacClient SACClient, perfil *mongo.Perfil, log *slog.Logger) *Handler {
 	t.Helper()
 	st, err := store.NewSQLite(filepath.Join(t.TempDir(), "tools.db"))
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	if identificado {
-		perfil := mongo.Perfil{
-			Encontrado: true, Login: "10596693664", Nome: "DANIEL",
-			Email:    "daniel.ferraz@azapfy.com.br",
-			Empresas: []mongo.Empresa{{GrupoEmpresa: "AZAPERS"}},
-		}
+	if perfil != nil {
 		b, _ := json.Marshal(perfil)
 		if err := st.PutIdentity(context.Background(), &store.CachedIdentity{
 			Phone: "5531983857490", Login: perfil.Login, Perfil: string(b),
@@ -80,7 +99,21 @@ func novoHandler(t *testing.T, sacClient SACClient, identificado bool) *Handler 
 			t.Fatalf("PutIdentity: %v", err)
 		}
 	}
-	return New(st, sacClient, tokenTeste, nil)
+	return New(st, sacClient, tokenTeste, log)
+}
+
+// linhaDeLog acha no buffer (slog JSON, um registro por linha) o registro com
+// a `msg` dada.
+func linhaDeLog(t *testing.T, buf *bytes.Buffer, msg string) map[string]any {
+	t.Helper()
+	for l := range strings.Lines(buf.String()) {
+		var m map[string]any
+		if json.Unmarshal([]byte(l), &m) == nil && m["msg"] == msg {
+			return m
+		}
+	}
+	t.Fatalf("registro de log %q não encontrado em: %s", msg, buf.String())
+	return nil
 }
 
 func do(t *testing.T, h *Handler, path, token string, body map[string]any) (int, map[string]any) {
@@ -134,6 +167,10 @@ func TestCriarFelizDefinePrioridadeEMontaLink(t *testing.T) {
 	// Relator vem da identidade (não do LLM); classificação vem da config.
 	if len(f.criados) != 1 || f.criados[0].Email != "daniel.ferraz@azapfy.com.br" {
 		t.Fatalf("relator não veio da identidade: %+v", f.criados)
+	}
+	// A empresa do chamado é a do CLIENTE (perfil), não a equipe do desk.
+	if f.criados[0].ClienteGrupo != "MEARIM" {
+		t.Fatalf("empresa do chamado deveria ser a do perfil (MEARIM): %+v", f.criados[0])
 	}
 	if f.criados[0].Item != "PROBLEMA" || f.criados[0].Prazo != 1 {
 		t.Fatalf("item/prazo não vieram da config: %+v", f.criados[0])
@@ -234,7 +271,7 @@ func TestPrepararDevolveCanonicoSemCriar(t *testing.T) {
 	if proposta["prioridade"] != "ALTA" || proposta["resumo"] != "App travando" {
 		t.Fatalf("prioridade/resumo não normalizados: %+v", proposta)
 	}
-	if proposta["empresa"] != "AZAPERS" {
+	if proposta["empresa"] != "MEARIM" {
 		t.Fatalf("empresa não resolvida do perfil: %+v", proposta)
 	}
 	// Dry-run de verdade: nada foi criado nem priorizado.
@@ -331,6 +368,44 @@ func TestCriarRecusaCorpoGigante(t *testing.T) {
 	}
 	if len(f.criados) != 0 {
 		t.Fatalf("não deveria ter criado chamado: %+v", f.criados)
+	}
+}
+
+func TestCriarPerfilSemEmpresaRecusa(t *testing.T) {
+	f := &fakeSAC{cfg: cfgPadrao()}
+	perfil := perfilPadrao()
+	perfil.Empresas = nil
+	h := novoHandlerComPerfil(t, f, &perfil, nil)
+	for _, path := range []string{"/tools/sac/preparar", "/tools/sac/criar"} {
+		_, out := do(t, h, path, tokenTeste, map[string]any{
+			"telefone": "5531983857490", "categoria": "APLICATIVO",
+			"ocorrencia": "LENTIDÃO OU TRAVAMENTOS", "resumo": "x", "descricao": "y",
+		})
+		// Sem grupo no perfil não há empresa para o chamado: recusa com motivo
+		// próprio — nunca um valor fixo no lugar.
+		if out["status"] != false || out["motivo"] != "sem_empresa" {
+			t.Fatalf("%s: esperava recusa sem_empresa: %+v", path, out)
+		}
+	}
+	if len(f.criados) != 0 {
+		t.Fatalf("não deveria ter criado chamado: %+v", f.criados)
+	}
+}
+
+func TestCriarLogaEmpresaDoChamado(t *testing.T) {
+	var buf bytes.Buffer
+	perfil := perfilPadrao()
+	h := novoHandlerComPerfil(t, &fakeSAC{cfg: cfgPadrao()}, &perfil, slog.New(slog.NewJSONHandler(&buf, nil)))
+	_, out := do(t, h, "/tools/sac/criar", tokenTeste, map[string]any{
+		"telefone": "5531983857490", "categoria": "APLICATIVO",
+		"ocorrencia": "LENTIDÃO OU TRAVAMENTOS", "resumo": "x", "descricao": "y",
+	})
+	if out["status"] != true {
+		t.Fatalf("esperava status true: %+v", out)
+	}
+	linha := linhaDeLog(t, &buf, "chamado aberto via bot")
+	if linha["empresa"] != "MEARIM" || linha["protocolo"] != "ZPRS25207690" {
+		t.Fatalf("log do chamado sem a empresa do cliente: %+v", linha)
 	}
 }
 
