@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fakeSAC sobe um servidor que finge ser o backend SAC.
@@ -169,6 +171,122 @@ func TestCriarStatusFalseViraErro(t *testing.T) {
 	})
 	if _, err := c.Criar(context.Background(), NovoChamado{Email: "x@y.com", ClienteGrupo: "MEARIM"}); err == nil {
 		t.Fatal("esperava erro quando status:false")
+	}
+}
+
+// TestErroHTTPTrazCorpoHigienizado: um 422 do SAC vira HTTPError com o corpo no
+// erro — legível (JSON do PHP normalizado), sem dado pessoal (o que enviamos
+// do relator e o que parecer e-mail/número longo) e com o status.
+func TestErroHTTPTrazCorpoHigienizado(t *testing.T) {
+	c, _ := fakeSAC(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		// Validação estilo Laravel ecoando a entrada, com unicode escapado como o PHP faz.
+		_, _ = io.WriteString(w, `{"message":"The given data was invalid.","errors":{"cod_relator":["O campo cod relator \u00e9 obrigat\u00f3rio."]},"input":{"nome_relator":"MARIA RELATORA","cod_relator":"","contato_relator":{"email":"maria@cliente.example","telefone":"5531999990000"},"cpf":"105.966.936-64","obs":"ligar para (31) 98385-7490"}}`)
+	})
+	_, err := c.Criar(context.Background(), NovoChamado{
+		NomeRelator: "Maria Relatora", Email: "maria@cliente.example", Telefone: "5531999990000",
+		ClienteGrupo: "MEARIM", Categoria: "APLICATIVO", Ocorrencia: "LENTIDÃO OU TRAVAMENTOS",
+		Resumo: "APP TRAVANDO", Descricao: "Trava ao bipar nota",
+	})
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Status != 422 || httpErr.Path != "/api/sac/incidente/criar" {
+		t.Fatalf("esperava HTTPError 422 do criar, veio %v", err)
+	}
+	msg := err.Error()
+	for _, quer := range []string{"status http 422", "The given data was invalid.", "cod_relator", "é obrigatório"} {
+		if !strings.Contains(msg, quer) {
+			t.Fatalf("erro deveria trazer %q: %s", quer, msg)
+		}
+	}
+	for _, pii := range []string{"MARIA RELATORA", "Maria Relatora", "maria@cliente.example", "5531999990000", "105.966.936-64", "98385-7490"} {
+		if strings.Contains(msg, pii) {
+			t.Fatalf("erro vazou dado pessoal %q: %s", pii, msg)
+		}
+	}
+}
+
+func TestErroHTTPTruncaECorpoNaoJSON(t *testing.T) {
+	// Corpo longo e não-JSON (HTML de erro, com quebras de linha): vira uma
+	// linha, cortada no teto — o log não incha nem quebra.
+	c, _ := fakeSAC(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, "<html>\n<body>\n  Erro interno 500  \n"+strings.Repeat("x", 3000)+"</body></html>")
+	})
+	_, err := c.BuscarRelator(context.Background(), "maria@cliente.example")
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Status != 500 {
+		t.Fatalf("esperava HTTPError 500, veio %v", err)
+	}
+	if !strings.Contains(httpErr.Corpo, "<html> <body> Erro interno 500 ") || strings.Contains(httpErr.Corpo, "\n") {
+		t.Fatalf("corpo deveria estar achatado numa linha: %q", httpErr.Corpo)
+	}
+	marca := "… [truncado]"
+	if n := utf8.RuneCountInString(httpErr.Corpo); n != corpoErroMax+utf8.RuneCountInString(marca) || !strings.HasSuffix(httpErr.Corpo, marca) {
+		t.Fatalf("corpo deveria estar truncado em %d runas (+marca), tem %d", corpoErroMax, n)
+	}
+}
+
+func TestHigienizarTexto(t *testing.T) {
+	casos := []struct {
+		nome, entrada string
+		redigir       []string
+		quer, naoQuer []string
+	}{
+		{
+			nome:    "json do php normalizado e e-mail mascarado",
+			entrada: `{"mensagem":"Usu\u00e1rio n\u00e3o encontrado: joao@x.com"}`,
+			quer:    []string{"Usuário não encontrado", "[email]"},
+			naoQuer: []string{"joao@x.com", "u00e1"},
+		},
+		{
+			nome:    "números longos mascarados, protocolo e status legíveis",
+			entrada: "telefone 31 98385-7490, cpf 105.966.936-64, cnpj 12.345.678/0001-90; protocolo ZPRS25208042 status 422",
+			quer:    []string{"ZPRS25208042", "status 422", "[numero]"},
+			naoQuer: []string{"98385", "105.966", "0001-90"},
+		},
+		{
+			nome:    "valor conhecido redigido mesmo ecoado em JSON e noutra caixa",
+			entrada: `{"nome_relator":"MARIA RELATORA","descricao":"Linha 1\nLinha 2"}`,
+			redigir: []string{"Maria Relatora", "Linha 1\nLinha 2"},
+			quer:    []string{"[omitido]"},
+			naoQuer: []string{"MARIA", "Linha"},
+		},
+		{
+			nome:    "controle e espaços viram uma linha; valor curto não é redigido",
+			entrada: "a\tb\x00\n\n c",
+			redigir: []string{"a"},
+			quer:    []string{"a b c"},
+		},
+	}
+	for _, tc := range casos {
+		t.Run(tc.nome, func(t *testing.T) {
+			got := higienizarTexto(tc.entrada, tc.redigir...)
+			for _, q := range tc.quer {
+				if !strings.Contains(got, q) {
+					t.Fatalf("faltou %q em %q", q, got)
+				}
+			}
+			for _, nq := range tc.naoQuer {
+				if strings.Contains(got, nq) {
+					t.Fatalf("não deveria conter %q: %q", nq, got)
+				}
+			}
+		})
+	}
+}
+
+func TestCriarMensagemDeErroSemDadoPessoal(t *testing.T) {
+	c, _ := fakeSAC(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"status":false,"mensagem":"Relator maria@cliente.example (5531999990000) sem permissão"}`)
+	})
+	_, err := c.Criar(context.Background(), NovoChamado{
+		Email: "maria@cliente.example", Telefone: "5531999990000", ClienteGrupo: "MEARIM",
+	})
+	if err == nil || !strings.Contains(err.Error(), "sem permissão") {
+		t.Fatalf("esperava o motivo do SAC no erro, veio %v", err)
+	}
+	if strings.Contains(err.Error(), "maria@") || strings.Contains(err.Error(), "5531999990000") {
+		t.Fatalf("erro vazou dado pessoal: %v", err)
 	}
 }
 

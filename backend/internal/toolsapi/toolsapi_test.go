@@ -425,6 +425,49 @@ func TestCriarPerfilSemEmailRecusaSemChamarSAC(t *testing.T) {
 	}
 }
 
+// TestCriarFalhaDoSACLogaCorpoEConversa: com o cliente SAC REAL e um servidor
+// falso devolvendo 422 (corpo ecoando dados do relator), o log de erro do
+// gateway traz o corpo higienizado (motivo legível, sem dado pessoal) e o
+// conversation_id enviado pelo cérebro; ao cérebro vai só a recusa genérica.
+func TestCriarFalhaDoSACLogaCorpoEConversa(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/sac/incidente/criar" { // config/buscar
+			_, _ = io.WriteString(w, `{"status":true,"parametros":{"categorias":["APLICATIVO"],"tipos":[{"nome":"LENTIDÃO OU TRAVAMENTOS","categoria":"APLICATIVO","prazo":1}]}}`)
+			return
+		}
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = io.WriteString(w, `{"message":"The given data was invalid.","errors":{"contato_relator.email":["O campo contato relator.email \u00e9 obrigat\u00f3rio."]},"input":{"nome_relator":"DANIEL","cod_relator":"daniel.ferraz@azapfy.com.br","contato_relator":{"telefone":"5531983857490"}}}`)
+	}))
+	t.Cleanup(srv.Close)
+	var buf bytes.Buffer
+	perfil := perfilPadrao()
+	h := novoHandlerComPerfil(t, sac.New(sac.Options{BaseURL: srv.URL, GrupoEmp: "AZAPERS"}), &perfil,
+		slog.New(slog.NewJSONHandler(&buf, nil)))
+	_, out := do(t, h, "/tools/sac/criar", tokenTeste, map[string]any{
+		"telefone": "5531983857490", "conversation_id": "45", "categoria": "APLICATIVO",
+		"ocorrencia": "LENTIDÃO OU TRAVAMENTOS", "resumo": "App travando", "descricao": "Trava ao bipar nota",
+	})
+	// Para o cérebro, só a recusa genérica — o corpo do SAC não vai ao LLM.
+	if out["status"] != false || out["erro"] != "não consegui abrir o chamado agora" {
+		t.Fatalf("resposta ao cérebro inesperada: %+v", out)
+	}
+	linha := linhaDeLog(t, &buf, "toolsapi criar: sac.Criar")
+	if linha["conversation_id"] != "45" || linha["level"] != "ERROR" || linha["empresa"] != "MEARIM" {
+		t.Fatalf("log sem o id da conversa/empresa: %+v", linha)
+	}
+	errTxt, _ := linha["err"].(string)
+	for _, quer := range []string{"status http 422", "contato_relator.email", "é obrigatório"} {
+		if !strings.Contains(errTxt, quer) {
+			t.Fatalf("log deveria trazer o corpo do erro (%q): %+v", quer, linha)
+		}
+	}
+	for _, pii := range []string{"DANIEL", "daniel.ferraz@azapfy.com.br", "5531983857490"} {
+		if strings.Contains(errTxt, pii) {
+			t.Fatalf("log vazou dado pessoal %q: %+v", pii, linha)
+		}
+	}
+}
+
 func TestCriarLogaEmpresaDoChamado(t *testing.T) {
 	var buf bytes.Buffer
 	perfil := perfilPadrao()
