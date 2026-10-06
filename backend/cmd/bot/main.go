@@ -63,6 +63,7 @@ func main() {
 	}()
 
 	cw := chatwoot.NewClient(cfg.ChatwootBaseURL, cfg.ChatwootAccountID, cfg.ChatwootAPIToken)
+	descobrirUsuarioDoBot(ctx, cfg, cw, log)
 	brainClient := brain.NewClient(cfg.BrainBaseURL, cfg.BrainTimeout)
 	// brainClient também extrai o login de frases livres (fallback do gate).
 	gate := identity.New(st, repo, cfg.ConfirmField, cfg.MaxTentativas, cfg.IdentityTTL, cfg.GateFalhaTTL, brainClient, log)
@@ -124,6 +125,30 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown", "err", err)
 	}
+}
+
+// descobrirUsuarioDoBot preenche cfg.BotUserID pelo dono do token do Chatwoot
+// (GET /api/v1/profile) quando BOT_USER_ID não foi configurado (ZD-1). O id
+// é o que separa "conversa atribuída ao próprio Zapin" de "conversa com
+// atendente humano". Falha não derruba o boot: fica 0 e a engine trata
+// QUALQUER responsável como humano (não fala por cima de atendente) — por
+// isso o aviso é alto.
+func descobrirUsuarioDoBot(ctx context.Context, cfg *config.Config, cw *chatwoot.Client, log *slog.Logger) {
+	if cfg.BotUserID != 0 {
+		log.Info("usuário do bot no Chatwoot (BOT_USER_ID)", "user_id", cfg.BotUserID)
+		return
+	}
+	bootCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	u, err := cw.Profile(bootCtx)
+	if err != nil {
+		log.Warn("não consegui descobrir o usuário do bot no Chatwoot (GET /api/v1/profile): "+
+			"toda conversa com responsável será tratada como de atendente humano; defina BOT_USER_ID",
+			"err", err)
+		return
+	}
+	cfg.BotUserID = u.ID
+	log.Info("usuário do bot no Chatwoot descoberto pelo token", "user_id", u.ID, "nome", u.Name)
 }
 
 // abrirStore escolhe a persistência do gateway: Postgres quando PG_URL está

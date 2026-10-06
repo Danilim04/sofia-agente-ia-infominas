@@ -158,3 +158,12 @@ CHATWOOT_PUBLIC_URL=${CHATWOOT_PUBLIC_URL}
 # avisa o responsável com ID da ocorrência, causa e link (vazio = desligado).
 # A etiqueta/macro em si é criada à mão no Chatwoot.
 LABEL_REPORTAR=reportar-zapin
+
+# --- Gateway: quando o bot age (lote ZD) -------------------------------------
+# Id do usuário do Chatwoot que o gateway usa (o "Zapin"). Conversa cujo
+# responsável (assignee) é OUTRO usuário está com atendente humano: o bot não
+# responde nem adota. Vazio = o gateway descobre no boot pelo próprio token
+# (GET /api/v1/profile com o .chatwoot-token) — não precisa de variable;
+# preencha só para forçar um id (se a descoberta falhar, qualquer responsável
+# conta como humano).
+BOT_USER_ID=

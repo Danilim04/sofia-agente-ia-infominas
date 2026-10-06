@@ -45,6 +45,12 @@ type Config struct {
 	// conversation_created (o bot mesmo etiqueta — sem automation rule no
 	// Chatwoot, que o omni-route não gerencia). 0 = todas as caixas.
 	InboxID int64
+	// BotUserID: id do usuário do Chatwoot que o gateway usa (o "Zapin").
+	// Conversa cujo responsável (assignee) é OUTRO usuário está com um
+	// atendente humano e o bot não responde (ZD-1). 0 = descobrir no boot
+	// pelo próprio token (GET /api/v1/profile); se a descoberta falhar,
+	// QUALQUER responsável é tratado como humano.
+	BotUserID int64
 
 	// Mongo da Azapfy (lookup de usuário por login — a 1ª "tool").
 	MongoURI        string
@@ -117,6 +123,7 @@ func Load() (*Config, error) {
 		ConfirmField:      strings.ToLower(getenv("CONFIRM_FIELD", "email")),
 		InboxID:           int64(getenvInt("INBOX_ID", 0)),
 		TeamHumanoID:      int64(getenvInt("TEAM_HUMANO_ID", 0)),
+		BotUserID:         int64(getenvInt("BOT_USER_ID", 0)),
 		MaxTentativas:     getenvInt("MAX_TENTATIVAS", 3),
 		SACBaseURL:        strings.TrimRight(getenv("SAC_BASE_URL", ""), "/"),
 		SACPortalURL:      strings.TrimRight(getenv("SAC_PORTAL_URL", "https://atendimento.azapfy.com.br"), "/"),
