@@ -126,3 +126,11 @@ SAC_CONFIG_TTL=10m
 TOOLS_API_TOKEN=${TOOLS_API_TOKEN}
 SAC_TOOLS_TOKEN=${TOOLS_API_TOKEN}
 SAC_TOOLS_TIMEOUT=30
+
+# --- Cérebro: resiliência a falhas (lote ZC) ---------------------------------
+# Teto de tokens de SAÍDA por chamada ao OpenRouter. Sem teto, o OpenRouter
+# reserva 65.536 tokens por chamada e devolve 402 quando o saldo não cobre a
+# reserva. Agente: 1024 (respostas curtas + tool calls); classificador e
+# extrator de login (mesmo cliente): 256.
+LLM_MAX_TOKENS=1024
+LLM_MAX_TOKENS_CLASSIFICADOR=256

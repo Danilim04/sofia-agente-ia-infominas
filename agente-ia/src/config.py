@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     # Go (60s) mesmo num turno com 2-3 chamadas — senão o gateway desiste e o
     # cliente vê erro genérico enquanto o cérebro ainda trabalha.
     llm_timeout: float = Field(45.0, alias="LLM_TIMEOUT")
+    # Teto de tokens de SAÍDA por chamada. Sem ele, o OpenRouter reserva o máximo
+    # do modelo (65.536 tokens) a cada chamada e recusa com 402 quando o saldo
+    # não cobre a reserva — mesmo que a resposta real caiba em poucos tokens.
+    # Agente: respostas WhatsApp-native (~400 chars) + tool calls cabem em 1.024.
+    # Classificador/extrator de login (mesmo cliente): JSON curto, 256 basta.
+    llm_max_tokens: int = Field(1024, alias="LLM_MAX_TOKENS")
+    llm_max_tokens_classificador: int = Field(256, alias="LLM_MAX_TOKENS_CLASSIFICADOR")
     rag_top_k: int = Field(3, alias="RAG_TOP_K")
     rag_chunk_size: int = Field(800, alias="RAG_CHUNK_SIZE")
     rag_chunk_overlap: int = Field(120, alias="RAG_CHUNK_OVERLAP")

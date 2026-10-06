@@ -70,6 +70,33 @@ def test_get_llm_e_cacheado_por_processo():
 
 
 # ---------------------------------------------------------------------------
+# max_tokens (ZC-1): sem teto, o OpenRouter reserva 65.536 tokens por chamada
+# e responde 402 quando o saldo não cobre a reserva (incidente 2026-10-02).
+# ---------------------------------------------------------------------------
+
+
+def test_get_llm_define_max_tokens_do_settings():
+    client = llm_factory.get_llm()
+    settings = get_settings()
+    assert client.max_tokens is not None
+    assert client.max_tokens == settings.llm_max_tokens
+
+
+def test_defaults_de_max_tokens_sao_conservadores():
+    settings = get_settings()
+    assert settings.llm_max_tokens == 1024
+    assert settings.llm_max_tokens_classificador == 256
+
+
+def test_max_tokens_configuravel_por_env(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_TOKENS", "512")
+    monkeypatch.setenv("LLM_MAX_TOKENS_CLASSIFICADOR", "128")
+    get_settings.cache_clear()
+    assert llm_factory.get_llm().max_tokens == 512
+    assert llm_factory.get_classifier_llm().max_tokens == 128
+
+
+# ---------------------------------------------------------------------------
 # get_classifier_llm
 # ---------------------------------------------------------------------------
 
@@ -81,6 +108,14 @@ def test_get_classifier_llm_usa_modelo_classifier_e_temp_zero():
     assert client.model_name == settings.openrouter_classifier_model
     # Classificação tem que ser determinística.
     assert client.temperature == 0.0
+
+
+def test_get_classifier_llm_define_max_tokens_curto():
+    """Classificador e extrator de login (mesmo cliente) devolvem JSON curto."""
+    client = llm_factory.get_classifier_llm()
+    settings = get_settings()
+    assert client.max_tokens == settings.llm_max_tokens_classificador
+    assert client.max_tokens <= 256
 
 
 def test_classifier_e_principal_sao_clientes_distintos():
