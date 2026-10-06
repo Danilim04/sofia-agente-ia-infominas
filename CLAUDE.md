@@ -290,7 +290,7 @@ duplicata ou envelope de relay:
 - **Saída WhatsApp-native** (`internal/engine/whatsapp.go`): `DividirBolhas`
   (o prompt instrui o agente a separar a resposta em bolhas com uma linha
   `---`; cada bolha vira uma mensagem, com pausa `BOLHA_PAUSA`=1.5s entre
-  elas) + `FormatWhatsApp` (`**`→`*`, `#`→negrito, `[t](u)`→`t: u`) +
+  elas) + `FormatWhatsApp` (dialeto do Chatwoot, que a Evolution converte: `*x*` e `**x**`→`**x**`, `#`→negrito, link/`mailto:`/`<url>`→URL nua, marcadores balanceados por bolha e por parte) +
   `QuebrarMensagem` (`REPLY_MAX_CHARS`=900) em todo `send()` (F3/F12).
 
 ### Deploy (VM compartilhada com o omni-route)
