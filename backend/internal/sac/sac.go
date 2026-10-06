@@ -212,14 +212,24 @@ type NovoChamado struct {
 	Descricao    string
 }
 
-// ErrSemEmpresa: o chamado não tem a empresa do cliente (incidente.empresa).
-// Nunca usamos um valor fixo no lugar — recusamos antes de chamar o SAC.
-var ErrSemEmpresa = errors.New("sac criar: chamado sem empresa do cliente (incidente.empresa)")
+// Pré-condições da abertura que o SAC recusaria (422): checadas aqui, antes de
+// qualquer requisição — e nunca contornadas com um valor fixo.
+var (
+	// ErrSemEmail: o relator não tem e-mail no cadastro. O SAC exige
+	// cod_relator/contato_relator.email; o dado vem do perfil, nunca do LLM.
+	ErrSemEmail = errors.New("sac criar: relator sem e-mail no cadastro (cod_relator é obrigatório no SAC)")
+	// ErrSemEmpresa: o chamado não tem a empresa do cliente (incidente.empresa).
+	ErrSemEmpresa = errors.New("sac criar: chamado sem empresa do cliente (incidente.empresa)")
+)
 
 // Criar abre o incidente e devolve o protocolo. status:true é sucesso mesmo com
 // aviso de e-mail (notificacao). Pré-condições são checadas ANTES de qualquer
-// requisição: sem empresa do cliente não há chamada ao SAC.
+// requisição: sem e-mail do relator ou sem empresa do cliente não há chamada
+// ao SAC.
 func (c *Client) Criar(ctx context.Context, ch NovoChamado) (string, error) {
+	if strings.TrimSpace(ch.Email) == "" {
+		return "", ErrSemEmail
+	}
 	if strings.TrimSpace(ch.ClienteGrupo) == "" {
 		return "", ErrSemEmpresa
 	}

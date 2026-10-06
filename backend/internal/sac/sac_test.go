@@ -145,6 +145,24 @@ func TestCriarSemEmpresaNaoChamaSAC(t *testing.T) {
 	}
 }
 
+func TestCriarSemEmailNaoChamaSAC(t *testing.T) {
+	var hits int32
+	c, _ := fakeSAC(t, func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		_, _ = io.WriteString(w, `{"status":true,"protocolo":"ZP1"}`)
+	})
+	_, err := c.Criar(context.Background(), NovoChamado{
+		NomeRelator: "MARIA RELATORA", Telefone: "5531999990000", ClienteGrupo: "MEARIM",
+		Categoria: "APLICATIVO", Ocorrencia: "LENTIDÃO OU TRAVAMENTOS", Resumo: "x", Descricao: "y",
+	})
+	if !errors.Is(err, ErrSemEmail) {
+		t.Fatalf("esperava ErrSemEmail, veio %v", err)
+	}
+	if atomic.LoadInt32(&hits) != 0 {
+		t.Fatalf("relator sem e-mail não pode gerar chamada ao SAC (seria 422); hits=%d", hits)
+	}
+}
+
 func TestCriarStatusFalseViraErro(t *testing.T) {
 	c, _ := fakeSAC(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"status":false,"mensagem":"Algo inesperado ocorreu"}`)

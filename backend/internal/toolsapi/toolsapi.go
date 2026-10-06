@@ -152,6 +152,17 @@ func (h *Handler) validarCriar(w http.ResponseWriter, r *http.Request) (*pedidoV
 	if !ok {
 		return nil, false
 	}
+	// O SAC exige o e-mail do relator (cod_relator) e devolve 422 sem ele.
+	// Cadastro sem e-mail é recusado AQUI — antes de qualquer chamada ao SAC
+	// (inclusive a de config) — com um motivo que o cérebro sabe explicar. O
+	// e-mail vem do cadastro, nunca da conversa: pedir ao cliente não resolve.
+	if strings.TrimSpace(perfil.Email) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": false, "motivo": "sem_email",
+			"erro": "o cadastro do cliente não tem e-mail e o SAC exige e-mail para abrir chamado — não é possível abrir por aqui; explique isso ao cliente, oriente-o a regularizar o e-mail do cadastro e ofereça encaminhar a um atendente (não peça o e-mail na conversa: o dado tem que vir do cadastro)",
+		})
+		return nil, false
+	}
 	// Conteúdo do LLM é analisado campo a campo, nunca repassado cru: controle
 	// fora, resumo vira 1 linha, e texto que sobrevive à limpeza é obrigatório.
 	resumo, resumoTruncado := sanitizarTexto(req.Resumo, resumoMax, true)

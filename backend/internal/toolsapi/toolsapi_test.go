@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -389,6 +391,37 @@ func TestCriarPerfilSemEmpresaRecusa(t *testing.T) {
 	}
 	if len(f.criados) != 0 {
 		t.Fatalf("não deveria ter criado chamado: %+v", f.criados)
+	}
+}
+
+// TestCriarPerfilSemEmailRecusaSemChamarSAC usa o cliente SAC REAL contra um
+// servidor falso que conta requisições: cadastro sem e-mail (o SAC exige
+// cod_relator e devolveria 422) é recusado no dry-run e na abertura com motivo
+// `sem_email` — e nenhuma requisição chega ao SAC, nem a de config.
+func TestCriarPerfilSemEmailRecusaSemChamarSAC(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		_, _ = io.WriteString(w, `{"status":true,"protocolo":"ZP1","parametros":{}}`)
+	}))
+	t.Cleanup(srv.Close)
+	perfil := perfilPadrao()
+	perfil.Email = ""
+	h := novoHandlerComPerfil(t, sac.New(sac.Options{BaseURL: srv.URL, GrupoEmp: "AZAPERS"}), &perfil, nil)
+	for _, path := range []string{"/tools/sac/preparar", "/tools/sac/criar"} {
+		_, out := do(t, h, path, tokenTeste, map[string]any{
+			"telefone": "5531983857490", "categoria": "APLICATIVO",
+			"ocorrencia": "LENTIDÃO OU TRAVAMENTOS", "resumo": "x", "descricao": "y",
+		})
+		if out["status"] != false || out["motivo"] != "sem_email" {
+			t.Fatalf("%s: esperava recusa sem_email: %+v", path, out)
+		}
+		if erro, _ := out["erro"].(string); !strings.Contains(erro, "e-mail") {
+			t.Fatalf("%s: a recusa precisa explicar o motivo ao cérebro: %+v", path, out)
+		}
+	}
+	if atomic.LoadInt32(&hits) != 0 {
+		t.Fatalf("cadastro sem e-mail não pode gerar chamada ao SAC; hits=%d", hits)
 	}
 }
 
