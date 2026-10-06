@@ -50,6 +50,9 @@ _NOMES_TRANSITORIOS = (
     "InternalServerError",
 )
 
+# Causa do estouro do prazo do turno (asyncio.wait_for em processar_chat).
+CAUSA_PRAZO_TURNO = "cérebro não concluiu o turno dentro do prazo (BRAIN_TURNO_PRAZO)"
+
 _DESCRICAO_STATUS = {
     400: "requisição inválida ao provedor (400)",
     401: "chave do OpenRouter inválida (401)",

@@ -179,3 +179,38 @@ def test_endpoint_chat_devolve_status_por_classe_com_corpo(monkeypatch):
     r = client.post("/chat", json=corpo)
     assert r.status_code == 200
     assert r.json()["reply"] == "ok" and r.json()["erro"] is None
+
+
+# ---------------------------------------------------------------------------
+# ZC-6: prazo do turno no cérebro — o grafo que não termina a tempo vira falha
+# TRANSITÓRIA classificada (o gateway repete ou transfere), não um turno que
+# conclui depois de o cliente já ter recebido erro.
+# ---------------------------------------------------------------------------
+
+
+class _GrafoLento:
+    def __init__(self):
+        self.concluiu = False
+
+    async def ainvoke(self, inputs, config=None):
+        await asyncio.sleep(5)
+        self.concluiu = True
+        return {"messages": [AIMessage(content="tarde demais")]}
+
+
+def test_processar_chat_respeita_prazo_do_turno(monkeypatch):
+    from src.config import get_settings
+
+    monkeypatch.setenv("BRAIN_TURNO_PRAZO", "0.05")
+    get_settings.cache_clear()
+    try:
+        g = _GrafoLento()
+        resp = asyncio.run(processar_chat(g, ChatRequest(conversation_id="lento", mensagem="oi")))
+    finally:
+        get_settings.cache_clear()
+
+    assert resp.reply == ""
+    assert resp.erro is not None
+    assert resp.erro.classe == "transitoria"
+    assert "prazo" in resp.erro.causa.lower()
+    assert g.concluiu is False  # o grafo foi interrompido, não seguiu sozinho

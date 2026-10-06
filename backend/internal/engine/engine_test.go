@@ -35,10 +35,32 @@ type fakeChatwoot struct {
 	status  map[int64]string
 	equipes map[int64]int64
 	typing  map[int64]int // vezes que "digitando" foi ligado
+	// estado "ao vivo" devolvido por GetConversation; sem entrada → conversa
+	// na fila do bot. getErr simula Chatwoot fora.
+	aoVivo map[int64]*chatwoot.Conversation
+	getErr error
+	gets   int
 }
 
 func novoFakeChatwoot() *fakeChatwoot {
-	return &fakeChatwoot{labels: map[int64][]string{}, status: map[int64]string{}, equipes: map[int64]int64{}, typing: map[int64]int{}}
+	return &fakeChatwoot{
+		labels: map[int64][]string{}, status: map[int64]string{}, equipes: map[int64]int64{},
+		typing: map[int64]int{}, aoVivo: map[int64]*chatwoot.Conversation{},
+	}
+}
+
+func (f *fakeChatwoot) GetConversation(_ context.Context, convID int64) (*chatwoot.Conversation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gets++
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	if c, ok := f.aoVivo[convID]; ok {
+		return c, nil
+	}
+	c := conversaDoBot(convID, chatwoot.StatusOpen)
+	return &c, nil
 }
 
 func (f *fakeChatwoot) ToggleTyping(_ context.Context, convID int64, on bool) error {
@@ -695,5 +717,71 @@ func TestFalhasForaDaJanelaNaoAbremDisjuntor(t *testing.T) {
 	}
 	if aberto, _ := e.disjuntor.estado(); aberto {
 		t.Fatal("3 falhas em 6 min (janela de 5) não abrem o disjuntor")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ZC-6: reconferir etiqueta imediatamente antes de enviar
+// ---------------------------------------------------------------------------
+
+// TestRespostaNaoSaiSeConversaPassouParaHumano: entre a chamada ao cérebro e
+// o envio, a conversa ganhou fila-humano (atendente assumiu) → a resposta do
+// bot é descartada; nada de transferência nem nota.
+func TestRespostaNaoSaiSeConversaPassouParaHumano(t *testing.T) {
+	e, st, cw, br := engineCompleta(t)
+	comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){func() (*brain.ChatResponse, error) {
+		// O atendente assume ENQUANTO o cérebro responde.
+		c := chatwoot.Conversation{ID: 110, Labels: []string{"fila-humano"}, Status: chatwoot.StatusOpen}
+		cw.mu.Lock()
+		cw.aoVivo[110] = &c
+		cw.mu.Unlock()
+		return &brain.ChatResponse{Reply: "resposta atrasada do bot"}, nil
+	}}
+
+	turno(e, 110, e.agora())
+
+	if got := cw.mensagens(110, false); len(got) != 0 {
+		t.Fatalf("conversa já com atendente não pode receber resposta do bot: %q", got)
+	}
+	if got := cw.mensagens(110, true); len(got) != 0 {
+		t.Fatalf("não é falha: sem nota privada: %q", got)
+	}
+	if f, _ := st.UltimaFalha(context.Background(), 110); f != nil {
+		t.Fatalf("não é falha: sem registro: %+v", f)
+	}
+	if cw.gets == 0 {
+		t.Fatal("esperava a reconferência (GetConversation) antes de enviar")
+	}
+}
+
+// TestRespostaNaoSaiSeConversaSaiuDaFilaDoBot: perdeu fila-bot (sem ganhar
+// fila-humano) → também não envia.
+func TestRespostaNaoSaiSeConversaSaiuDaFilaDoBot(t *testing.T) {
+	e, _, cw, br := engineCompleta(t)
+	comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){responde("oi")}
+	c := chatwoot.Conversation{ID: 111, Labels: []string{"vip"}, Status: chatwoot.StatusOpen}
+	cw.aoVivo[111] = &c
+
+	turno(e, 111, e.agora())
+
+	if got := cw.mensagens(111, false); len(got) != 0 {
+		t.Fatalf("conversa fora da fila do bot não recebe resposta: %q", got)
+	}
+}
+
+// TestEnvioSegueQuandoReconferenciaFalha: Chatwoot fora na consulta → fail-open
+// (a resposta sai; um Chatwoot instável não cala o bot).
+func TestEnvioSegueQuandoReconferenciaFalha(t *testing.T) {
+	e, _, cw, br := engineCompleta(t)
+	comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){responde("oi")}
+	cw.getErr = context.DeadlineExceeded
+
+	turno(e, 112, e.agora())
+
+	if got := cw.mensagens(112, false); len(got) != 1 || got[0] != "oi" {
+		t.Fatalf("fail-open: resposta devia sair, veio %q", got)
 	}
 }

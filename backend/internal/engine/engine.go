@@ -27,6 +27,7 @@ type ChatwootAPI interface {
 	ToggleStatus(ctx context.Context, convID int64, status string) error
 	AssignTeam(ctx context.Context, convID int64, teamID int64) error
 	ToggleTyping(ctx context.Context, convID int64, on bool) error
+	GetConversation(ctx context.Context, convID int64) (*chatwoot.Conversation, error)
 }
 
 // BrainAPI é o que a engine usa do cérebro (satisfeito por *brain.Client).
@@ -395,12 +396,48 @@ func (e *Engine) encaminhar(ctx context.Context, conv *chatwoot.Conversation, ph
 	e.send(ctx, conv.ID, reply)
 }
 
+// aindaComOBot reconfere, no Chatwoot, se a conversa continua na fila do bot
+// IMEDIATAMENTE antes de enviar (ZC-6): se um atendente assumiu (ganhou
+// `fila-humano` ou perdeu `fila-bot`) enquanto o cérebro pensava, a resposta
+// do bot não sai por cima da conversa humana. Fail-open: se a consulta falhar,
+// envia — um Chatwoot instável não pode calar o bot.
+//
+// Deliberadamente NÃO olha o `assignee`: o Chatwoot atribui a conversa a quem
+// responde (self-assign), então após a 1ª resposta do bot o responsável seria
+// o próprio usuário da API do gateway e toda resposta seguinte seria calada.
+func (e *Engine) aindaComOBot(ctx context.Context, convID int64) bool {
+	if e.cfg.LabelBot == "" && e.cfg.LabelHumano == "" {
+		return true
+	}
+	conv, err := e.cw.GetConversation(ctx, convID)
+	if err != nil || conv == nil {
+		e.log.Warn("reconferir etiqueta antes de enviar: consulta falhou; enviando mesmo assim",
+			"conversation_id", convID, "err", err)
+		return true
+	}
+	if e.cfg.LabelHumano != "" && chatwoot.HasLabel(conv.Labels, e.cfg.LabelHumano) {
+		e.log.Info("resposta descartada: conversa já está com atendente (fila humana)",
+			"conversation_id", convID, "labels", conv.Labels)
+		return false
+	}
+	if e.cfg.LabelBot != "" && !chatwoot.HasLabel(conv.Labels, e.cfg.LabelBot) {
+		e.log.Info("resposta descartada: conversa saiu da fila do bot",
+			"conversation_id", convID, "labels", conv.Labels)
+		return false
+	}
+	return true
+}
+
 // send divide a resposta nas bolhas marcadas pelo cérebro (`---`), formata
 // cada uma para o WhatsApp (F3) e quebra as que ainda passarem do limite
 // (F12), entregando cada parte como mensagem separada — com uma pausa curta
-// entre elas para imitar o ritmo de quem digita.
+// entre elas para imitar o ritmo de quem digita. Antes da primeira bolha
+// reconfere a etiqueta da conversa (ZC-6).
 func (e *Engine) send(ctx context.Context, convID int64, content string) {
 	if content == "" {
+		return
+	}
+	if !e.aindaComOBot(ctx, convID) {
 		return
 	}
 	primeira := true

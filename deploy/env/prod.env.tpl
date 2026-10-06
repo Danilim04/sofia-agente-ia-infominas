@@ -27,7 +27,7 @@ APP_TITLE=Azapfy Suporte IA
 
 # --- Cérebro: tuning ----------------------------------------------------------
 LLM_TEMPERATURE=0.2
-LLM_TIMEOUT=45
+LLM_TIMEOUT=20
 RAG_TOP_K=3
 RAG_CHUNK_SIZE=800
 RAG_CHUNK_OVERLAP=120
@@ -134,6 +134,9 @@ SAC_TOOLS_TIMEOUT=30
 # extrator de login (mesmo cliente): 256.
 LLM_MAX_TOKENS=1024
 LLM_MAX_TOKENS_CLASSIFICADOR=256
+# Prazo TOTAL do turno no cérebro (s): menor que TURNO_TETO (45s) e que
+# BRAIN_TIMEOUT (60s) — o cérebro desiste primeiro e devolve falha classificada.
+BRAIN_TURNO_PRAZO=40
 # Equipe do Chatwoot que recebe a conversa transferida pelo bot (ZC-3); id da
 # instância (GitHub variable TEAM_HUMANO_ID; vazia = 0 = só troca a etiqueta).
 TEAM_HUMANO_ID=${TEAM_HUMANO_ID}

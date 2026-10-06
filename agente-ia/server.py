@@ -22,6 +22,7 @@ consultas de dados ao usuário autorizado.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
@@ -35,6 +36,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
 from src.agent.falhas import (
+    CAUSA_PRAZO_TURNO,
     CLASSE_TRANSITORIA,
     classificar_falha,
     gerar_id_ocorrencia,
@@ -182,7 +184,14 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
         inputs["telefone"] = req.telefone
 
     try:
-        valores = await graph.ainvoke(inputs, config=config)
+        # Prazo do turno MENOR que o BRAIN_TIMEOUT/TURNO_TETO do gateway: o
+        # cérebro desiste primeiro e devolve falha transitória classificada.
+        valores = await asyncio.wait_for(
+            graph.ainvoke(inputs, config=config),
+            timeout=get_settings().brain_turno_prazo,
+        )
+    except TimeoutError as exc:
+        return _falha_do_turno(req, exc, classe=CLASSE_TRANSITORIA, causa=CAUSA_PRAZO_TURNO)
     except Exception as exc:  # noqa: BLE001 — classificada, nunca um 500 mudo
         return _falha_do_turno(req, exc)
     resposta = ChatResponse(
@@ -203,14 +212,22 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
     return resposta
 
 
-def _falha_do_turno(req: ChatRequest, exc: BaseException) -> ChatResponse:
+def _falha_do_turno(
+    req: ChatRequest,
+    exc: BaseException,
+    *,
+    classe: str | None = None,
+    causa: str | None = None,
+) -> ChatResponse:
     """Transforma a exceção do grafo em `ChatResponse.erro` (classe + ID).
 
     O gateway Go lê a classe para decidir (repetir × transferir) e o ID para
     a nota privada; aqui o log `chat_erro` leva o mesmo ID e o
-    `conversation_id`, sem o conteúdo da mensagem (PII).
+    `conversation_id`, sem o conteúdo da mensagem (PII). `classe`/`causa`
+    explícitas pulam a classificação (ex.: prazo do turno estourado).
     """
-    classe, causa = classificar_falha(exc)
+    if classe is None or causa is None:
+        classe, causa = classificar_falha(exc)
     id_ocorrencia = gerar_id_ocorrencia()
     logger.error(
         "chat_erro conversation_id=%s classe=%s id_ocorrencia=%s causa=%s tipo=%s",

@@ -88,6 +88,30 @@ def test_defaults_de_max_tokens_sao_conservadores():
     assert settings.llm_max_tokens_classificador == 256
 
 
+# ---------------------------------------------------------------------------
+# Timeouts alinhados (ZC-6): LLM_TIMEOUT 20s; prazo do turno no cérebro menor
+# que o BRAIN_TIMEOUT (60s) e que o teto do turno do gateway (45s).
+# ---------------------------------------------------------------------------
+
+BRAIN_TIMEOUT_GATEWAY = 60.0
+TURNO_TETO_GATEWAY = 45.0
+
+
+def test_timeouts_cabem_no_prazo_do_gateway(monkeypatch):
+    # Só os defaults do código (um .env local não pode mascarar o teste).
+    monkeypatch.delenv("LLM_TIMEOUT", raising=False)
+    monkeypatch.delenv("BRAIN_TURNO_PRAZO", raising=False)
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert settings.llm_timeout == 20.0
+    assert settings.brain_turno_prazo == 40.0
+    assert settings.llm_timeout < settings.brain_turno_prazo
+    assert settings.brain_turno_prazo < TURNO_TETO_GATEWAY < BRAIN_TIMEOUT_GATEWAY
+    # Uma chamada + o retry do cliente OpenAI ainda cabem no prazo do turno.
+    assert 2 * settings.llm_timeout <= settings.brain_turno_prazo
+    assert llm_factory.get_llm().request_timeout == settings.llm_timeout
+
+
 def test_max_tokens_configuravel_por_env(monkeypatch):
     monkeypatch.setenv("LLM_MAX_TOKENS", "512")
     monkeypatch.setenv("LLM_MAX_TOKENS_CLASSIFICADOR", "128")

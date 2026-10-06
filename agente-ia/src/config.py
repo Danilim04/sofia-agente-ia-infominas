@@ -62,10 +62,17 @@ class Settings(BaseSettings):
     sync_limiar_remocao: float = Field(0.2, alias="SYNC_LIMIAR_REMOCAO")
 
     llm_temperature: float = Field(0.2, alias="LLM_TEMPERATURE")
-    # Timeout por chamada de LLM. Deve caber DENTRO do BRAIN_TIMEOUT do gateway
-    # Go (60s) mesmo num turno com 2-3 chamadas — senão o gateway desiste e o
-    # cliente vê erro genérico enquanto o cérebro ainda trabalha.
-    llm_timeout: float = Field(45.0, alias="LLM_TIMEOUT")
+    # Timeout por chamada de LLM. Com 1 retry do cliente e 2 chamadas por turno
+    # (classificador + agente) precisa caber no prazo do turno abaixo — 45s
+    # estourava o BRAIN_TIMEOUT do gateway (60s) e o cliente recebia erro
+    # enquanto o cérebro ainda trabalhava (e até abria chamado depois).
+    llm_timeout: float = Field(20.0, alias="LLM_TIMEOUT")
+    # Prazo TOTAL do turno no cérebro (segundos): `processar_chat` interrompe o
+    # grafo e devolve falha transitória ao gateway. Tem de ser MENOR que o
+    # BRAIN_TIMEOUT do gateway (60s) e que o teto do turno dele (TURNO_TETO,
+    # 45s desde a mensagem do cliente): quem desiste primeiro é o cérebro, com
+    # classe e ID — nunca o gateway no escuro.
+    brain_turno_prazo: float = Field(40.0, alias="BRAIN_TURNO_PRAZO")
     # Teto de tokens de SAÍDA por chamada. Sem ele, o OpenRouter reserva o máximo
     # do modelo (65.536 tokens) a cada chamada e recusa com 402 quando o saldo
     # não cobre a reserva — mesmo que a resposta real caiba em poucos tokens.
