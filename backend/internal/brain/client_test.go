@@ -2,6 +2,7 @@ package brain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,40 @@ func chamar(t *testing.T, c *Client) *Erro {
 		t.Fatalf("esperava *brain.Erro, veio %T: %v", err, err)
 	}
 	return e
+}
+
+// TestEncerrarEpisodioEnviaIdDaConversa (ZB-1): a resolução da conversa vira
+// POST /encerrar-episodio com o conversation_id (string, como no Contrato A);
+// 2xx = ok, sem erro.
+func TestEncerrarEpisodioEnviaIdDaConversa(t *testing.T) {
+	var caminho string
+	var corpo EncerrarEpisodioRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		caminho = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&corpo)
+		_, _ = w.Write([]byte(`{"status":"ok","proposta_limpa":true}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.URL, 2*time.Second)
+
+	if err := c.EncerrarEpisodio(context.Background(), "45"); err != nil {
+		t.Fatalf("esperava sucesso, veio %v", err)
+	}
+	if caminho != "/encerrar-episodio" || corpo.ConversationID != "45" {
+		t.Fatalf("requisição errada: path=%q corpo=%+v", caminho, corpo)
+	}
+}
+
+// TestEncerrarEpisodioFalhaViraErro: status >= 400 e cérebro fora do ar viram
+// erro (quem chama só loga — a limpeza é best-effort).
+func TestEncerrarEpisodioFalhaViraErro(t *testing.T) {
+	if err := servidor(t, 500, `{"status":"erro"}`).EncerrarEpisodio(context.Background(), "45"); err == nil {
+		t.Fatal("500: esperava erro")
+	}
+	fora := NewClient("http://127.0.0.1:1", time.Second)
+	if err := fora.EncerrarEpisodio(context.Background(), "45"); err == nil {
+		t.Fatal("conexão recusada: esperava erro")
+	}
 }
 
 // TestChatLeClasseEIDDoCorpo: o cérebro (ZC-2) devolve 500/503 com o envelope

@@ -15,6 +15,10 @@ Contrato A — request:
 Contrato A — resposta:
     {"reply": "...", "acoes": [], "fontes": [...]}
 
+`POST /encerrar-episodio` `{"conversation_id": "..."}`: o gateway avisa que a
+conversa foi RESOLVIDA no Chatwoot; a proposta de chamado pendente é limpa
+(ZB-1). O histórico da conversa fica.
+
 Obs.: `session_token` é aceito e ignorado nesta fase. Ele só passa a importar
 no plano deferido (tools MCP), onde o Python o repassa ao Go para escopar as
 consultas de dados ao usuário autorizado.
@@ -106,6 +110,18 @@ class ExtractLoginRequest(BaseModel):
 
 class ExtractLoginResponse(BaseModel):
     login: Optional[str] = None
+
+
+class EncerrarEpisodioRequest(BaseModel):
+    """Corpo de `POST /encerrar-episodio`: a conversa foi RESOLVIDA no Chatwoot."""
+
+    conversation_id: str
+
+
+class EncerrarEpisodioResponse(BaseModel):
+    status: str = "ok"
+    #: True quando havia uma proposta de chamado pendente e ela foi limpa.
+    proposta_limpa: bool = False
 
 
 def _mascarar(valor: str) -> str:
@@ -210,6 +226,35 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
         resposta.reply,
     )
     return resposta
+
+
+async def encerrar_episodio(graph: Any, conversation_id: str) -> EncerrarEpisodioResponse:
+    """Fim do episódio (conversa resolvida no Chatwoot): limpa a proposta de
+    chamado pendente da conversa (ZB-1).
+
+    O Chatwoot REUTILIZA a conversa quando o contato volta a escrever — o
+    `thread_id` é o mesmo — e uma proposta preparada num episódio anterior não
+    pode ser "confirmada" por uma mensagem qualquer do episódio seguinte (caso
+    "Esse" → ZPRS25208029 da conversa #45). O histórico de mensagens fica
+    intacto; só `proposta_chamado` é zerada, gravada como se o último nó do
+    grafo (`output_guardrail`) a tivesse escrito — nada fica pendente para o
+    próximo turno. Conversa sem proposta (ou desconhecida) não ganha checkpoint.
+    """
+    config: dict[str, Any] = {"configurable": {"thread_id": conversation_id}}
+    estado = await graph.aget_state(config)
+    valores = getattr(estado, "values", None) or {}
+    if not valores.get("proposta_chamado"):
+        logger.info(
+            "episodio_encerrado conversation_id=%s proposta_limpa=False", conversation_id
+        )
+        return EncerrarEpisodioResponse(proposta_limpa=False)
+    await graph.aupdate_state(
+        config, {"proposta_chamado": None}, as_node="output_guardrail"
+    )
+    logger.info(
+        "episodio_encerrado conversation_id=%s proposta_limpa=True", conversation_id
+    )
+    return EncerrarEpisodioResponse(proposta_limpa=True)
 
 
 def _falha_do_turno(
@@ -341,6 +386,25 @@ async def chat(req: ChatRequest):
         status = 503 if resposta.erro.classe == CLASSE_TRANSITORIA else 500
         return JSONResponse(status_code=status, content=resposta.model_dump())
     return resposta
+
+
+@app.post("/encerrar-episodio", response_model=EncerrarEpisodioResponse)
+async def encerrar_episodio_endpoint(req: EncerrarEpisodioRequest):
+    """Chamado pelo gateway Go quando a conversa é resolvida no Chatwoot
+    (`encerrarEpisodio` em `engine.go`). Falha sai como 500 com corpo — o
+    gateway só loga: a validade de 15 min da proposta é a rede de segurança."""
+    try:
+        return await encerrar_episodio(_get_graph(), req.conversation_id)
+    except Exception as exc:  # nunca um 500 mudo
+        logger.exception(
+            "episodio_erro conversation_id=%s tipo=%s",
+            req.conversation_id,
+            type(exc).__name__,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"status": "erro", "proposta_limpa": False},
+        )
 
 
 @app.post("/extract-login", response_model=ExtractLoginResponse)

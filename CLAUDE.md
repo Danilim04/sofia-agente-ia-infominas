@@ -290,7 +290,10 @@ duplicata ou envelope de relay:
   uma conversa em `falha` ("roteada") ficava muda até o `GATE_FALHA_TTL` (1h)
   vencer — cliente com chamado novo sem resposta. O cache `identities` (por
   telefone) não é tocado: quem já se identificou volta direto ao cérebro. O
-  TTL fica só como rede de segurança para conversa nunca resolvida.
+  TTL fica só como rede de segurança para conversa nunca resolvida. No mesmo
+  ponto o gateway chama `POST /encerrar-episodio` do cérebro (best-effort,
+  5 s), que **limpa a `proposta_chamado` pendente** daquela conversa (ZB-1 —
+  conversa #45: proposta de um episódio anterior "confirmada" por "Esse").
 - **Persistência** (`internal/store`): interface única, dois backends —
   **Postgres** quando `PG_URL` está definido (o MESMO Postgres do RAG/pgvector
   do compose, schema `gateway`, criado no boot) ou **SQLite** em `DB_PATH`

@@ -9,9 +9,10 @@ fail-soft em falha de rede.
 from __future__ import annotations
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from src.agent.nodes import make_tools_node
+from src.agent.tool_policy import carimbar_proposta
 from src.tools import sac_tools
 from src.tools.sac_tools import (
     SAC_TOOLS,
@@ -125,11 +126,15 @@ def test_fluxo_duas_fases_no_tools_node(captura):
         ],
     )
     out1 = node({"messages": [ai], "telefone": "5531999990000"})
-    assert out1["proposta_chamado"] == _PROPOSTA
+    # A proposta guardada é a do gateway + o carimbo de validade/turno (ZB-1).
+    guardada = out1["proposta_chamado"]
+    assert {k: v for k, v in guardada.items() if k not in ("criada_em", "turno")} == _PROPOSTA
+    assert guardada["turno"] == 0 and guardada["criada_em"]
     # O telefone do payload veio do ESTADO, não do LLM.
     assert chamadas[-1]["json"]["telefone"] == "5531999990000"
 
-    # Fase 2: abrir com args VAZIOS — a proposta e o telefone são injetados.
+    # Fase 2 (turno seguinte, cliente confirmou): abrir com args VAZIOS — a
+    # proposta e o telefone são injetados.
     estado["resposta"] = {"status": True, "protocolo": "ZP1", "link": "http://x/AZAPERS/ZP1"}
     ai2 = AIMessage(
         content="",
@@ -137,9 +142,9 @@ def test_fluxo_duas_fases_no_tools_node(captura):
     )
     out2 = node(
         {
-            "messages": [ai2],
+            "messages": [HumanMessage(content="sim"), ai2],
             "telefone": "5531999990000",
-            "proposta_chamado": dict(_PROPOSTA),
+            "proposta_chamado": guardada,
         }
     )
     assert chamadas[-1]["json"]["resumo"] == "App travando"
@@ -232,10 +237,12 @@ def test_tools_node_injeta_conversation_id_da_sessao(captura, nome, args):
     )
     node(
         {
-            "messages": [ai],
+            # "sim" no turno seguinte à proposta carimbada: `abrir` passa na
+            # política (ZB-1) e chega ao gateway como as demais.
+            "messages": [HumanMessage(content="sim"), ai],
             "telefone": "5531999990000",
             "conversation_id": "45",
-            "proposta_chamado": dict(_PROPOSTA),
+            "proposta_chamado": carimbar_proposta(_PROPOSTA, {}),
         }
     )
     assert chamadas, nome

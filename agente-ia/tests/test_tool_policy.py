@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage
 
 from src.agent.nodes import make_tools_node
-from src.agent.tool_policy import aplicar_politica, grupos_da_sessao
+from src.agent.tool_policy import (
+    PROPOSTA_VALIDADE,
+    aplicar_politica,
+    carimbar_proposta,
+    eh_confirmacao_explicita,
+    grupos_da_sessao,
+)
 from src.tools.crm_mocks import rastrear_nota_fiscal
 
 
@@ -93,12 +102,14 @@ def test_abrir_sem_proposta_preparada_e_recusado():
 
 def test_abrir_injeta_a_proposta_do_estado():
     """A abertura executa a proposta preparada — mesmo que o modelo tente
-    passar outro conteúdo, a injeção sobrescreve."""
-    proposta = {"resumo": "App travando", "categoria": "APLICATIVO"}
+    passar outro conteúdo, a injeção sobrescreve. (Proposta carimbada no
+    turno anterior e cliente confirmando neste — ZB-1.)"""
+    proposta = carimbar_proposta({"resumo": "App travando", "categoria": "APLICATIVO"}, {})
     state = {
         "identidade": _IDENTIDADE_AZAPERS,
         "telefone": "5531999990000",
         "proposta_chamado": proposta,
+        "messages": [HumanMessage(content="sim")],
     }
     args, erro = aplicar_politica(
         "abrir_chamado_suporte",
@@ -108,6 +119,100 @@ def test_abrir_injeta_a_proposta_do_estado():
     assert erro is None
     assert args["proposta"] == proposta
     assert args["telefone"] == "5531999990000"
+
+
+# ---------------------------------------------------------------------------
+# ZB-1 — confirmação explícita checada por código (nunca pelo modelo)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "texto",
+    ["sim", "Sim!", "SIM", "ok", "Ok.", "pode abrir", "Pode abrir, sim", "pode", "confirmo",
+     "Pode abrir 👍", "tá bom", "beleza", "sim, por favor", "pode abrir o chamado"],
+)
+def test_confirmacao_explicita_aceita(texto):
+    assert eh_confirmacao_explicita(texto) is True
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Esse",  # conversa #45
+        "ZPRS25208011",  # conversa #45
+        "isso",
+        "esse mesmo",
+        "não",
+        "sim, mas muda a prioridade",
+        "pode abrir? qual o prazo?",
+        "obrigado",
+        "",
+        None,
+        "sim e também abre outro pro app",
+    ],
+)
+def test_confirmacao_explicita_recusa_o_que_nao_e_so_confirmacao(texto):
+    assert eh_confirmacao_explicita(texto) is False
+
+
+def _estado_abrir(proposta: dict, mensagens: list) -> dict:
+    return {
+        "identidade": _IDENTIDADE_AZAPERS,
+        "telefone": "5531999990000",
+        "proposta_chamado": proposta,
+        "messages": mensagens,
+    }
+
+
+def test_carimbar_proposta_registra_criada_em_utc_e_turno():
+    agora = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+    msgs = [HumanMessage(content="a"), AIMessage(content="b"), HumanMessage(content="c")]
+    proposta = carimbar_proposta({"resumo": "x"}, {"messages": msgs}, agora=agora)
+    assert proposta == {"resumo": "x", "criada_em": "2026-10-06T12:00:00+00:00", "turno": 2}
+
+
+def test_abrir_recusado_quando_proposta_venceu():
+    velha = carimbar_proposta(
+        {"resumo": "x"}, {}, agora=datetime.now(timezone.utc) - PROPOSTA_VALIDADE - timedelta(seconds=1)
+    )
+    _, erro = aplicar_politica("abrir_chamado_suporte", {}, _estado_abrir(velha, [HumanMessage(content="sim")]))
+    assert erro is not None and "venceu" in erro
+
+
+def test_abrir_recusado_no_mesmo_turno_da_proposta():
+    msgs = [HumanMessage(content="abre um chamado")]
+    proposta = carimbar_proposta({"resumo": "x"}, {"messages": msgs})
+    _, erro = aplicar_politica("abrir_chamado_suporte", {}, _estado_abrir(proposta, msgs))
+    assert erro is not None and "NESTE turno" in erro
+
+
+def test_abrir_recusado_quando_a_conversa_seguiu_sem_confirmar():
+    proposta = carimbar_proposta({"resumo": "x"}, {"messages": [HumanMessage(content="1")]})
+    msgs = [HumanMessage(content="1"), HumanMessage(content="2"), HumanMessage(content="sim")]
+    _, erro = aplicar_politica("abrir_chamado_suporte", {}, _estado_abrir(proposta, msgs))
+    assert erro is not None and "SEGUINTE" in erro
+
+
+@pytest.mark.parametrize("mensagem", ["Esse", "ZPRS25208011", "não", "sim, mas muda a prioridade"])
+def test_abrir_recusado_sem_confirmacao_explicita_no_turno_seguinte(mensagem):
+    proposta = carimbar_proposta({"resumo": "x"}, {"messages": [HumanMessage(content="1")]})
+    msgs = [HumanMessage(content="1"), HumanMessage(content=mensagem)]
+    _, erro = aplicar_politica("abrir_chamado_suporte", {}, _estado_abrir(proposta, msgs))
+    assert erro is not None and "confirmação explícita" in erro
+
+
+def test_abrir_recusado_quando_proposta_sem_carimbo():
+    _, erro = aplicar_politica(
+        "abrir_chamado_suporte", {}, _estado_abrir({"resumo": "x"}, [HumanMessage(content="sim")])
+    )
+    assert erro is not None and "preparar_abertura_chamado" in erro
+
+
+def test_abrir_aceito_com_proposta_valida_e_sim_no_turno_seguinte():
+    proposta = carimbar_proposta({"resumo": "x"}, {"messages": [HumanMessage(content="1")]})
+    msgs = [HumanMessage(content="1"), AIMessage(content="Posso abrir?"), HumanMessage(content="Sim!")]
+    args, erro = aplicar_politica("abrir_chamado_suporte", {}, _estado_abrir(proposta, msgs))
+    assert erro is None and args["proposta"] == proposta
 
 
 def test_tool_sem_politica_passa_intocada():

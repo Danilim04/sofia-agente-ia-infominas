@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -119,6 +120,23 @@ type fakeBrain struct {
 	chamadas int
 	// respostas em sequência; a última repete. Vazio = resposta "ok".
 	respostas []func() (*brain.ChatResponse, error)
+	// encerrados registra os conversation_id recebidos em EncerrarEpisodio
+	// (ZB-1); encerrarErr simula o cérebro fora nessa chamada.
+	encerrados  []string
+	encerrarErr error
+}
+
+func (f *fakeBrain) EncerrarEpisodio(_ context.Context, conversationID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.encerrados = append(f.encerrados, conversationID)
+	return f.encerrarErr
+}
+
+func (f *fakeBrain) episodiosEncerrados() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string{}, f.encerrados...)
 }
 
 func (f *fakeBrain) Chat(_ context.Context, _ brain.ChatRequest) (*brain.ChatResponse, error) {
@@ -359,6 +377,55 @@ func TestEventoStatusChangedResolvidoApagaGate(t *testing.T) {
 
 	if gs, _ := st.GetGate(ctx, conv); gs != nil {
 		t.Fatalf("status_changed resolved: esperava gate apagado, ainda existe %+v", gs)
+	}
+}
+
+// TestConversaResolvidaLimpaPropostaNoCerebro (ZB-1): resolver a conversa é o
+// fim do episódio também no cérebro — o gateway chama EncerrarEpisodio com o
+// id da conversa (como string, igual ao Contrato A) para a proposta de
+// chamado pendente não sobreviver à reutilização da conversa pelo Chatwoot.
+// Vale para os dois eventos (conversation_updated e conversation_status_changed).
+func TestConversaResolvidaLimpaPropostaNoCerebro(t *testing.T) {
+	e, st, _, br := engineCompleta(t)
+	ctx := context.Background()
+	_ = st.SetGate(ctx, &store.GateState{ConversationID: 45, State: store.GateIdentificado})
+
+	e.HandleConversationUpdated(ctx, mudancaDeStatus(45, chatwoot.StatusOpen, chatwoot.StatusResolved))
+	ev := &chatwoot.ConversationStatusChanged{}
+	ev.ID = 46
+	ev.Status = chatwoot.StatusResolved
+	e.HandleConversationStatusChanged(ctx, ev)
+
+	if got := br.episodiosEncerrados(); len(got) != 2 || got[0] != "45" || got[1] != "46" {
+		t.Fatalf("esperava EncerrarEpisodio para 45 e 46, veio %v", got)
+	}
+	if gs, _ := st.GetGate(ctx, 45); gs != nil {
+		t.Fatalf("gate da 45 deveria ter sido apagado: %+v", gs)
+	}
+	// Reabertura e mudança só de etiqueta NÃO encerram episódio no cérebro.
+	e.HandleConversationUpdated(ctx, mudancaDeStatus(45, chatwoot.StatusResolved, chatwoot.StatusOpen))
+	e.HandleConversationUpdated(ctx, mudancaDeEtiquetas(45, nil, []string{"fila-bot"}))
+	if got := br.episodiosEncerrados(); len(got) != 2 {
+		t.Fatalf("reabrir/etiquetar não podia chamar o cérebro, veio %v", got)
+	}
+}
+
+// TestConversaResolvidaComCerebroForaAindaApagaGate (ZB-1): a limpeza no
+// cérebro é best-effort — se ele estiver fora, o gate da conversa é apagado
+// do mesmo jeito e nada explode (a validade da proposta é a rede de segurança).
+func TestConversaResolvidaComCerebroForaAindaApagaGate(t *testing.T) {
+	e, st, _, br := engineCompleta(t)
+	br.encerrarErr = errors.New("cérebro fora")
+	ctx := context.Background()
+	_ = st.SetGate(ctx, &store.GateState{ConversationID: 47, State: store.GateFalha})
+
+	e.HandleConversationUpdated(ctx, mudancaDeStatus(47, chatwoot.StatusOpen, chatwoot.StatusResolved))
+
+	if got := br.episodiosEncerrados(); len(got) != 1 || got[0] != "47" {
+		t.Fatalf("esperava a tentativa no cérebro, veio %v", got)
+	}
+	if gs, _ := st.GetGate(ctx, 47); gs != nil {
+		t.Fatalf("gate deveria ter sido apagado mesmo com o cérebro fora: %+v", gs)
 	}
 }
 
