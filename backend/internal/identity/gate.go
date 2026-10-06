@@ -76,6 +76,7 @@ const (
 	msgErroTemporario        = "Opa, tive um problema aqui no sistema e não consegui consultar agora. Consegue tentar de novo em instantes, por gentileza? 🙏"
 	msgConfirmacaoNaoConfere = "Esse dado não bateu com o que tenho aqui no cadastro. Consegue conferir e me enviar de novo, por gentileza?"
 	msgFalhaConfirmacao      = "Não consegui confirmar a sua identidade por aqui, mas fica tranquilo: vou te transferir para um atendente da equipe continuar com você. 🙏"
+	msgSemDadoConfirmacao    = "Para a sua segurança, eu confirmo a identidade por um dado do cadastro — e o seu cadastro não tem esse dado por aqui. Vou te encaminhar para um atendente da equipe continuar o atendimento, tudo bem? 🙏"
 )
 
 // saudacaoAbertura devolve a saudação da casa conforme o período do dia em
@@ -279,9 +280,15 @@ func (g *Gate) tratarLogin(ctx context.Context, convID int64, phone, mensagem st
 
 	expected, pergunta := g.alvoConfirmacao(doc)
 	if expected == "" {
-		// Sem dado para confirmar: identifica direto (não há como confirmar).
-		g.log.Warn("sem dado de confirmação no cadastro; identificando sem confirmar", "conversation_id", convID)
-		return g.identificar(ctx, convID, phone, &perfil)
+		// ZG-1: sem dado verificável no cadastro não existe segunda verificação —
+		// identificar só pelo login deixava quem soubesse o login de outra pessoa
+		// ver os chamados dela (conversas #28, #59, #82). Saída segura: fila
+		// humana, sem gravar nada no cache telefone→perfil. (Esses cadastros
+		// também não conseguem abrir chamado — ZA-2 recusa sem e-mail.)
+		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
+		g.log.Info("cadastro sem dado de confirmação; roteando para humano",
+			"conversation_id", convID, "confirm_field", g.confirmField)
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemDadoConfirmacao}
 	}
 	// O contador de erros é do EPISÓDIO de identificação, não da fase: os
 	// erros de login gastos até aqui continuam valendo na confirmação, para que

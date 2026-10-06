@@ -515,3 +515,60 @@ func TestGateConfirmacaoCertaAposErrosDeLoginIdentifica(t *testing.T) {
 		t.Fatalf("confirmação certa: esperava saudar, veio %q", r.Acao)
 	}
 }
+
+// ZG-1: cadastro SEM o dado de confirmação (e-mail) não pode ser identificado
+// só pelo login — quem soubesse o login de outra pessoa via os chamados dela
+// (conversas #28, #59, #82). Sem segunda verificação possível, a saída segura é
+// a fila humana: nada de saudação, nada de perfil, nada no cache do telefone.
+func TestGateCadastroSemEmailNaoIdentificaSoPeloLogin(t *testing.T) {
+	semEmail := docDaniel()
+	semEmail.Email = ""
+	g, st := newGate(t, fakeRepo{docs: map[string]mongo.UsuarioDoc{"10596693664": semEmail}})
+	ctx := context.Background()
+	const conv = int64(41)
+	const phone = "5511000000041"
+
+	g.Process(ctx, conv, phone, "oi") // pede login
+	r := g.Process(ctx, conv, phone, "10596693664")
+	if r.Acao != AcaoRotearHumano || r.Reply != msgSemDadoConfirmacao {
+		t.Fatalf("login de cadastro sem e-mail: esperava rotear humano, veio %q reply=%q", r.Acao, r.Reply)
+	}
+	if r.Perfil != nil {
+		t.Fatalf("não pode devolver perfil sem confirmação: %+v", r.Perfil)
+	}
+	ci, err := st.GetIdentity(ctx, phone)
+	if err != nil {
+		t.Fatalf("getIdentity: %v", err)
+	}
+	if ci != nil {
+		t.Fatalf("telefone não pode entrar no cache de identidade sem confirmação: %+v", ci)
+	}
+	// Conversa já roteada: a próxima mensagem NÃO vai ao cérebro.
+	if r := g.Process(ctx, conv, phone, "quais são os meus chamados?"); r.Acao != AcaoIgnorar {
+		t.Fatalf("pós-roteamento: esperava ignorar, veio %q", r.Acao)
+	}
+}
+
+// ZG-1 (contraprova): cadastro COM e-mail segue o fluxo de confirmação atual —
+// pede o e-mail, só identifica (e só cacheia) depois de o dado conferir.
+func TestGateCadastroComEmailSegueConfirmacao(t *testing.T) {
+	g, st := newGate(t, fakeRepo{docs: map[string]mongo.UsuarioDoc{"10596693664": docDaniel()}})
+	ctx := context.Background()
+	const conv = int64(42)
+	const phone = "5511000000042"
+
+	g.Process(ctx, conv, phone, "oi")
+	r := g.Process(ctx, conv, phone, "10596693664")
+	if r.Acao != AcaoPerguntar || !strings.Contains(r.Reply, "e-mail") {
+		t.Fatalf("cadastro com e-mail: esperava pedir confirmação do e-mail, veio %q reply=%q", r.Acao, r.Reply)
+	}
+	if ci, _ := st.GetIdentity(ctx, phone); ci != nil {
+		t.Fatalf("antes de confirmar não pode haver cache: %+v", ci)
+	}
+	if r := g.Process(ctx, conv, phone, "daniel.ferraz@azapfy.com.br"); r.Acao != AcaoSaudar {
+		t.Fatalf("e-mail confere: esperava saudar, veio %q", r.Acao)
+	}
+	if ci, _ := st.GetIdentity(ctx, phone); ci == nil {
+		t.Fatal("após confirmar, o telefone deve estar no cache de identidade")
+	}
+}
