@@ -134,3 +134,6 @@ SAC_TOOLS_TIMEOUT=30
 # extrator de login (mesmo cliente): 256.
 LLM_MAX_TOKENS=1024
 LLM_MAX_TOKENS_CLASSIFICADOR=256
+# Equipe do Chatwoot que recebe a conversa transferida pelo bot (ZC-3); id da
+# instância (GitHub variable TEAM_HUMANO_ID; vazia = 0 = só troca a etiqueta).
+TEAM_HUMANO_ID=${TEAM_HUMANO_ID}

@@ -54,6 +54,12 @@ func (c *Client) SendMessage(ctx context.Context, convID int64, content string, 
 	return c.do(ctx, http.MethodPost, c.convPath(convID, "/messages"), body, nil)
 }
 
+// AssignTeam atribui a conversa a uma equipe (team) do Chatwoot.
+func (c *Client) AssignTeam(ctx context.Context, convID int64, teamID int64) error {
+	body := map[string]any{"team_id": teamID}
+	return c.do(ctx, http.MethodPost, c.convPath(convID, "/assignments"), body, nil)
+}
+
 // ToggleStatus altera o status da conversa (open/resolved/pending/snoozed).
 func (c *Client) ToggleStatus(ctx context.Context, convID int64, status string) error {
 	body := map[string]any{"status": status}

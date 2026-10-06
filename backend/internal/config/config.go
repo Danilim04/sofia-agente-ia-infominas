@@ -33,6 +33,9 @@ type Config struct {
 	// conversa é roteada quando a identificação falha.
 	LabelBot    string
 	LabelHumano string
+	// TeamHumanoID: equipe do Chatwoot que recebe a conversa transferida pelo
+	// bot (ZC-3); 0 = não atribui equipe (só troca a etiqueta).
+	TeamHumanoID int64
 	// InboxID: caixa de entrada cujas conversas NOVAS ganham a LabelBot no
 	// conversation_created (o bot mesmo etiqueta — sem automation rule no
 	// Chatwoot, que o omni-route não gerencia). 0 = todas as caixas.
@@ -96,6 +99,7 @@ func Load() (*Config, error) {
 		BrainBaseURL:      strings.TrimRight(getenv("BRAIN_BASE_URL", "http://localhost:8001"), "/"),
 		ConfirmField:      strings.ToLower(getenv("CONFIRM_FIELD", "email")),
 		InboxID:           int64(getenvInt("INBOX_ID", 0)),
+		TeamHumanoID:      int64(getenvInt("TEAM_HUMANO_ID", 0)),
 		MaxTentativas:     getenvInt("MAX_TENTATIVAS", 3),
 		SACBaseURL:        strings.TrimRight(getenv("SAC_BASE_URL", ""), "/"),
 		SACPortalURL:      strings.TrimRight(getenv("SAC_PORTAL_URL", "https://atendimento.azapfy.com.br"), "/"),

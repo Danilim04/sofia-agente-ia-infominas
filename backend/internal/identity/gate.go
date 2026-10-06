@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,6 +50,7 @@ type Resultado struct {
 	Acao   Acao
 	Reply  string        // mensagem ao usuário (perguntar/saudar/rotear)
 	Perfil *mongo.Perfil // preenchido em AcaoEncaminhar
+	Motivo string        // em AcaoRotearHumano: causa em linguagem simples (nota privada/log)
 }
 
 // gateData é o JSON de trabalho persistido em store.GateState.Data. ConfirmValue
@@ -77,6 +79,15 @@ const (
 	msgConfirmacaoNaoConfere = "Esse dado não bateu com o que tenho aqui no cadastro. Consegue conferir e me enviar de novo, por gentileza?"
 	msgFalhaConfirmacao      = "Não consegui confirmar a sua identidade por aqui, mas fica tranquilo: vou te transferir para um atendente da equipe continuar com você. 🙏"
 )
+
+// Motivos (linguagem simples) que acompanham AcaoRotearHumano — vão para a
+// nota privada da conversa e para o log `zapin_falha` da engine.
+const motivoSemAcesso = "cadastro sem empresa ativa (acesso inativo no sistema)"
+
+func (g *Gate) motivoTentativas(fase string) string {
+	return "cliente não conseguiu se identificar (" + fase + " errada " +
+		strconv.Itoa(g.maxTentativas) + " vezes)"
+}
 
 // saudacaoAbertura devolve a saudação da casa conforme o período do dia em
 // Brasília: "Boníssimo dia" / "Boníssima tarde" / "Boa noite" (não existe
@@ -242,7 +253,7 @@ func (g *Gate) revalidar(ctx context.Context, convID int64, phone string, antigo
 	if !perfil.TemEmpresaAtiva() {
 		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
 		g.log.Info("revalidacao: login sem empresa ativa", "conversation_id", convID)
-		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemAcesso}
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemAcesso, Motivo: motivoSemAcesso}
 	}
 	g.renovarCache(ctx, phone, &perfil)
 	g.salvarGate(ctx, convID, store.GateIdentificado, gateData{Perfil: &perfil})
@@ -264,7 +275,7 @@ func (g *Gate) tratarLogin(ctx context.Context, convID int64, phone, mensagem st
 		gd.Tentativas++
 		if gd.Tentativas >= g.maxTentativas {
 			g.salvarGate(ctx, convID, store.GateFalha, gateData{})
-			return Resultado{Acao: AcaoRotearHumano, Reply: msgFalhaLogin}
+			return Resultado{Acao: AcaoRotearHumano, Reply: msgFalhaLogin, Motivo: g.motivoTentativas("login")}
 		}
 		g.salvarGate(ctx, convID, store.GateAguardLogin, gd)
 		return Resultado{Acao: AcaoPerguntar, Reply: msgLoginNaoEncontrado}
@@ -274,7 +285,7 @@ func (g *Gate) tratarLogin(ctx context.Context, convID int64, phone, mensagem st
 	if !perfil.TemEmpresaAtiva() {
 		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
 		g.log.Info("login sem empresa ativa", "conversation_id", convID, "login", login)
-		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemAcesso}
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemAcesso, Motivo: motivoSemAcesso}
 	}
 
 	expected, pergunta := g.alvoConfirmacao(doc)
@@ -305,7 +316,7 @@ func (g *Gate) tratarConfirmacao(ctx context.Context, convID int64, phone, mensa
 	gd.Tentativas++
 	if gd.Tentativas >= g.maxTentativas {
 		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
-		return Resultado{Acao: AcaoRotearHumano, Reply: msgFalhaConfirmacao}
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgFalhaConfirmacao, Motivo: g.motivoTentativas("confirmação")}
 	}
 	g.salvarGate(ctx, convID, store.GateAguardConfirm, gd)
 	return Resultado{Acao: AcaoPerguntar, Reply: msgConfirmacaoNaoConfere}

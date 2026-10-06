@@ -18,14 +18,29 @@ import (
 	"bot-azapfy/internal/store"
 )
 
+// ChatwootAPI é o que a engine usa do cliente Chatwoot (satisfeito por
+// *chatwoot.Client; interface para os testes usarem um Chatwoot falso).
+type ChatwootAPI interface {
+	SetLabels(ctx context.Context, convID int64, labels []string) error
+	SendMessage(ctx context.Context, convID int64, content string, private bool) error
+	ToggleStatus(ctx context.Context, convID int64, status string) error
+	AssignTeam(ctx context.Context, convID int64, teamID int64) error
+}
+
+// BrainAPI é o que a engine usa do cérebro (satisfeito por *brain.Client).
+type BrainAPI interface {
+	Chat(ctx context.Context, req brain.ChatRequest) (*brain.ChatResponse, error)
+}
+
 // Engine reúne as dependências do orquestrador.
 type Engine struct {
 	cfg   *config.Config
-	cw    *chatwoot.Client
+	cw    ChatwootAPI
 	gate  *identity.Gate
-	brain *brain.Client
+	brain BrainAPI
 	st    store.Store
 	log   *slog.Logger
+	agora func() time.Time // relógio injetável (IDs de ocorrência, notas, testes)
 
 	// Coalescência/serialização por conversa (F11) — ver coalescer.go.
 	baseCtx      context.Context
@@ -36,7 +51,7 @@ type Engine struct {
 }
 
 // New constrói a engine. Chame Start(ctx) antes de processar mensagens.
-func New(cfg *config.Config, cw *chatwoot.Client, gate *identity.Gate, brainClient *brain.Client, st store.Store, log *slog.Logger) *Engine {
+func New(cfg *config.Config, cw ChatwootAPI, gate *identity.Gate, brainClient BrainAPI, st store.Store, log *slog.Logger) *Engine {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -47,6 +62,7 @@ func New(cfg *config.Config, cw *chatwoot.Client, gate *identity.Gate, brainClie
 		brain:        brainClient,
 		st:           st,
 		log:          log,
+		agora:        time.Now,
 		baseCtx:      context.Background(),
 		debounce:     cfg.DebounceJanela,
 		debounceTeto: cfg.DebounceTeto,
@@ -158,8 +174,11 @@ func (e *Engine) processarLote(ctx context.Context, lote []inbound) {
 	case identity.AcaoPerguntar, identity.AcaoSaudar:
 		e.send(ctx, convID, res.Reply)
 	case identity.AcaoRotearHumano:
-		e.send(ctx, convID, res.Reply)
-		e.rotearHumano(ctx, &ultimo.conv)
+		// O gate já escolheu a mensagem (persona); a transferência em si é a
+		// mesma de toda falha: etiqueta, equipe, nota privada com ID, registro.
+		e.TransferirParaHumano(ctx, &ultimo.conv, Transferencia{
+			Origem: OrigemGate, Causa: res.Motivo, Mensagem: res.Reply,
+		})
 	case identity.AcaoEncaminhar:
 		e.encaminhar(ctx, &ultimo.conv, ultimo.phone, content, res)
 	case identity.AcaoIgnorar:
@@ -260,8 +279,9 @@ func (e *Engine) encaminhar(ctx context.Context, conv *chatwoot.Conversation, ph
 		Telefone:       phone,
 	})
 	if err != nil {
-		e.log.Error("chamada ao cérebro", "conversation_id", conv.ID, "err", err)
-		e.send(ctx, conv.ID, "Tive um problema técnico ao processar sua mensagem. Pode tentar novamente em instantes?")
+		// Nunca erro técnico ao cliente: transferência silenciosa, com o ID
+		// de ocorrência do cérebro (quando veio) na nota privada e no log.
+		e.TransferirParaHumano(ctx, conv, transferenciaPorErroDoCerebro(err))
 		return
 	}
 	reply := strings.TrimSpace(resp.Reply)
@@ -271,16 +291,6 @@ func (e *Engine) encaminhar(ctx context.Context, conv *chatwoot.Conversation, ph
 	e.log.Debug("resposta do cérebro",
 		"conversation_id", conv.ID, "fontes", resp.Fontes, "reply", reply)
 	e.send(ctx, conv.ID, reply)
-}
-
-func (e *Engine) rotearHumano(ctx context.Context, conv *chatwoot.Conversation) {
-	if e.cfg.LabelHumano == "" {
-		return
-	}
-	newLabels := chatwoot.ReplaceLabel(conv.Labels, e.cfg.LabelBot, e.cfg.LabelHumano)
-	if err := e.cw.SetLabels(ctx, conv.ID, newLabels); err != nil {
-		e.log.Error("rotear para humano", "conversation_id", conv.ID, "err", err)
-	}
 }
 
 // send divide a resposta nas bolhas marcadas pelo cérebro (`---`), formata

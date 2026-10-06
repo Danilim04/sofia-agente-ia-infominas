@@ -129,3 +129,44 @@ func TestStoreIdentityRespeitaTTL(t *testing.T) {
 		})
 	}
 }
+
+// TestStoreFalhasRegistraEDevolveAUltima (ZC-3): a ocorrência gravada na
+// transferência é recuperável pela conversa — a mais recente primeiro.
+func TestStoreFalhasRegistraEDevolveAUltima(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			conv := time.Now().UnixNano() % 1_000_000_000
+
+			if f, err := st.UltimaFalha(ctx, conv); err != nil || f != nil {
+				t.Fatalf("antes: esperava nil, veio %+v (err=%v)", f, err)
+			}
+			if err := st.RegistrarFalha(ctx, &Falha{
+				ID: "ZPF-20261002-0911-55", ConversationID: conv, Origem: "cerebro",
+				Classe: "definitiva", Causa: "saldo do OpenRouter insuficiente (402)", Detalhe: "status 500",
+			}); err != nil {
+				t.Fatalf("registrar 1: %v", err)
+			}
+			if err := st.RegistrarFalha(ctx, &Falha{
+				ID: "ZPF-20261002-0915-07", ConversationID: conv, Origem: "disjuntor",
+				Classe: "definitiva", Causa: "disjuntor aberto",
+			}); err != nil {
+				t.Fatalf("registrar 2: %v", err)
+			}
+			f, err := st.UltimaFalha(ctx, conv)
+			if err != nil || f == nil {
+				t.Fatalf("depois: esperava falha, veio %+v (err=%v)", f, err)
+			}
+			if f.ID != "ZPF-20261002-0915-07" || f.Origem != "disjuntor" || f.ConversationID != conv {
+				t.Fatalf("esperava a ÚLTIMA ocorrência da conversa, veio %+v", f)
+			}
+			if d := time.Since(f.CreatedAt); d < 0 || d > time.Minute {
+				t.Fatalf("created_at fora do esperado: %v (Δ=%v)", f.CreatedAt, d)
+			}
+			// Outra conversa não enxerga esta ocorrência.
+			if f, _ := st.UltimaFalha(ctx, conv+1); f != nil {
+				t.Fatalf("conversa vizinha não podia ter falha: %+v", f)
+			}
+		})
+	}
+}

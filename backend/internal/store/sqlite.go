@@ -34,6 +34,18 @@ CREATE TABLE IF NOT EXISTS identities (
     perfil     TEXT NOT NULL,
     expires_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS falhas (
+    seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              TEXT    NOT NULL,
+    conversation_id INTEGER NOT NULL,
+    origem          TEXT    NOT NULL DEFAULT '',
+    classe          TEXT    NOT NULL DEFAULT '',
+    causa           TEXT    NOT NULL DEFAULT '',
+    detalhe         TEXT    NOT NULL DEFAULT '',
+    created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS falhas_conversa ON falhas (conversation_id, seq);
 `
 
 // NewSQLite abre (criando se necessário) o banco e aplica o schema.
@@ -143,6 +155,35 @@ func (s *SQLiteStore) PutIdentity(ctx context.Context, ci *CachedIdentity) error
 		     expires_at = excluded.expires_at`,
 		ci.Phone, ci.Login, ci.Perfil, ci.ExpiresAt.Unix())
 	return err
+}
+
+func (s *SQLiteStore) RegistrarFalha(ctx context.Context, f *Falha) error {
+	quando := f.CreatedAt
+	if quando.IsZero() {
+		quando = time.Now()
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO falhas (id, conversation_id, origem, classe, causa, detalhe, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		f.ID, f.ConversationID, f.Origem, f.Classe, f.Causa, f.Detalhe, quando.Unix())
+	return err
+}
+
+func (s *SQLiteStore) UltimaFalha(ctx context.Context, convID int64) (*Falha, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, conversation_id, origem, classe, causa, detalhe, created_at
+		   FROM falhas WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1`, convID)
+	var f Falha
+	var created int64
+	err := row.Scan(&f.ID, &f.ConversationID, &f.Origem, &f.Classe, &f.Causa, &f.Detalhe, &created)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	f.CreatedAt = time.Unix(created, 0)
+	return &f, nil
 }
 
 func (s *SQLiteStore) Close() error { return s.db.Close() }
