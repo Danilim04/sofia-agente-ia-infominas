@@ -173,6 +173,9 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
 
     inputs: dict[str, Any] = {
         "identidade": req.identidade,
+        # Vai ao estado para as tools do SAC repassarem ao gateway (correlação
+        # do log de erro do SAC com a conversa — ponta Python do ZA-3).
+        "conversation_id": req.conversation_id,
         "messages": [HumanMessage(content=req.mensagem)],
     }
     if req.telefone:

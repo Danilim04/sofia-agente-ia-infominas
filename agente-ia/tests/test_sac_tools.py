@@ -197,3 +197,60 @@ def test_schemas_visiveis_ao_modelo():
     assert "telefone" not in campos_abrir
     assert "proposta" not in campos_abrir
     assert not campos_abrir  # o modelo não tem NENHUM argumento para abrir
+
+    for t in SAC_TOOLS:
+        assert "conversation_id" not in t.tool_call_schema.model_fields, t.name
+
+
+# ---------------------------------------------------------------------------
+# ZC-2b (ponta Python do ZA-3): toda chamada ao gateway leva o conversation_id
+# da requisição — injetado do ESTADO (nunca do LLM), para o log de erro do SAC
+# no gateway sair com o id da conversa.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "nome, args",
+    [
+        ("consultar_tipos_de_chamado", {}),
+        ("listar_chamados_abertos", {}),
+        (
+            "preparar_abertura_chamado",
+            {"resumo": "r", "descricao": "d", "categoria": "c", "ocorrencia": "o"},
+        ),
+        ("abrir_chamado_suporte", {}),
+    ],
+)
+def test_tools_node_injeta_conversation_id_da_sessao(captura, nome, args):
+    chamadas, estado = captura
+    estado["resposta"] = {"status": True, "proposta": dict(_PROPOSTA)}
+    node = make_tools_node(SAC_TOOLS)
+    # O modelo tenta "escolher" outro id: a injeção sobrescreve.
+    ai = AIMessage(
+        content="",
+        tool_calls=[{"name": nome, "id": "call-1", "args": {**args, "conversation_id": "999"}}],
+    )
+    node(
+        {
+            "messages": [ai],
+            "telefone": "5531999990000",
+            "conversation_id": "45",
+            "proposta_chamado": dict(_PROPOSTA),
+        }
+    )
+    assert chamadas, nome
+    assert chamadas[-1]["json"]["conversation_id"] == "45"
+    assert chamadas[-1]["json"]["telefone"] == "5531999990000"
+
+
+def test_sem_conversation_id_no_estado_envia_vazio(captura):
+    """Harness de dev (Chainlit) não tem conversa do Chatwoot: vai vazio, não quebra."""
+    chamadas, estado = captura
+    estado["resposta"] = {"status": True, "total": 0, "chamados": []}
+    node = make_tools_node(SAC_TOOLS)
+    ai = AIMessage(
+        content="",
+        tool_calls=[{"name": "listar_chamados_abertos", "id": "call-1", "args": {}}],
+    )
+    node({"messages": [ai], "telefone": "5531999990000"})
+    assert chamadas[-1]["json"]["conversation_id"] == ""

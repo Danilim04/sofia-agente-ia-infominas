@@ -52,6 +52,8 @@ def test_processar_chat_extrai_reply_e_fontes_e_isola_por_conversa():
     assert g.last_config["configurable"]["thread_id"] == "conv-123"
     # identidade repassada ao estado; mensagem vira HumanMessage
     assert g.last_inputs["identidade"] == {"encontrado": True, "login": "10596693664"}
+    # conversation_id entra no estado (as tools do SAC o repassam ao gateway)
+    assert g.last_inputs["conversation_id"] == "conv-123"
     assert isinstance(g.last_inputs["messages"][0], HumanMessage)
     assert g.last_inputs["messages"][0].content == "como funciona a Pesquisa?"
 

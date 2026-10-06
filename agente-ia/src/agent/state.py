@@ -19,6 +19,11 @@ para a resposta atual.
 (retrieval-first): vive APENAS no system prompt do turno atual — nunca entra
 em `messages`, então não incha o histórico persistido.
 
+`conversation_id` é o id da conversa no Chatwoot (= `thread_id` do grafo),
+vindo da requisição do Contrato A. Persiste entre turnos e é INJETADO nas
+chamadas às tools do SAC (`/tools/sac/*`) só para correlação nos logs do
+gateway — nunca é argumento do modelo.
+
 `proposta_chamado` é a proposta de abertura VALIDADA pelo dry-run do gateway
 (`/tools/sac/preparar`): persiste entre turnos (a confirmação do cliente vem
 no turno seguinte) até ser consumida por uma abertura bem-sucedida ou
@@ -40,6 +45,7 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
     telefone: NotRequired[str]
+    conversation_id: NotRequired[str]
     identidade: NotRequired[dict[str, Any] | None]
     proposta_chamado: NotRequired[dict[str, Any] | None]
     seguranca: NotRequired[dict[str, Any] | None]
