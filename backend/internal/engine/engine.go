@@ -176,8 +176,12 @@ func (e *Engine) processarLote(ctx context.Context, lote []inbound) {
 	case identity.AcaoRotearHumano:
 		// O gate já escolheu a mensagem (persona); a transferência em si é a
 		// mesma de toda falha: etiqueta, equipe, nota privada com ID, registro.
+		origem := OrigemGate
+		if res.Origem != "" {
+			origem = res.Origem // ex.: falha técnica do Mongo (identity.OrigemMongo)
+		}
 		e.TransferirParaHumano(ctx, &ultimo.conv, Transferencia{
-			Origem: OrigemGate, Causa: res.Motivo, Mensagem: res.Reply,
+			Origem: origem, Causa: res.Motivo, Mensagem: res.Reply,
 		})
 	case identity.AcaoEncaminhar:
 		e.encaminhar(ctx, &ultimo.conv, ultimo.phone, content, res)
