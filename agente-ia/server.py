@@ -30,9 +30,15 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
+from src.agent.falhas import (
+    CLASSE_TRANSITORIA,
+    classificar_falha,
+    gerar_id_ocorrencia,
+)
 from src.agent.graph import build_graph
 from src.config import get_settings
 from src.identity.login_extractor import extrair_login
@@ -72,10 +78,24 @@ class ChatRequest(BaseModel):
     session_token: Optional[str] = None
 
 
+class ErroChat(BaseModel):
+    """Falha do turno, classificada para o gateway decidir (ver `src/agent/falhas.py`).
+
+    `classe`: "transitoria" (vale repetir) | "definitiva" (transferir na hora).
+    `id_ocorrencia`: o MESMO id vai no log do cérebro, no log do gateway, na
+    nota privada da conversa e na tabela `gateway.falhas`.
+    """
+
+    classe: str
+    id_ocorrencia: str
+    causa: str
+
+
 class ChatResponse(BaseModel):
-    reply: str
+    reply: str = ""
     acoes: list[dict[str, Any]] = Field(default_factory=list)
     fontes: list[str] = Field(default_factory=list)
+    erro: ErroChat | None = None
 
 
 class ExtractLoginRequest(BaseModel):
@@ -158,7 +178,10 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
     if req.telefone:
         inputs["telefone"] = req.telefone
 
-    valores = await graph.ainvoke(inputs, config=config)
+    try:
+        valores = await graph.ainvoke(inputs, config=config)
+    except Exception as exc:  # noqa: BLE001 — classificada, nunca um 500 mudo
+        return _falha_do_turno(req, exc)
     resposta = ChatResponse(
         reply=_extrair_reply(valores),
         fontes=list(valores.get("fontes_usadas") or []),
@@ -175,6 +198,32 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
         resposta.reply,
     )
     return resposta
+
+
+def _falha_do_turno(req: ChatRequest, exc: BaseException) -> ChatResponse:
+    """Transforma a exceção do grafo em `ChatResponse.erro` (classe + ID).
+
+    O gateway Go lê a classe para decidir (repetir × transferir) e o ID para
+    a nota privada; aqui o log `chat_erro` leva o mesmo ID e o
+    `conversation_id`, sem o conteúdo da mensagem (PII).
+    """
+    classe, causa = classificar_falha(exc)
+    id_ocorrencia = gerar_id_ocorrencia()
+    logger.error(
+        "chat_erro conversation_id=%s classe=%s id_ocorrencia=%s causa=%s tipo=%s",
+        req.conversation_id,
+        classe,
+        id_ocorrencia,
+        causa,
+        type(exc).__name__,
+        # Traceback só para falha definitiva (bug/configuração) — a
+        # transitória é ruído de rede e já tem a causa resumida.
+        exc_info=classe != CLASSE_TRANSITORIA,
+    )
+    return ChatResponse(
+        reply="",
+        erro=ErroChat(classe=classe, id_ocorrencia=id_ocorrencia, causa=causa),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -263,8 +312,15 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
-    return await processar_chat(_get_graph(), req)
+async def chat(req: ChatRequest):
+    """Contrato A. Falha do turno sai com status HTTP por classe + corpo com
+    `erro` (classe, id_ocorrencia, causa): 503 = transitória (o gateway pode
+    repetir), 500 = definitiva (o gateway transfere ao atendente na hora)."""
+    resposta = await processar_chat(_get_graph(), req)
+    if resposta.erro is not None:
+        status = 503 if resposta.erro.classe == CLASSE_TRANSITORIA else 500
+        return JSONResponse(status_code=status, content=resposta.model_dump())
+    return resposta
 
 
 @app.post("/extract-login", response_model=ExtractLoginResponse)

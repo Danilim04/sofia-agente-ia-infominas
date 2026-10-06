@@ -7,9 +7,13 @@ mapeamento request → estado do grafo → response.
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+import server
 from server import ChatRequest, processar_chat
 
 
@@ -71,3 +75,105 @@ def test_processar_chat_tolera_content_em_blocos():
     req = ChatRequest(conversation_id="c2", mensagem="oi")
     resp = asyncio.run(processar_chat(g, req))
     assert resp.reply == "parte 1 parte 2"
+
+
+# ---------------------------------------------------------------------------
+# ZC-2: falha do grafo é CLASSIFICADA e devolvida ao gateway (classe + ID) —
+# nunca uma exceção solta virando 500 mudo no uvicorn.
+# ---------------------------------------------------------------------------
+
+
+class _GrafoQueExplode:
+    def __init__(self, exc: BaseException):
+        self._exc = exc
+
+    async def ainvoke(self, inputs, config=None):
+        raise self._exc
+
+
+class _ErroProvedor(Exception):
+    """Imita `openai.APIStatusError`: carrega `status_code` (duck typing)."""
+
+    def __init__(self, status_code: int, msg: str = "provedor"):
+        super().__init__(msg)
+        self.status_code = status_code
+
+
+_RE_ID = re.compile(r"^ZPF-\d{8}-\d{4}-\d{2}$")
+
+
+def test_processar_chat_402_nao_explode_e_devolve_definitiva(caplog):
+    g = _GrafoQueExplode(_ErroProvedor(402, "Insufficient credits"))
+    req = ChatRequest(conversation_id="conv-402", mensagem="oi")
+    with caplog.at_level(logging.ERROR, logger="server"):
+        resp = asyncio.run(processar_chat(g, req))
+
+    assert resp.reply == ""
+    assert resp.erro is not None
+    assert resp.erro.classe == "definitiva"
+    assert _RE_ID.match(resp.erro.id_ocorrencia), resp.erro.id_ocorrencia
+    assert "402" in resp.erro.causa
+    # O log `chat_erro` leva o conversation_id, a classe e o MESMO id.
+    linha = next(r for r in caplog.records if r.getMessage().startswith("chat_erro"))
+    msg = linha.getMessage()
+    assert "conversation_id=conv-402" in msg
+    assert "classe=definitiva" in msg
+    assert f"id_ocorrencia={resp.erro.id_ocorrencia}" in msg
+
+
+@pytest.mark.parametrize(
+    "exc, classe",
+    [
+        (_ErroProvedor(429), "transitoria"),
+        (_ErroProvedor(503), "transitoria"),
+        (TimeoutError("read timed out"), "transitoria"),
+        (ConnectionError("conexão recusada"), "transitoria"),
+        (_ErroProvedor(401), "definitiva"),
+        (_ErroProvedor(400), "definitiva"),
+        (TypeError("bug no código"), "definitiva"),
+    ],
+)
+def test_processar_chat_classifica_transitoria_x_definitiva(exc, classe):
+    g = _GrafoQueExplode(exc)
+    resp = asyncio.run(processar_chat(g, ChatRequest(conversation_id="c", mensagem="oi")))
+    assert resp.erro is not None and resp.erro.classe == classe
+
+
+def test_processar_chat_classifica_pela_causa_encadeada():
+    """O SDK pode embrulhar o erro HTTP: a classe vem da cadeia de causas."""
+    try:
+        try:
+            raise _ErroProvedor(402)
+        except _ErroProvedor as inner:
+            raise RuntimeError("embrulho") from inner
+    except RuntimeError as exc:
+        embrulhada = exc
+    resp = asyncio.run(
+        processar_chat(_GrafoQueExplode(embrulhada), ChatRequest(conversation_id="c", mensagem="oi"))
+    )
+    assert resp.erro is not None and resp.erro.classe == "definitiva"
+
+
+def test_endpoint_chat_devolve_status_por_classe_com_corpo(monkeypatch):
+    """O gateway Go lê classe/ID do corpo: 500 = definitiva, 503 = transitória."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(server.app)
+    corpo = {"conversation_id": "c9", "mensagem": "oi"}
+
+    monkeypatch.setattr(server, "_GRAPH", _GrafoQueExplode(_ErroProvedor(402)))
+    r = client.post("/chat", json=corpo)
+    assert r.status_code == 500
+    assert r.json()["erro"]["classe"] == "definitiva"
+    assert _RE_ID.match(r.json()["erro"]["id_ocorrencia"])
+
+    monkeypatch.setattr(server, "_GRAPH", _GrafoQueExplode(_ErroProvedor(503)))
+    r = client.post("/chat", json=corpo)
+    assert r.status_code == 503
+    assert r.json()["erro"]["classe"] == "transitoria"
+
+    # Turno normal continua 200 sem `erro`.
+    monkeypatch.setattr(server, "_GRAPH", _FakeGraph({"messages": [AIMessage(content="ok")]}))
+    r = client.post("/chat", json=corpo)
+    assert r.status_code == 200
+    assert r.json()["reply"] == "ok" and r.json()["erro"] is None
