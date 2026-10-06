@@ -54,6 +54,35 @@ func (c *Client) SendMessage(ctx context.Context, convID int64, content string, 
 	return c.do(ctx, http.MethodPost, c.convPath(convID, "/messages"), body, nil)
 }
 
+// ToggleTyping liga/desliga o indicador "digitando" da conversa (o cliente vê
+// no WhatsApp enquanto o bot tenta de novo).
+func (c *Client) ToggleTyping(ctx context.Context, convID int64, on bool) error {
+	status := "off"
+	if on {
+		status = "on"
+	}
+	body := map[string]any{"typing_status": status}
+	return c.do(ctx, http.MethodPost, c.convPath(convID, "/toggle_typing_status"), body, nil)
+}
+
+// AssignTeam atribui a conversa a uma equipe (team) do Chatwoot.
+func (c *Client) AssignTeam(ctx context.Context, convID int64, teamID int64) error {
+	body := map[string]any{"team_id": teamID}
+	return c.do(ctx, http.MethodPost, c.convPath(convID, "/assignments"), body, nil)
+}
+
+// GetConversation lê o estado ATUAL da conversa (etiquetas, status,
+// responsável) — a engine reconfere a etiqueta imediatamente antes de enviar
+// qualquer mensagem (ZC-6): entre a chamada ao cérebro e o envio um atendente
+// pode ter assumido a conversa.
+func (c *Client) GetConversation(ctx context.Context, convID int64) (*Conversation, error) {
+	var out Conversation
+	if err := c.do(ctx, http.MethodGet, c.convPath(convID, ""), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ToggleStatus altera o status da conversa (open/resolved/pending/snoozed).
 func (c *Client) ToggleStatus(ctx context.Context, convID int64, status string) error {
 	body := map[string]any{"status": status}

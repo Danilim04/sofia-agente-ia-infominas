@@ -55,6 +55,11 @@ def _telefone_da_sessao(state: Mapping[str, Any]) -> str:
     return state.get("telefone") or ""
 
 
+def _conversation_id_da_sessao(state: Mapping[str, Any]) -> str:
+    """Id da conversa (Contrato A) — só correlação de logs no gateway."""
+    return str(state.get("conversation_id") or "")
+
+
 def _proposta_da_sessao(state: Mapping[str, Any]) -> Optional[dict]:
     """Proposta de chamado validada pelo dry-run do gateway (estado do grafo)."""
     return state.get("proposta_chamado") or None
@@ -115,23 +120,34 @@ def _exigir_proposta_preparada(state: Mapping[str, Any]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 POLITICAS: dict[str, PoliticaTool] = {
-    # SAC (gateway Go): o relator vem da identidade do gate via `telefone`.
+    # SAC (gateway Go): o relator vem da identidade do gate via `telefone`;
+    # `conversation_id` só liga o log do gateway à conversa (ZA-3).
     "consultar_tipos_de_chamado": PoliticaTool(
-        injetar={"telefone": _telefone_da_sessao},
+        injetar={
+            "telefone": _telefone_da_sessao,
+            "conversation_id": _conversation_id_da_sessao,
+        },
     ),
     "listar_chamados_abertos": PoliticaTool(
-        injetar={"telefone": _telefone_da_sessao},
+        injetar={
+            "telefone": _telefone_da_sessao,
+            "conversation_id": _conversation_id_da_sessao,
+        },
     ),
     # Duas fases (dry-run → confirmação → execução): `preparar` valida os
     # campos no gateway e a proposta aprovada fica no estado; `abrir` não
     # recebe NADA do modelo — executa exatamente a proposta preparada.
     "preparar_abertura_chamado": PoliticaTool(
-        injetar={"telefone": _telefone_da_sessao},
+        injetar={
+            "telefone": _telefone_da_sessao,
+            "conversation_id": _conversation_id_da_sessao,
+        },
         validar={"empresa": _validar_empresa_da_sessao},
     ),
     "abrir_chamado_suporte": PoliticaTool(
         injetar={
             "telefone": _telefone_da_sessao,
+            "conversation_id": _conversation_id_da_sessao,
             "proposta": _proposta_da_sessao,
         },
         exigir=_exigir_proposta_preparada,

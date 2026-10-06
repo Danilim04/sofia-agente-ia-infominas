@@ -13,8 +13,10 @@ e-mail, telefone, grupo) vêm da identidade verificada — **nunca** do LLM. O
 agente só decide o conteúdo (resumo/descrição) e a classificação
 (categoria/ocorrência/prioridade), que o Go valida contra a config do SAC.
 
-`telefone` é um `InjectedToolArg`: fica fora do schema que o modelo vê e é
-preenchido pelo `tools_node` a partir do estado da sessão.
+`telefone` e `conversation_id` são `InjectedToolArg`: ficam fora do schema
+que o modelo vê e são preenchidos pelo `tools_node` a partir do estado da
+sessão. O `conversation_id` (id da conversa no Chatwoot) vai em toda chamada
+só para o gateway correlacionar seus logs de erro do SAC com a conversa.
 
 As docstrings abaixo são lidas pelo LLM para escolher e usar a tool — edite com
 intenção (elas custam tokens e guiam o comportamento).
@@ -57,6 +59,7 @@ def _post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
 @tool
 def consultar_tipos_de_chamado(
     telefone: Annotated[str, InjectedToolArg] = "",
+    conversation_id: Annotated[str, InjectedToolArg] = "",
 ) -> dict[str, Any]:
     """Lista as categorias e ocorrências válidas para abrir um chamado no SAC.
 
@@ -69,7 +72,10 @@ def consultar_tipos_de_chamado(
         dict: status (bool), categorias (list[str]), ocorrencias (list de
         {categoria, ocorrencia, descricao, prazo}).
     """
-    return _post("/tools/sac/tipos", {"telefone": telefone})
+    return _post(
+        "/tools/sac/tipos",
+        {"telefone": telefone, "conversation_id": conversation_id},
+    )
 
 
 @tool
@@ -81,6 +87,7 @@ def preparar_abertura_chamado(
     prioridade: str = "MEDIA",
     empresa: str = "",
     telefone: Annotated[str, InjectedToolArg] = "",
+    conversation_id: Annotated[str, InjectedToolArg] = "",
 ) -> dict[str, Any]:
     """Valida e prepara a abertura de um chamado (dry-run — NÃO cria nada).
 
@@ -114,6 +121,7 @@ def preparar_abertura_chamado(
         "/tools/sac/preparar",
         {
             "telefone": telefone,
+            "conversation_id": conversation_id,
             "resumo": resumo,
             "descricao": descricao,
             "categoria": categoria,
@@ -128,6 +136,7 @@ def preparar_abertura_chamado(
 def abrir_chamado_suporte(
     proposta: Annotated[Optional[dict], InjectedToolArg] = None,
     telefone: Annotated[str, InjectedToolArg] = "",
+    conversation_id: Annotated[str, InjectedToolArg] = "",
 ) -> dict[str, Any]:
     """Abre o chamado da proposta JÁ PREPARADA e confirmada pelo cliente.
 
@@ -147,6 +156,7 @@ def abrir_chamado_suporte(
         "/tools/sac/criar",
         {
             "telefone": telefone,
+            "conversation_id": conversation_id,
             "resumo": proposta.get("resumo", ""),
             "descricao": proposta.get("descricao", ""),
             "categoria": proposta.get("categoria", ""),
@@ -160,6 +170,7 @@ def abrir_chamado_suporte(
 @tool
 def listar_chamados_abertos(
     telefone: Annotated[str, InjectedToolArg] = "",
+    conversation_id: Annotated[str, InjectedToolArg] = "",
 ) -> dict[str, Any]:
     """Lista os chamados EM ABERTO do cliente (pendentes / em andamento) no SAC.
 
@@ -172,7 +183,10 @@ def listar_chamados_abertos(
         dict: status (bool), total (int), chamados (list de {protocolo, resumo,
         status, categoria, ocorrencia, dt_abertura, link}).
     """
-    return _post("/tools/sac/listar", {"telefone": telefone})
+    return _post(
+        "/tools/sac/listar",
+        {"telefone": telefone, "conversation_id": conversation_id},
+    )
 
 
 SAC_TOOLS = [

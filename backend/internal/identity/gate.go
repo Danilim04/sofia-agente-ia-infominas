@@ -6,8 +6,11 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +22,37 @@ import (
 type UserRepo interface {
 	BuscarPorLogin(ctx context.Context, login string) (mongo.UsuarioDoc, bool, error)
 }
+
+// UserRepoLote é opcional: quando o repo também busca vários logins de uma
+// vez (`$in`), o gate resolve os candidatos de uma frase numa única consulta
+// com prazo curto (lookupCandidatosTimeout) em vez de N idas ao Mongo.
+type UserRepoLote interface {
+	BuscarPorLogins(ctx context.Context, logins []string) ([]mongo.UsuarioDoc, error)
+}
+
+// Falhas técnicas (Mongo fora, extrator fora) seguidas toleradas antes de
+// transferir ao atendente — a 1ª vira "tente de novo", a 2ª transfere (ZC-4).
+const maxFalhasTecnicas = 2
+
+// lookupCandidatosTimeout limita a consulta `$in` dos candidatos de login.
+const lookupCandidatosTimeout = 3 * time.Second
+
+// carenciaRevalidacao: com o cache telefone→perfil vencido e o Mongo fora, a
+// conversa segue com o perfil antigo por este prazo (cache renovado) em vez
+// de travar o cliente num laço de "tente de novo".
+const carenciaRevalidacao = time.Hour
+
+// OrigemMongo marca, no Resultado de rotear humano, que a causa foi técnica
+// (Mongo), não o cliente — a engine registra a falha com essa origem.
+const OrigemMongo = "mongo"
+
+// OrigemCliente marca a transferência pedida pelo PRÓPRIO cliente (palavra de
+// escape "atendente"/"humano", ZC-8).
+const OrigemCliente = "cliente"
+
+// errExtractorIndisponivel: o cérebro (extrator de login) falhou — é falha
+// TÉCNICA (conta em FalhasTecnicas), nunca erro do cliente (ZC-8).
+var errExtractorIndisponivel = errors.New("extrator de login indisponível")
 
 // LoginExtractor extrai o identificador (login) de uma mensagem em linguagem
 // natural — fallback quando a normalização determinística não casa nenhum
@@ -49,16 +83,19 @@ type Resultado struct {
 	Acao   Acao
 	Reply  string        // mensagem ao usuário (perguntar/saudar/rotear)
 	Perfil *mongo.Perfil // preenchido em AcaoEncaminhar
+	Motivo string        // em AcaoRotearHumano: causa em linguagem simples (nota privada/log)
+	Origem string        // em AcaoRotearHumano: "" = gate (cliente); OrigemMongo = falha técnica
 }
 
 // gateData é o JSON de trabalho persistido em store.GateState.Data. ConfirmValue
 // é transitório: some quando a identidade é confirmada (não vai para o cache).
 type gateData struct {
-	Login        string        `json:"login,omitempty"`
-	Tentativas   int           `json:"tentativas,omitempty"` // erros acumulados no episódio (login + confirmação)
-	Perfil       *mongo.Perfil `json:"perfil,omitempty"`
-	ConfirmField string        `json:"confirm_field,omitempty"`
-	ConfirmValue string        `json:"confirm_value,omitempty"`
+	Login          string        `json:"login,omitempty"`
+	Tentativas     int           `json:"tentativas,omitempty"`      // erros acumulados no episódio (login + confirmação)
+	FalhasTecnicas int           `json:"falhas_tecnicas,omitempty"` // falhas técnicas SEGUIDAS (Mongo/extrator) — não são erro do cliente
+	Perfil         *mongo.Perfil `json:"perfil,omitempty"`
+	ConfirmField   string        `json:"confirm_field,omitempty"`
+	ConfirmValue   string        `json:"confirm_value,omitempty"`
 }
 
 // nomeAssistente é o nome com que o bot se apresenta nas saudações.
@@ -77,7 +114,28 @@ const (
 	msgConfirmacaoNaoConfere = "Esse dado não bateu com o que tenho aqui no cadastro. Consegue conferir e me enviar de novo, por gentileza?"
 	msgFalhaConfirmacao      = "Não consegui confirmar a sua identidade por aqui, mas fica tranquilo: vou te transferir para um atendente da equipe continuar com você. 🙏"
 	msgSemDadoConfirmacao    = "Para a sua segurança, eu confirmo a identidade por um dado do cadastro — e o seu cadastro não tem esse dado por aqui. Vou te encaminhar para um atendente da equipe continuar o atendimento, tudo bem? 🙏"
+	msgFalhaTecnica          = "Estou com uma instabilidade aqui no sistema e não consegui consultar o seu cadastro. Vou te encaminhar para um atendente da equipe continuar o atendimento, tudo bem? 🙏"
+	msgPedidoAtendente       = "Claro! Vou te encaminhar para um de nossos atendentes, só um instante. 🙏"
 )
+
+// motivoPedidoAtendente é a causa (nota privada/log) da transferência pedida
+// pelo cliente.
+const motivoPedidoAtendente = "cliente pediu para falar com um atendente"
+
+// Motivos das transferências por falha técnica (nota privada/log).
+const (
+	motivoMongoFora        = "falha técnica ao consultar o cadastro (2 vezes seguidas)"
+	motivoCadastroIlegivel = "cadastro do cliente em formato inesperado (não foi possível ler)"
+)
+
+// Motivos (linguagem simples) que acompanham AcaoRotearHumano — vão para a
+// nota privada da conversa e para o log `zapin_falha` da engine.
+const motivoSemAcesso = "cadastro sem empresa ativa (acesso inativo no sistema)"
+
+func (g *Gate) motivoTentativas(fase string) string {
+	return "cliente não conseguiu se identificar (" + fase + " errada " +
+		strconv.Itoa(g.maxTentativas) + " vezes)"
+}
 
 // saudacaoAbertura devolve a saudação da casa conforme o período do dia em
 // Brasília: "Boníssimo dia" / "Boníssima tarde" / "Boa noite" (não existe
@@ -146,6 +204,15 @@ func (g *Gate) Process(ctx context.Context, convID int64, phone, mensagem string
 	if gs != nil {
 		state = gs.State
 		gd = decodeGate(gs.Data)
+	}
+
+	// Palavra de escape (ZC-8): "atendente"/"humano" em QUALQUER fase (novo,
+	// login, confirmação, identificado) transfere na hora. Conversa já
+	// transferida (GateFalha) segue o tratamento normal abaixo.
+	if state != store.GateFalha && PedeAtendente(mensagem) {
+		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
+		g.log.Info("cliente pediu atendente; transferindo", "conversation_id", convID, "estado_anterior", state)
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgPedidoAtendente, Motivo: motivoPedidoAtendente, Origem: OrigemCliente}
 	}
 
 	switch state {
@@ -222,18 +289,27 @@ func (g *Gate) iniciar(ctx context.Context, convID int64, phone string) Resultad
 // revalidar recarrega o perfil na origem quando o cache telefone→perfil expirou
 // numa conversa já identificada. Sem interação com o cliente: achou → renova o
 // cache e encaminha; sumiu da base → recomeça a identificação; sem empresa
-// ativa → mesmo tratamento do tratarLogin (rotear humano); origem fora → mesma
-// mensagem de erro temporário (o estado fica como está e a próxima mensagem
-// tenta de novo).
+// ativa → mesmo tratamento do tratarLogin (rotear humano); origem fora →
+// segue com o perfil antigo por carência (cache renovado por
+// carenciaRevalidacao — o cliente já estava identificado; um Mongo instável
+// não pode travá-lo num laço de "tente de novo"); cadastro ilegível →
+// transfere ao atendente.
 func (g *Gate) revalidar(ctx context.Context, convID int64, phone string, antigo *mongo.Perfil) Resultado {
 	login := strings.TrimSpace(antigo.Login)
 	if login == "" {
 		return g.iniciar(ctx, convID, phone)
 	}
 	doc, found, err := g.repo.BuscarPorLogin(ctx, login)
+	if errors.Is(err, mongo.ErrDocumentoInvalido) {
+		g.log.Error("revalidacao: cadastro ilegível; transferindo", "conversation_id", convID, "err", err)
+		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgFalhaTecnica, Motivo: motivoCadastroIlegivel, Origem: OrigemMongo}
+	}
 	if err != nil {
-		g.log.Error("revalidacao: buscarPorLogin", "conversation_id", convID, "err", err)
-		return Resultado{Acao: AcaoPerguntar, Reply: msgErroTemporario}
+		g.log.Warn("revalidacao: origem fora; seguindo com o perfil antigo por carência",
+			"conversation_id", convID, "carencia", carenciaRevalidacao.String(), "err", err)
+		g.renovarCachePor(ctx, phone, antigo, carenciaRevalidacao)
+		return Resultado{Acao: AcaoEncaminhar, Perfil: antigo}
 	}
 	if !found {
 		g.log.Info("revalidacao: login não existe mais na base; reiniciando identificação", "conversation_id", convID)
@@ -243,7 +319,7 @@ func (g *Gate) revalidar(ctx context.Context, convID int64, phone string, antigo
 	if !perfil.TemEmpresaAtiva() {
 		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
 		g.log.Info("revalidacao: login sem empresa ativa", "conversation_id", convID)
-		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemAcesso}
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemAcesso, Motivo: motivoSemAcesso}
 	}
 	g.renovarCache(ctx, phone, &perfil)
 	g.salvarGate(ctx, convID, store.GateIdentificado, gateData{Perfil: &perfil})
@@ -257,15 +333,31 @@ func (g *Gate) tratarLogin(ctx context.Context, convID int64, phone, mensagem st
 	}
 
 	doc, login, found, err := g.resolverLogin(ctx, convID, mensagem)
+	if errors.Is(err, mongo.ErrDocumentoInvalido) {
+		// Existe, mas não dá para ler: repetir não resolve — transfere na hora.
+		g.log.Error("buscarPorLogin: cadastro ilegível; transferindo", "conversation_id", convID, "err", err)
+		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgFalhaTecnica, Motivo: motivoCadastroIlegivel, Origem: OrigemMongo}
+	}
 	if err != nil {
-		g.log.Error("buscarPorLogin", "conversation_id", convID, "err", err)
+		// Falha técnica (Mongo/extrator fora) NÃO é erro do cliente: não gasta
+		// tentativa. Mas também não vira laço infinito de "tente de novo": na
+		// 2ª seguida a conversa vai para o atendente.
+		gd.FalhasTecnicas++
+		g.log.Error("buscarPorLogin", "conversation_id", convID, "falhas_tecnicas", gd.FalhasTecnicas, "err", err)
+		if gd.FalhasTecnicas >= maxFalhasTecnicas {
+			g.salvarGate(ctx, convID, store.GateFalha, gateData{})
+			return Resultado{Acao: AcaoRotearHumano, Reply: msgFalhaTecnica, Motivo: motivoMongoFora, Origem: OrigemMongo}
+		}
+		g.salvarGate(ctx, convID, store.GateAguardLogin, gd)
 		return Resultado{Acao: AcaoPerguntar, Reply: msgErroTemporario}
 	}
+	gd.FalhasTecnicas = 0 // a origem respondeu: a sequência de falhas técnicas zera
 	if !found {
 		gd.Tentativas++
 		if gd.Tentativas >= g.maxTentativas {
 			g.salvarGate(ctx, convID, store.GateFalha, gateData{})
-			return Resultado{Acao: AcaoRotearHumano, Reply: msgFalhaLogin}
+			return Resultado{Acao: AcaoRotearHumano, Reply: msgFalhaLogin, Motivo: g.motivoTentativas("login")}
 		}
 		g.salvarGate(ctx, convID, store.GateAguardLogin, gd)
 		return Resultado{Acao: AcaoPerguntar, Reply: msgLoginNaoEncontrado}
@@ -275,7 +367,7 @@ func (g *Gate) tratarLogin(ctx context.Context, convID int64, phone, mensagem st
 	if !perfil.TemEmpresaAtiva() {
 		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
 		g.log.Info("login sem empresa ativa", "conversation_id", convID, "login", mascararLogin(login))
-		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemAcesso}
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemAcesso, Motivo: motivoSemAcesso}
 	}
 
 	expected, pergunta := g.alvoConfirmacao(doc)
@@ -312,7 +404,7 @@ func (g *Gate) tratarConfirmacao(ctx context.Context, convID int64, phone, mensa
 	gd.Tentativas++
 	if gd.Tentativas >= g.maxTentativas {
 		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
-		return Resultado{Acao: AcaoRotearHumano, Reply: msgFalhaConfirmacao}
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgFalhaConfirmacao, Motivo: g.motivoTentativas("confirmação")}
 	}
 	g.salvarGate(ctx, convID, store.GateAguardConfirm, gd)
 	return Resultado{Acao: AcaoPerguntar, Reply: msgConfirmacaoNaoConfere}
@@ -329,6 +421,13 @@ func (g *Gate) identificar(ctx context.Context, convID int64, phone string, perf
 
 // renovarCache grava/renova o perfil no cache telefone→perfil com novo TTL.
 func (g *Gate) renovarCache(ctx context.Context, phone string, perfil *mongo.Perfil) {
+	g.renovarCachePor(ctx, phone, perfil, g.ttl)
+}
+
+// renovarCachePor é renovarCache com validade explícita (carência da
+// revalidação: o perfil não pôde ser conferido na origem, então não ganha o
+// TTL cheio — só o prazo de carência, independente do IDENTITY_TTL).
+func (g *Gate) renovarCachePor(ctx context.Context, phone string, perfil *mongo.Perfil, ttl time.Duration) {
 	if phone == "" || perfil == nil {
 		return
 	}
@@ -340,7 +439,7 @@ func (g *Gate) renovarCache(ctx context.Context, phone string, perfil *mongo.Per
 		Phone:     phone,
 		Login:     perfil.Login,
 		Perfil:    string(b),
-		ExpiresAt: time.Now().Add(g.ttl),
+		ExpiresAt: time.Now().Add(ttl),
 	})
 }
 
@@ -385,10 +484,12 @@ func (g *Gate) resolverLogin(ctx context.Context, convID int64, mensagem string)
 	}
 	extraido, err := g.extractor.ExtrairLogin(ctx, mensagem)
 	if err != nil {
-		// Fail-soft: sem IA, seguimos só com o determinístico (já falhou) →
-		// trata como não encontrado, e o usuário tenta de novo.
-		g.log.Warn("extrator de login indisponível; seguindo sem fallback", "conversation_id", convID, "err", err)
-		return mongo.UsuarioDoc{}, "", false, nil
+		// Falha TÉCNICA do cérebro, não do cliente: sobe como erro para o
+		// tratarLogin pedir para repetir SEM gastar tentativa (e transferir na
+		// 2ª falha técnica seguida) — antes virava "não encontrado" e queimava
+		// uma das 3 tentativas do cliente (ZC-8).
+		g.log.Warn("extrator de login indisponível", "conversation_id", convID, "err", err)
+		return mongo.UsuarioDoc{}, "", false, fmt.Errorf("%w: %v", errExtractorIndisponivel, err)
 	}
 	if strings.TrimSpace(extraido) == "" {
 		return mongo.UsuarioDoc{}, "", false, nil
@@ -399,10 +500,34 @@ func (g *Gate) resolverLogin(ctx context.Context, convID int64, mensagem string)
 	return g.tentarCandidatos(ctx, extraido)
 }
 
-// tentarCandidatos busca no Mongo cada candidato derivado de `texto` na ordem,
-// devolvendo o primeiro que existir.
+// tentarCandidatos busca no Mongo os candidatos derivados de `texto`,
+// devolvendo o primeiro (na ordem dos candidatos) que existir. Com um repo
+// que suporta lote (UserRepoLote), é UMA consulta `$in` com prazo de
+// lookupCandidatosTimeout; senão, um lookup por candidato.
 func (g *Gate) tentarCandidatos(ctx context.Context, texto string) (mongo.UsuarioDoc, string, bool, error) {
-	for _, c := range loginCandidatos(texto) {
+	candidatos := loginCandidatos(texto)
+	if len(candidatos) == 0 {
+		return mongo.UsuarioDoc{}, "", false, nil
+	}
+	if lote, ok := g.repo.(UserRepoLote); ok {
+		lctx, cancel := context.WithTimeout(ctx, lookupCandidatosTimeout)
+		defer cancel()
+		docs, err := lote.BuscarPorLogins(lctx, candidatos)
+		if err != nil {
+			return mongo.UsuarioDoc{}, "", false, err
+		}
+		porLogin := make(map[string]mongo.UsuarioDoc, len(docs))
+		for _, d := range docs {
+			porLogin[d.Login] = d
+		}
+		for _, c := range candidatos {
+			if doc, found := porLogin[c]; found {
+				return doc, c, true, nil
+			}
+		}
+		return mongo.UsuarioDoc{}, "", false, nil
+	}
+	for _, c := range candidatos {
 		doc, found, err := g.repo.BuscarPorLogin(ctx, c)
 		if err != nil {
 			return mongo.UsuarioDoc{}, "", false, err
@@ -491,6 +616,29 @@ func mascararLogin(login string) string {
 		return strings.Repeat("*", len(r))
 	}
 	return strings.Repeat("*", len(r)-3) + string(r[len(r)-3:])
+}
+
+// rePedeAtendente: a palavra de escape precisa vir como palavra inteira.
+var rePedeAtendente = regexp.MustCompile(`(?i)(^|[^\p{L}])(atendente|humano|humana)([^\p{L}]|$)`)
+
+// reVerboDePedido: num texto longo, só transfere quando há um pedido de fato
+// ("quero falar com", "me passa para", "tem algum...") — "o atendente me disse
+// ontem que..." em meio a um relato não é pedido.
+var reVerboDePedido = regexp.MustCompile(`(?i)\b(falar|conversar|quero|queria|preciso|chamar|chama|passar|passa|transferir|transfere|encaminhar|encaminha|coloca|colocar|tem|existe|cad[eê]|me d[aá])\b`)
+
+// PedeAtendente detecta o pedido explícito do cliente por um atendente humano
+// (palavra de escape, ZC-8). Exportado para a engine/testes de outros lotes.
+// Mensagem curta (≤ 60 caracteres) com a palavra basta; mensagem longa exige
+// também um verbo de pedido perto.
+func PedeAtendente(mensagem string) bool {
+	m := strings.TrimSpace(mensagem)
+	if m == "" || !rePedeAtendente.MatchString(m) {
+		return false
+	}
+	if len([]rune(m)) <= 60 {
+		return true
+	}
+	return reVerboDePedido.MatchString(m)
 }
 
 // normalizar deixa a comparação de confirmação tolerante a caixa e espaços.

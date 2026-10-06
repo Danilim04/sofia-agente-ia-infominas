@@ -17,6 +17,7 @@ type Config struct {
 	PublicBaseURL string // URL pública (só para montar a URL do webhook nos logs)
 
 	ChatwootBaseURL   string
+	ChatwootPublicURL string // URL que um humano abre no navegador (links de alerta); vazio = ChatwootBaseURL
 	ChatwootAccountID string
 	ChatwootAPIToken  string
 	WebhookSecret     string
@@ -33,6 +34,13 @@ type Config struct {
 	// conversa é roteada quando a identificação falha.
 	LabelBot    string
 	LabelHumano string
+	// LabelReportar: etiqueta que o atendente aplica para reportar um problema
+	// do bot (ZC-8); o gateway avisa o responsável com o ID da ocorrência, a
+	// causa e o link da conversa. Vazio = desligado.
+	LabelReportar string
+	// TeamHumanoID: equipe do Chatwoot que recebe a conversa transferida pelo
+	// bot (ZC-3); 0 = não atribui equipe (só troca a etiqueta).
+	TeamHumanoID int64
 	// InboxID: caixa de entrada cujas conversas NOVAS ganham a LabelBot no
 	// conversation_created (o bot mesmo etiqueta — sem automation rule no
 	// Chatwoot, que o omni-route não gerencia). 0 = todas as caixas.
@@ -47,6 +55,15 @@ type Config struct {
 	// Brain: serviço Python que roda o agente (Contrato A, POST /chat).
 	BrainBaseURL string
 	BrainTimeout time.Duration
+	// TurnoTeto: prazo total do turno desde a MENSAGEM do cliente (coalescência
+	// + chamada ao cérebro + novas tentativas). Passado o teto, não há nova
+	// tentativa e a conversa é transferida (ZC-5). Default 45s.
+	TurnoTeto time.Duration
+
+	// Alertas ao responsável (ZC-7): a decisão de QUANDO alertar é do pacote
+	// alerta; o destino é o log `zapin_alerta` + este webhook opcional
+	// (POST JSON {"text": ...}). Vazio = só log.
+	AlertaWebhookURL string
 
 	// Identidade / gate.
 	ConfirmField  string        // dado pedido na confirmação: "email" (default) | "nome"
@@ -82,6 +99,8 @@ func Load() (*Config, error) {
 		LogLevel:          strings.ToLower(getenv("LOG_LEVEL", "info")),
 		PublicBaseURL:     strings.TrimRight(getenv("PUBLIC_BASE_URL", ""), "/"),
 		ChatwootBaseURL:   strings.TrimRight(getenv("CHATWOOT_BASE_URL", ""), "/"),
+		ChatwootPublicURL: strings.TrimRight(getenv("CHATWOOT_PUBLIC_URL", ""), "/"),
+		AlertaWebhookURL:  strings.TrimSpace(getenv("ALERTA_WEBHOOK_URL", "")),
 		ChatwootAccountID: getenv("CHATWOOT_ACCOUNT_ID", ""),
 		ChatwootAPIToken:  getenv("CHATWOOT_API_TOKEN", ""),
 		WebhookSecret:     getenv("WEBHOOK_SECRET", ""),
@@ -90,12 +109,14 @@ func Load() (*Config, error) {
 		PGURL:             strings.TrimSpace(getenv("PG_URL", "")),
 		LabelBot:          getenv("LABEL_BOT", "fila-bot"),
 		LabelHumano:       getenv("LABEL_HUMANO", "fila-humano"),
+		LabelReportar:     getenv("LABEL_REPORTAR", "reportar-zapin"),
 		MongoURI:          getenv("MONGO_URI", ""),
 		MongoDB:           getenv("MONGO_DB", "azapfy"),
 		MongoCollection:   getenv("MONGO_COLLECTION", "users"),
 		BrainBaseURL:      strings.TrimRight(getenv("BRAIN_BASE_URL", "http://localhost:8001"), "/"),
 		ConfirmField:      strings.ToLower(getenv("CONFIRM_FIELD", "email")),
 		InboxID:           int64(getenvInt("INBOX_ID", 0)),
+		TeamHumanoID:      int64(getenvInt("TEAM_HUMANO_ID", 0)),
 		MaxTentativas:     getenvInt("MAX_TENTATIVAS", 3),
 		SACBaseURL:        strings.TrimRight(getenv("SAC_BASE_URL", ""), "/"),
 		SACPortalURL:      strings.TrimRight(getenv("SAC_PORTAL_URL", "https://atendimento.azapfy.com.br"), "/"),
@@ -113,6 +134,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.BrainTimeout, err = parseDuration(getenv("BRAIN_TIMEOUT", "60s")); err != nil {
 		return nil, fmt.Errorf("BRAIN_TIMEOUT inválido: %w", err)
+	}
+	if cfg.TurnoTeto, err = parseDuration(getenv("TURNO_TETO", "45s")); err != nil {
+		return nil, fmt.Errorf("TURNO_TETO inválido: %w", err)
 	}
 	if cfg.IdentityTTL, err = parseDuration(getenv("IDENTITY_TTL", "24h")); err != nil {
 		return nil, fmt.Errorf("IDENTITY_TTL inválido: %w", err)

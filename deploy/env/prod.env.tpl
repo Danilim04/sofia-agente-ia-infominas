@@ -27,7 +27,7 @@ APP_TITLE=Azapfy Suporte IA
 
 # --- Cérebro: tuning ----------------------------------------------------------
 LLM_TEMPERATURE=0.2
-LLM_TIMEOUT=45
+LLM_TIMEOUT=20
 RAG_TOP_K=3
 RAG_CHUNK_SIZE=800
 RAG_CHUNK_OVERLAP=120
@@ -130,3 +130,31 @@ SAC_CONFIG_TTL=10m
 TOOLS_API_TOKEN=${TOOLS_API_TOKEN}
 SAC_TOOLS_TOKEN=${TOOLS_API_TOKEN}
 SAC_TOOLS_TIMEOUT=30
+
+# --- Cérebro: resiliência a falhas (lote ZC) ---------------------------------
+# Teto de tokens de SAÍDA por chamada ao OpenRouter. Sem teto, o OpenRouter
+# reserva 65.536 tokens por chamada e devolve 402 quando o saldo não cobre a
+# reserva. Agente: 1024 (respostas curtas + tool calls); classificador e
+# extrator de login (mesmo cliente): 256.
+LLM_MAX_TOKENS=1024
+LLM_MAX_TOKENS_CLASSIFICADOR=256
+# Prazo TOTAL do turno no cérebro (s): menor que TURNO_TETO (45s) e que
+# BRAIN_TIMEOUT (60s) — o cérebro desiste primeiro e devolve falha classificada.
+BRAIN_TURNO_PRAZO=40
+# Equipe do Chatwoot que recebe a conversa transferida pelo bot (ZC-3); id da
+# instância (GitHub variable TEAM_HUMANO_ID; vazia = 0 = só troca a etiqueta).
+TEAM_HUMANO_ID=${TEAM_HUMANO_ID}
+# Teto do turno desde a mensagem do cliente (coalescência + cérebro + novas
+# tentativas em falha transitória: 2 s e 5 s). Falha definitiva não repete.
+TURNO_TETO=45s
+# Alertas ao responsável (falha definitiva, >5% de turnos com falha em 15 min,
+# disjuntor aberto, etiqueta reportar-zapin): sempre no log `zapin_alerta`;
+# opcionalmente POST JSON {"text": ...} nesta URL (GitHub Secret; vazio = só log).
+ALERTA_WEBHOOK_URL=${ALERTA_WEBHOOK_URL}
+# URL pública do Chatwoot (link da conversa nos alertas; CHATWOOT_BASE_URL é
+# interna à rede docker). GitHub variable; vazia = usa a interna.
+CHATWOOT_PUBLIC_URL=${CHATWOOT_PUBLIC_URL}
+# Etiqueta que o atendente aplica para reportar um problema do bot: o gateway
+# avisa o responsável com ID da ocorrência, causa e link (vazio = desligado).
+# A etiqueta/macro em si é criada à mão no Chatwoot.
+LABEL_REPORTAR=reportar-zapin

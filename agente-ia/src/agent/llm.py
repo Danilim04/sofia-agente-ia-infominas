@@ -34,6 +34,7 @@ def _openrouter_headers(settings: Settings) -> dict[str, str]:
 def _build_chat_openrouter(
     model: str,
     temperature: float,
+    max_tokens: int,
     settings: Optional[Settings] = None,
 ) -> "BaseChatModel":
     from langchain_openai import ChatOpenAI
@@ -44,6 +45,10 @@ def _build_chat_openrouter(
         api_key=settings.openrouter_api_key,
         model=model,
         temperature=temperature,
+        # Teto de tokens de saída SEMPRE definido: sem ele o OpenRouter reserva
+        # o máximo do modelo (65.536) por chamada e devolve 402 quando o saldo
+        # não cobre a reserva (incidente de 2026-10-02).
+        max_tokens=max_tokens,
         default_headers=_openrouter_headers(settings),
         # Timeout por chamada + 1 retry: uma chamada pendurada não pode estourar
         # o BRAIN_TIMEOUT do gateway (60s) e virar erro genérico pro cliente.
@@ -59,6 +64,7 @@ def get_llm() -> "BaseChatModel":
     return _build_chat_openrouter(
         model=settings.openrouter_model,
         temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
         settings=settings,
     )
 
@@ -67,12 +73,15 @@ def get_llm() -> "BaseChatModel":
 def get_classifier_llm() -> "BaseChatModel":
     """LLM barato/rápido usado pelo classificador de segurança (Épico 6).
 
-    Temperature fixa em 0.0 — classificação é determinística por design.
+    Temperature fixa em 0.0 — classificação é determinística por design. O
+    extrator de login (`src/identity/login_extractor.py`) usa este mesmo
+    cliente, então `LLM_MAX_TOKENS_CLASSIFICADOR` vale para os dois.
     """
     settings = get_settings()
     return _build_chat_openrouter(
         model=settings.openrouter_classifier_model,
         temperature=0.0,
+        max_tokens=settings.llm_max_tokens_classificador,
         settings=settings,
     )
 
