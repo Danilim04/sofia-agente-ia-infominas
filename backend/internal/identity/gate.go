@@ -187,7 +187,7 @@ func (g *Gate) Process(ctx context.Context, convID int64, phone, mensagem string
 	default: // novo
 		if p := g.cacheHit(ctx, phone); p != nil {
 			g.salvarGate(ctx, convID, store.GateIdentificado, gateData{Perfil: p})
-			g.log.Info("identidade via cache (base própria)", "conversation_id", convID, "login", p.Login)
+			g.log.Info("identidade via cache (base própria)", "conversation_id", convID, "login", mascararLogin(p.Login))
 			return Resultado{Acao: AcaoEncaminhar, Perfil: p}
 		}
 		return g.iniciar(ctx, convID, phone)
@@ -274,7 +274,7 @@ func (g *Gate) tratarLogin(ctx context.Context, convID int64, phone, mensagem st
 	perfil := mongo.Projetar(doc)
 	if !perfil.TemEmpresaAtiva() {
 		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
-		g.log.Info("login sem empresa ativa", "conversation_id", convID, "login", login)
+		g.log.Info("login sem empresa ativa", "conversation_id", convID, "login", mascararLogin(login))
 		return Resultado{Acao: AcaoRotearHumano, Reply: msgSemAcesso}
 	}
 
@@ -301,7 +301,7 @@ func (g *Gate) tratarLogin(ctx context.Context, convID int64, phone, mensagem st
 		Tentativas:   gd.Tentativas,
 	}
 	g.salvarGate(ctx, convID, store.GateAguardConfirm, ngd)
-	g.log.Info("login resolvido, pedindo confirmação", "conversation_id", convID, "login", login, "confirm_field", g.confirmField)
+	g.log.Info("login resolvido, pedindo confirmação", "conversation_id", convID, "login", mascararLogin(login), "confirm_field", g.confirmField)
 	return Resultado{Acao: AcaoPerguntar, Reply: pergunta}
 }
 
@@ -323,7 +323,7 @@ func (g *Gate) tratarConfirmacao(ctx context.Context, convID int64, phone, mensa
 func (g *Gate) identificar(ctx context.Context, convID int64, phone string, perfil *mongo.Perfil) Resultado {
 	g.renovarCache(ctx, phone, perfil)
 	g.salvarGate(ctx, convID, store.GateIdentificado, gateData{Perfil: perfil})
-	g.log.Info("identidade confirmada", "conversation_id", convID, "login", perfil.Login)
+	g.log.Info("identidade confirmada", "conversation_id", convID, "login", mascararLogin(perfil.Login))
 	return Resultado{Acao: AcaoSaudar, Reply: saudacao(perfil)}
 }
 
@@ -393,7 +393,9 @@ func (g *Gate) resolverLogin(ctx context.Context, convID int64, mensagem string)
 	if strings.TrimSpace(extraido) == "" {
 		return mongo.UsuarioDoc{}, "", false, nil
 	}
-	g.log.Info("login extraído por IA", "conversation_id", convID, "login_extraido", extraido)
+	// ZG-2: o valor em claro só em DEBUG; em INFO fica mascarado.
+	g.log.Info("login extraído por IA", "conversation_id", convID, "login_extraido", mascararLogin(extraido))
+	g.log.Debug("login extraído por IA (valor)", "conversation_id", convID, "login_extraido", extraido)
 	return g.tentarCandidatos(ctx, extraido)
 }
 
@@ -477,6 +479,18 @@ func cpfCnpjDigitos(s string) string {
 		}
 	}
 	return digitos.String()
+}
+
+// mascararLogin esconde o login nos logs de nível INFO (ZG-2 / LGPD): só os 3
+// últimos caracteres ficam visíveis — o suficiente para correlacionar linhas
+// da mesma conversa, não para recompor um CPF ou e-mail. Mesma convenção de
+// `_mascarar` em agente-ia/server.py.
+func mascararLogin(login string) string {
+	r := []rune(strings.TrimSpace(login))
+	if len(r) <= 3 {
+		return strings.Repeat("*", len(r))
+	}
+	return strings.Repeat("*", len(r)-3) + string(r[len(r)-3:])
 }
 
 // normalizar deixa a comparação de confirmação tolerante a caixa e espaços.
