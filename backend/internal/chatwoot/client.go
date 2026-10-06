@@ -83,6 +83,20 @@ func (c *Client) GetConversation(ctx context.Context, convID int64) (*Conversati
 	return &out, nil
 }
 
+// Profile devolve o usuário dono do token (GET /api/v1/profile) — é assim
+// que o gateway descobre o id do próprio usuário "Zapin" no boot (ZD-1), para
+// distinguir "conversa atribuída a mim" de "conversa com atendente humano".
+func (c *Client) Profile(ctx context.Context) (*User, error) {
+	var out User
+	if err := c.do(ctx, http.MethodGet, c.baseURL+"/api/v1/profile", nil, &out); err != nil {
+		return nil, err
+	}
+	if out.ID == 0 {
+		return nil, fmt.Errorf("chatwoot GET /api/v1/profile: resposta sem id de usuário")
+	}
+	return &out, nil
+}
+
 // ToggleStatus altera o status da conversa (open/resolved/pending/snoozed).
 func (c *Client) ToggleStatus(ctx context.Context, convID int64, status string) error {
 	body := map[string]any{"status": status}

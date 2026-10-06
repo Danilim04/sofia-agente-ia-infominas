@@ -973,3 +973,285 @@ func TestPedidoDeAtendentePassaPelaTransferenciaUnica(t *testing.T) {
 		t.Fatalf("cliente devia receber a confirmação do encaminhamento: %q", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ZD-1: conversa com responsável humano não vai ao cérebro
+// ---------------------------------------------------------------------------
+
+// mensagemDoCliente monta um message_created de entrada do telefone
+// identificado, na conversa dada.
+func mensagemDoCliente(conv chatwoot.Conversation, content, waid string) *chatwoot.MessageCreated {
+	return &chatwoot.MessageCreated{
+		MessageType:  chatwoot.MessageIncoming,
+		Content:      content,
+		SourceID:     waid,
+		Sender:       chatwoot.Sender{Type: "contact", Name: "Daniel", PhoneNumber: telefoneIdentificado},
+		Conversation: conv,
+	}
+}
+
+// naFila informa se a conversa tem worker/fila aberta (a mensagem passou da borda).
+func naFila(e *Engine, convID int64) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, ok := e.filas[convID]
+	return ok
+}
+
+// esperarCerebro aguarda (até 3 s) o cérebro ser chamado pelo worker.
+func esperarCerebro(br *fakeBrain, n int) bool {
+	for i := 0; i < 300; i++ {
+		if br.total() >= n {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return br.total() >= n
+}
+
+// TestMensagemComResponsavelHumanoNaoVaiAoCerebro: conversa na fila do bot
+// mas atribuída a um atendente (assignee ≠ usuário do bot) → a mensagem é
+// descartada na borda, nenhuma chamada a /chat, nenhuma resposta, e a
+// etiqueta fila-bot é trocada por fila-humano (a conversa é da equipe).
+func TestMensagemComResponsavelHumanoNaoVaiAoCerebro(t *testing.T) {
+	e, _, cw, br := engineCompleta(t)
+	e.cfg.BotUserID = 3
+	conv := conversaDoBot(160, chatwoot.StatusOpen)
+	conv.Meta.Assignee = &chatwoot.User{ID: 9, Name: "Ana (suporte)"}
+
+	e.HandleMessageCreated(context.Background(), mensagemDoCliente(conv, "e aí, resolveu?", "waid-zd1-1"))
+
+	if naFila(e, 160) {
+		t.Fatal("conversa com responsável humano não pode abrir fila/worker (iria ao cérebro)")
+	}
+	if br.total() != 0 {
+		t.Fatalf("cérebro não pode ser chamado; chamadas=%d", br.total())
+	}
+	if got := cw.mensagens(160, false); len(got) != 0 {
+		t.Fatalf("bot não responde conversa com atendente: %q", got)
+	}
+	if labels := cw.labels[160]; len(labels) != 1 || labels[0] != "fila-humano" {
+		t.Fatalf("esperava fila-bot trocada por fila-humano, veio %v", labels)
+	}
+}
+
+// TestMensagemAtribuidaAoProprioBotSegueParaOCerebro: responsável = o
+// próprio usuário do bot (BOT_USER_ID) não é atendente humano — segue normal.
+func TestMensagemAtribuidaAoProprioBotSegueParaOCerebro(t *testing.T) {
+	e, _, cw, br := engineCompleta(t)
+	e.cfg.BotUserID = 3
+	conv := conversaDoBot(161, chatwoot.StatusOpen)
+	conv.Meta.Assignee = &chatwoot.User{ID: 3, Name: "Zapin"}
+
+	e.HandleMessageCreated(context.Background(), mensagemDoCliente(conv, "oi", "waid-zd1-2"))
+
+	if !naFila(e, 161) {
+		t.Fatal("conversa atribuída ao próprio bot devia entrar na fila")
+	}
+	if !esperarCerebro(br, 1) {
+		t.Fatal("cérebro devia ter sido chamado")
+	}
+	if _, ok := cw.labels[161]; ok {
+		t.Fatalf("etiqueta não devia mudar: %v", cw.labels[161])
+	}
+}
+
+// TestSemBotUserIDQualquerResponsavelEhHumano: sem BOT_USER_ID (descoberta
+// falhou), não há como saber quem é o bot — qualquer responsável cala o bot.
+func TestSemBotUserIDQualquerResponsavelEhHumano(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	e.cfg.BotUserID = 0
+	conv := conversaDoBot(162, chatwoot.StatusOpen)
+	conv.Meta.Assignee = &chatwoot.User{ID: 3}
+
+	e.HandleMessageCreated(context.Background(), mensagemDoCliente(conv, "oi", "waid-zd1-3"))
+
+	if naFila(e, 162) || br.total() != 0 {
+		t.Fatal("sem o id do bot, conversa com responsável não vai ao cérebro")
+	}
+}
+
+// TestConversaComResponsavelHumanoNaoEhAdotada: conversa nova (ou reaberta)
+// já atribuída a um atendente não ganha fila-bot.
+func TestConversaComResponsavelHumanoNaoEhAdotada(t *testing.T) {
+	e, _, cw, _ := engineCompleta(t)
+	e.cfg.BotUserID = 3
+	conv := chatwoot.Conversation{ID: 163, Status: chatwoot.StatusOpen}
+	conv.Meta.Assignee = &chatwoot.User{ID: 9, Name: "Ana"}
+
+	if e.adotarConversa(context.Background(), &conv) {
+		t.Fatal("conversa com responsável humano não pode ser adotada pela fila do bot")
+	}
+	if _, ok := cw.labels[163]; ok {
+		t.Fatalf("nenhuma etiqueta devia ser aplicada: %v", cw.labels[163])
+	}
+	// Mensagem nessa conversa (sem etiqueta de fila) também não é adotada.
+	e.HandleMessageCreated(context.Background(), mensagemDoCliente(conv, "oi", "waid-zd1-4"))
+	if naFila(e, 163) {
+		t.Fatal("mensagem em conversa com responsável humano não entra na fila")
+	}
+}
+
+// TestRespostaNaoSaiSeHumanoAssumiuEnquantoCerebroPensava: a reconferência
+// antes de enviar (ZC-6) também olha o responsável: atendente se atribuiu a
+// conversa enquanto o cérebro respondia → resposta descartada.
+func TestRespostaNaoSaiSeHumanoAssumiuEnquantoCerebroPensava(t *testing.T) {
+	e, _, cw, br := engineCompleta(t)
+	e.cfg.BotUserID = 3
+	comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){func() (*brain.ChatResponse, error) {
+		c := conversaDoBot(164, chatwoot.StatusOpen) // etiqueta intacta...
+		c.Meta.Assignee = &chatwoot.User{ID: 9}      // ...mas um humano se atribuiu
+		cw.mu.Lock()
+		cw.aoVivo[164] = &c
+		cw.mu.Unlock()
+		return &brain.ChatResponse{Reply: "resposta atrasada do bot"}, nil
+	}}
+
+	turno(e, 164, e.agora())
+
+	if got := cw.mensagens(164, false); len(got) != 0 {
+		t.Fatalf("conversa assumida por atendente não recebe resposta do bot: %q", got)
+	}
+	// Atribuída ao próprio bot: envia.
+	c := conversaDoBot(165, chatwoot.StatusOpen)
+	c.Meta.Assignee = &chatwoot.User{ID: 3}
+	cw.aoVivo[165] = &c
+	br.respostas = []func() (*brain.ChatResponse, error){responde("oi")}
+	turno(e, 165, e.agora())
+	if got := cw.mensagens(165, false); len(got) != 1 || got[0] != "oi" {
+		t.Fatalf("atribuída ao próprio bot devia responder: %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ZD-2: anexo/áudio avisa e transfere · caixa de entrada fixa
+// ---------------------------------------------------------------------------
+
+// esperarMensagens aguarda (até 3 s) n mensagens públicas na conversa.
+func esperarMensagens(cw *fakeChatwoot, conv int64, n int) []string {
+	for i := 0; i < 300; i++ {
+		if got := cw.mensagens(conv, false); len(got) >= n {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return cw.mensagens(conv, false)
+}
+
+// TestMensagemSoComAnexoAvisaETransfere: áudio sem texto → o cliente recebe
+// o aviso (não fica em silêncio), a conversa vai para fila-humano com nota
+// privada citando o áudio, e o cérebro NÃO é chamado.
+func TestMensagemSoComAnexoAvisaETransfere(t *testing.T) {
+	e, st, cw, br := engineCompleta(t)
+	ctx := context.Background()
+
+	e.processarLote(ctx, []inbound{{
+		conv: conversaDoBot(170, chatwoot.StatusOpen), phone: telefoneIdentificado, anexo: chatwoot.AnexoAudio,
+	}})
+
+	if br.total() != 0 {
+		t.Fatalf("anexo não vai ao cérebro; chamadas=%d", br.total())
+	}
+	publicas := cw.mensagens(170, false)
+	if len(publicas) != 1 || publicas[0] != FormatWhatsApp(MsgAnexo(chatwoot.AnexoAudio)) {
+		t.Fatalf("esperava só o aviso de áudio ao cliente, veio %q", publicas)
+	}
+	if !strings.Contains(publicas[0], "áudio") || !strings.Contains(publicas[0], "atendente") {
+		t.Fatalf("aviso devia citar o áudio e o encaminhamento: %q", publicas[0])
+	}
+	if labels := cw.labels[170]; len(labels) != 1 || labels[0] != "fila-humano" {
+		t.Fatalf("esperava fila-humano, veio %v", labels)
+	}
+	notas := cw.mensagens(170, true)
+	if len(notas) != 1 || !strings.Contains(notas[0], "áudio") || !reIDOcorrencia.MatchString(notas[0]) {
+		t.Fatalf("nota privada devia citar o áudio e o ID: %q", notas)
+	}
+	if f, _ := st.UltimaFalha(ctx, 170); f == nil || f.Origem != OrigemAnexo {
+		t.Fatalf("registro com origem anexo esperado: %+v", f)
+	}
+}
+
+// TestAnexoComLegendaTambemTransfere: imagem com legenda ("segue o print") —
+// o bot não vê a imagem, então a legenda sozinha não vai ao cérebro.
+func TestAnexoComLegendaTambemTransfere(t *testing.T) {
+	e, _, cw, br := engineCompleta(t)
+	e.processarLote(context.Background(), []inbound{
+		{conv: conversaDoBot(171, chatwoot.StatusOpen), phone: telefoneIdentificado, content: "oi"},
+		{conv: conversaDoBot(171, chatwoot.StatusOpen), phone: telefoneIdentificado, content: "segue o print do erro", anexo: chatwoot.AnexoImagem},
+	})
+	if br.total() != 0 {
+		t.Fatalf("rajada com anexo não vai ao cérebro; chamadas=%d", br.total())
+	}
+	if got := cw.mensagens(171, false); len(got) != 1 || !strings.Contains(got[0], "imagem") {
+		t.Fatalf("esperava o aviso de imagem, veio %q", got)
+	}
+}
+
+// TestMensagemSoComAnexoEntraNaFila: na borda, message_created sem texto e
+// com anexo NÃO é descartado (era a causa das 38 mensagens sem resposta):
+// entra na fila e o worker avisa + transfere.
+func TestMensagemSoComAnexoEntraNaFila(t *testing.T) {
+	e, _, cw, br := engineCompleta(t)
+	msg := mensagemDoCliente(conversaDoBot(172, chatwoot.StatusOpen), "", "waid-zd2-1")
+	msg.Attachments = []chatwoot.Attachment{{ID: 1, FileType: "audio", DataURL: "http://cw/audio.ogg"}}
+
+	e.HandleMessageCreated(context.Background(), msg)
+
+	if !naFila(e, 172) {
+		t.Fatal("mensagem só com anexo devia entrar na fila da conversa (não ser descartada)")
+	}
+	if got := esperarMensagens(cw, 172, 1); len(got) != 1 || !strings.Contains(got[0], "áudio") {
+		t.Fatalf("cliente devia receber o aviso de áudio: %q", got)
+	}
+	if br.total() != 0 {
+		t.Fatalf("anexo não vai ao cérebro; chamadas=%d", br.total())
+	}
+	// Mensagem realmente vazia (sem texto e sem anexo) continua ignorada.
+	e.HandleMessageCreated(context.Background(), mensagemDoCliente(conversaDoBot(173, chatwoot.StatusOpen), "", "waid-zd2-2"))
+	if naFila(e, 173) {
+		t.Fatal("mensagem vazia sem anexo não entra na fila")
+	}
+}
+
+// TestAnexoEmConversaJaRoteadaNaoTransfereDeNovo: conversa que o gate já
+// mandou para a equipe (GateFalha) recebe anexo → nada (sem 2ª transferência).
+func TestAnexoEmConversaJaRoteadaNaoTransfereDeNovo(t *testing.T) {
+	e, st, cw, _ := engineCompleta(t)
+	ctx := context.Background()
+	_ = st.SetGate(ctx, &store.GateState{ConversationID: 174, State: store.GateFalha})
+
+	e.processarLote(ctx, []inbound{{conv: conversaDoBot(174, chatwoot.StatusOpen), phone: "5511000000174", anexo: chatwoot.AnexoImagem}})
+
+	if got := cw.mensagens(174, false); len(got) != 0 {
+		t.Fatalf("conversa já roteada não recebe novo aviso: %q", got)
+	}
+	if _, ok := cw.labels[174]; ok {
+		t.Fatalf("sem nova transferência: etiqueta não devia mudar: %v", cw.labels[174])
+	}
+}
+
+// TestMensagemForaDaCaixaDoBotEhIgnorada: com INBOX_ID fixado, mensagem de
+// outra caixa é ignorada na borda mesmo com fila-bot; da caixa certa, entra.
+func TestMensagemForaDaCaixaDoBotEhIgnorada(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	e.cfg.InboxID = 5
+	ctx := context.Background()
+
+	outra := conversaDoBot(175, chatwoot.StatusOpen)
+	outra.InboxID = 7 // ex.: wpp-csassistente
+	e.HandleMessageCreated(ctx, mensagemDoCliente(outra, "oi", "waid-zd2-3"))
+	if naFila(e, 175) {
+		t.Fatal("mensagem de outra caixa não pode entrar na fila do bot")
+	}
+
+	certa := conversaDoBot(176, chatwoot.StatusOpen)
+	certa.InboxID = 5
+	e.HandleMessageCreated(ctx, mensagemDoCliente(certa, "oi", "waid-zd2-4"))
+	if !naFila(e, 176) {
+		t.Fatal("mensagem da caixa do bot devia entrar na fila")
+	}
+	if !esperarCerebro(br, 1) {
+		t.Fatal("cérebro devia ter sido chamado para a caixa do bot")
+	}
+}

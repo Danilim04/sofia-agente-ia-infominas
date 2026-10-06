@@ -134,6 +134,24 @@ func (e *Engine) HandleMessageCreated(ctx context.Context, msg *chatwoot.Message
 		e.log.Info("mensagem de grupo ignorada", "conversation_id", convID)
 		return
 	}
+	// Caixa fixa (ZD-2): com INBOX_ID definido o bot só atende a própria caixa
+	// — mensagem de outra caixa é ignorada mesmo que a conversa tenha fila-bot
+	// (etiqueta aplicada à mão ou por uma regra antiga). 0 = todas (só dev).
+	if !e.cfg.AtendeTodasAsCaixas() && msg.Conversation.InboxID != e.cfg.InboxID {
+		e.log.Info("mensagem ignorada: conversa fora da caixa do bot",
+			"conversation_id", convID, "inbox_id", msg.Conversation.InboxID, "inbox_bot", e.cfg.InboxID)
+		return
+	}
+	// Responsável humano (ZD-1): conversa atribuída a um atendente é da
+	// equipe — o bot não responde nem adota, mesmo que ainda tenha fila-bot
+	// (o atendente se atribuiu sem trocar a etiqueta). Aqui a etiqueta é
+	// corrigida: fila-bot sai, fila-humano entra.
+	if humano := e.responsavelHumano(&msg.Conversation); humano != nil {
+		e.log.Info("mensagem ignorada: conversa com atendente humano responsável",
+			"conversation_id", convID, "assignee_id", humano.ID, "assignee", humano.Name)
+		e.cederAoHumano(ctx, &msg.Conversation)
+		return
+	}
 	// Gate de etiqueta (opcional): só atua na fila do bot. Vazio = processa tudo.
 	if e.cfg.LabelBot != "" && !chatwoot.HasLabel(msg.Conversation.Labels, e.cfg.LabelBot) {
 		// O Chatwoot REABRE conversa resolvida quando o contato volta a
@@ -152,7 +170,10 @@ func (e *Engine) HandleMessageCreated(ctx context.Context, msg *chatwoot.Message
 	// Higiene de envelope (F2): o gate/cérebro veem a fala, não a assinatura
 	// que o relay grudou ("**Fulano:**\n...").
 	content := StripAssinatura(msg.Content)
-	if content == "" {
+	// Mensagem só com anexo (áudio/imagem/arquivo) NÃO é descartada (ZD-2):
+	// segue para a fila e vira aviso + transferência no worker. Vazia de
+	// verdade (sem texto e sem anexo) continua ignorada.
+	if content == "" && !msg.TemAnexo() {
 		return
 	}
 
@@ -188,7 +209,60 @@ func (e *Engine) HandleMessageCreated(ctx context.Context, msg *chatwoot.Message
 		phone:      msg.Phone(),
 		content:    content,
 		recebidoEm: recebido,
+		anexo:      msg.TipoAnexo(),
 	})
+}
+
+// transferirPorAnexo avisa o cliente que o Zapin não lê anexo e passa a
+// conversa à equipe pelo caminho único (ZC-3). Se o gate já roteou a conversa
+// (GateFalha — atendente já avisado), só loga: nada de segunda transferência.
+func (e *Engine) transferirPorAnexo(ctx context.Context, conv *chatwoot.Conversation, tipo string) {
+	if gs, err := e.st.GetGate(ctx, conv.ID); err == nil && gs != nil && gs.State == store.GateFalha {
+		e.log.Info("anexo em conversa já roteada para a equipe: sem nova transferência",
+			"conversation_id", conv.ID, "anexo", tipo)
+		return
+	}
+	e.log.Info("anexo recebido: avisando o cliente e transferindo", "conversation_id", conv.ID, "anexo", tipo)
+	e.TransferirParaHumano(ctx, conv, Transferencia{
+		Origem:   OrigemAnexo,
+		Causa:    "cliente enviou " + descreveAnexo(tipo) + " — o Zapin não lê anexos",
+		Detalhe:  "file_type=" + tipo,
+		Mensagem: MsgAnexo(tipo),
+	})
+}
+
+// responsavelHumano devolve o atendente responsável pela conversa (assignee)
+// quando ele NÃO é o usuário do próprio bot; nil = sem responsável ou
+// atribuída ao Zapin. Sem BOT_USER_ID (0: descoberta no boot falhou) não há
+// como reconhecer o bot — qualquer responsável conta como humano: é melhor
+// calar numa conversa atribuída a si mesmo do que falar por cima de um
+// atendente.
+func (e *Engine) responsavelHumano(conv *chatwoot.Conversation) *chatwoot.User {
+	a := conv.Meta.Assignee
+	if a == nil || a.ID == 0 {
+		return nil
+	}
+	if e.cfg.BotUserID != 0 && a.ID == e.cfg.BotUserID {
+		return nil
+	}
+	return a
+}
+
+// cederAoHumano tira a conversa da fila do bot quando um atendente se
+// atribuiu a ela: fila-bot → fila-humano (só se a conversa tinha fila-bot;
+// sem etiqueta de fila não há o que corrigir — e sem LabelHumano configurada
+// a fila-bot é apenas removida).
+func (e *Engine) cederAoHumano(ctx context.Context, conv *chatwoot.Conversation) {
+	if e.cfg.LabelBot == "" || !chatwoot.HasLabel(conv.Labels, e.cfg.LabelBot) {
+		return
+	}
+	labels := chatwoot.ReplaceLabel(conv.Labels, e.cfg.LabelBot, e.cfg.LabelHumano)
+	if err := e.cw.SetLabels(ctx, conv.ID, labels); err != nil {
+		e.log.Error("ceder conversa ao atendente: etiqueta", "conversation_id", conv.ID, "err", err)
+		return
+	}
+	e.log.Info("conversa cedida ao atendente: etiqueta do bot removida",
+		"conversation_id", conv.ID, "labels", labels)
 }
 
 // dormirDeVerdade espera d ou o cancelamento do ctx (false). Os testes trocam
@@ -213,6 +287,16 @@ func (e *Engine) processarLote(ctx context.Context, lote []inbound) {
 	}
 	ultimo := lote[len(lote)-1]
 	convID := ultimo.conv.ID
+
+	// Anexo na rajada (ZD-2): o bot não lê áudio/imagem/arquivo — avisa o
+	// cliente e transfere, sem gate e sem cérebro. Conversa já roteada
+	// (GateFalha) não transfere de novo.
+	for _, m := range lote {
+		if m.anexo != "" {
+			e.transferirPorAnexo(ctx, &ultimo.conv, m.anexo)
+			return
+		}
+	}
 
 	textos := make([]string, 0, len(lote))
 	for _, m := range lote {
@@ -336,6 +420,12 @@ func (e *Engine) adotarConversa(ctx context.Context, conv *chatwoot.Conversation
 		e.log.Info("conversa de grupo não adotada pela fila do bot", "conversation_id", conv.ID)
 		return false
 	}
+	// Já atribuída a um atendente (ZD-1): é da equipe, o bot não adota.
+	if humano := e.responsavelHumano(conv); humano != nil {
+		e.log.Info("conversa com atendente responsável não adotada pela fila do bot",
+			"conversation_id", conv.ID, "assignee_id", humano.ID)
+		return false
+	}
 	if chatwoot.HasLabel(conv.Labels, e.cfg.LabelBot) ||
 		(e.cfg.LabelHumano != "" && chatwoot.HasLabel(conv.Labels, e.cfg.LabelHumano)) {
 		return false
@@ -451,18 +541,21 @@ func (e *Engine) encaminhar(ctx context.Context, conv *chatwoot.Conversation, ph
 // do bot não sai por cima da conversa humana. Fail-open: se a consulta falhar,
 // envia — um Chatwoot instável não pode calar o bot.
 //
-// Deliberadamente NÃO olha o `assignee`: o Chatwoot atribui a conversa a quem
-// responde (self-assign), então após a 1ª resposta do bot o responsável seria
-// o próprio usuário da API do gateway e toda resposta seguinte seria calada.
+// Também olha o responsável (ZD-1): atendente que se atribuiu a conversa sem
+// trocar a etiqueta cala o bot do mesmo jeito. O próprio usuário do bot
+// (BOT_USER_ID, descoberto no boot) como responsável não conta — ver
+// responsavelHumano.
 func (e *Engine) aindaComOBot(ctx context.Context, convID int64) bool {
-	if e.cfg.LabelBot == "" && e.cfg.LabelHumano == "" {
-		return true
-	}
 	conv, err := e.cw.GetConversation(ctx, convID)
 	if err != nil || conv == nil {
 		e.log.Warn("reconferir etiqueta antes de enviar: consulta falhou; enviando mesmo assim",
 			"conversation_id", convID, "err", err)
 		return true
+	}
+	if humano := e.responsavelHumano(conv); humano != nil {
+		e.log.Info("resposta descartada: atendente assumiu a conversa",
+			"conversation_id", convID, "assignee_id", humano.ID, "assignee", humano.Name)
+		return false
 	}
 	if e.cfg.LabelHumano != "" && chatwoot.HasLabel(conv.Labels, e.cfg.LabelHumano) {
 		e.log.Info("resposta descartada: conversa já está com atendente (fila humana)",

@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -41,10 +42,18 @@ type Config struct {
 	// TeamHumanoID: equipe do Chatwoot que recebe a conversa transferida pelo
 	// bot (ZC-3); 0 = não atribui equipe (só troca a etiqueta).
 	TeamHumanoID int64
-	// InboxID: caixa de entrada cujas conversas NOVAS ganham a LabelBot no
-	// conversation_created (o bot mesmo etiqueta — sem automation rule no
-	// Chatwoot, que o omni-route não gerencia). 0 = todas as caixas.
+	// InboxID: caixa de entrada do bot. Conversas NOVAS dela ganham a LabelBot
+	// no conversation_created (o bot mesmo etiqueta — sem automation rule no
+	// Chatwoot, que o omni-route não gerencia) e SÓ mensagens dela são
+	// atendidas (ZD-2). 0 = todas as caixas — aceitável só em dev; o deploy de
+	// produção (deploy/env/render-env.sh) exige um id > 0.
 	InboxID int64
+	// BotUserID: id do usuário do Chatwoot que o gateway usa (o "Zapin").
+	// Conversa cujo responsável (assignee) é OUTRO usuário está com um
+	// atendente humano e o bot não responde (ZD-1). 0 = descobrir no boot
+	// pelo próprio token (GET /api/v1/profile); se a descoberta falhar,
+	// QUALQUER responsável é tratado como humano.
+	BotUserID int64
 
 	// Mongo da Azapfy (lookup de usuário por login — a 1ª "tool").
 	MongoURI        string
@@ -115,8 +124,8 @@ func Load() (*Config, error) {
 		MongoCollection:   getenv("MONGO_COLLECTION", "users"),
 		BrainBaseURL:      strings.TrimRight(getenv("BRAIN_BASE_URL", "http://localhost:8001"), "/"),
 		ConfirmField:      strings.ToLower(getenv("CONFIRM_FIELD", "email")),
-		InboxID:           int64(getenvInt("INBOX_ID", 0)),
 		TeamHumanoID:      int64(getenvInt("TEAM_HUMANO_ID", 0)),
+		BotUserID:         int64(getenvInt("BOT_USER_ID", 0)),
 		MaxTentativas:     getenvInt("MAX_TENTATIVAS", 3),
 		SACBaseURL:        strings.TrimRight(getenv("SAC_BASE_URL", ""), "/"),
 		SACPortalURL:      strings.TrimRight(getenv("SAC_PORTAL_URL", "https://atendimento.azapfy.com.br"), "/"),
@@ -129,6 +138,12 @@ func Load() (*Config, error) {
 	}
 
 	var err error
+	// INBOX_ID é lido ESTRITO (ZD-2): valor malformado — inclusive o placeholder
+	// "${INBOX_ID}" de um template que escapou da renderização — não pode virar
+	// 0 em silêncio, porque 0 é atender TODAS as caixas da conta.
+	if cfg.InboxID, err = parseInboxID(getenv("INBOX_ID", "")); err != nil {
+		return nil, err
+	}
 	if cfg.MongoTimeout, err = parseDuration(getenv("MONGO_TIMEOUT", "8s")); err != nil {
 		return nil, fmt.Errorf("MONGO_TIMEOUT inválido: %w", err)
 	}
@@ -196,6 +211,25 @@ func getenvInt(key string, def int) int {
 	}
 	return def
 }
+
+// parseInboxID aceita vazio (= 0 = todas as caixas) ou um inteiro >= 0.
+// Qualquer outro texto é erro de configuração, com a mensagem dizendo o que
+// preencher — nunca um 0 silencioso.
+func parseInboxID(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("INBOX_ID inválido (%q): use o id numérico da caixa do Chatwoot que o bot atende (0 = todas as caixas, só em dev)", s)
+	}
+	return n, nil
+}
+
+// AtendeTodasAsCaixas informa se o gateway está sem caixa fixa (INBOX_ID=0):
+// adota conversa nova de qualquer caixa e responde em qualquer uma.
+func (c *Config) AtendeTodasAsCaixas() bool { return c.InboxID == 0 }
 
 func parseDuration(s string) (time.Duration, error) {
 	if s == "" {

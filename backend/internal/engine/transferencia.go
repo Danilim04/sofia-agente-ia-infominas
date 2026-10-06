@@ -21,11 +21,44 @@ const (
 	OrigemMongo     = "mongo"     // cadastro inacessível/ilegível no Mongo
 	OrigemDisjuntor = "disjuntor" // disjuntor aberto: o cérebro nem foi chamado
 	OrigemCliente   = "cliente"   // o cliente pediu um atendente
+	OrigemAnexo     = "anexo"     // o cliente mandou áudio/imagem/arquivo, que o bot não lê (ZD-2)
 )
 
 // MsgTransferencia é a mensagem neutra ao cliente quando a conversa vai para
 // a fila humana por falha — nunca um erro técnico (mesma voz do gate).
 const MsgTransferencia = "Vou te encaminhar para um de nossos atendentes, só um instante. 🙏"
+
+// MsgAnexo é o aviso ao cliente que mandou um anexo (ZD-2): o Zapin diz o que
+// não consegue fazer e encaminha — nunca fica em silêncio. Um emoji só.
+func MsgAnexo(tipo string) string {
+	var oque string
+	switch tipo {
+	case chatwoot.AnexoAudio:
+		oque = "ouvir áudio"
+	case chatwoot.AnexoImagem:
+		oque = "ver imagem"
+	case chatwoot.AnexoVideo:
+		oque = "ver vídeo"
+	default:
+		oque = "abrir arquivo"
+	}
+	return "Por aqui eu ainda não consigo " + oque + ". Vou te encaminhar para um de nossos atendentes, que vai conferir o que você enviou — só um instante. 🙏"
+}
+
+// descreveAnexo nomeia o tipo do anexo para a nota privada/registro.
+func descreveAnexo(tipo string) string {
+	switch tipo {
+	case chatwoot.AnexoAudio:
+		return "áudio"
+	case chatwoot.AnexoImagem:
+		return "imagem"
+	case chatwoot.AnexoVideo:
+		return "vídeo"
+	case "", chatwoot.AnexoArquivo:
+		return "arquivo"
+	}
+	return "anexo (" + tipo + ")"
+}
 
 // Transferencia descreve por que a conversa vai para a fila humana.
 type Transferencia struct {

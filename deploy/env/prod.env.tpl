@@ -87,11 +87,12 @@ PUBLIC_BASE_URL=http://azapfy-bot:8080
 # --- Gateway: etiquetas / gate ------------------------------------------------
 LABEL_BOT=fila-bot
 LABEL_HUMANO=fila-humano
-# Caixa de entrada cujas conversas NOVAS o gateway etiqueta com fila-bot no
-# conversation_created. O id é ESPECÍFICO da instância do Chatwoot (na VM
-# antiga era 5, "whatsapp-daniel-teste"); vem da GitHub variable INBOX_ID
-# (vazia = 0 = todas as caixas). A pipeline "Configurar Chatwoot" lista as
-# caixas existentes ao final — use o id de lá.
+# Caixa de entrada do bot: conversas NOVAS dela ganham fila-bot no
+# conversation_created e SÓ mensagens dela são atendidas (ZD-2). O id é
+# ESPECÍFICO da instância do Chatwoot (na VM antiga era 5,
+# "whatsapp-daniel-teste"); vem da GitHub variable INBOX_ID — OBRIGATÓRIA e
+# > 0: o render-env.sh aborta o deploy sem ela (0 = todas as caixas, só dev).
+# A pipeline "Configurar Chatwoot" lista as caixas existentes ao final.
 INBOX_ID=${INBOX_ID}
 CONFIRM_FIELD=email
 MAX_TENTATIVAS=3
@@ -158,3 +159,12 @@ CHATWOOT_PUBLIC_URL=${CHATWOOT_PUBLIC_URL}
 # avisa o responsável com ID da ocorrência, causa e link (vazio = desligado).
 # A etiqueta/macro em si é criada à mão no Chatwoot.
 LABEL_REPORTAR=reportar-zapin
+
+# --- Gateway: quando o bot age (lote ZD) -------------------------------------
+# Id do usuário do Chatwoot que o gateway usa (o "Zapin"). Conversa cujo
+# responsável (assignee) é OUTRO usuário está com atendente humano: o bot não
+# responde nem adota. Vazio = o gateway descobre no boot pelo próprio token
+# (GET /api/v1/profile com o .chatwoot-token) — não precisa de variable;
+# preencha só para forçar um id (se a descoberta falhar, qualquer responsável
+# conta como humano).
+BOT_USER_ID=
