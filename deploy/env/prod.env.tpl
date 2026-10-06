@@ -76,7 +76,11 @@ CHATWOOT_ACCOUNT_ID=1
 # cima do que o CI renderizar; o secret é só bootstrap/override manual.
 CHATWOOT_API_TOKEN=${CHATWOOT_API_TOKEN}
 WEBHOOK_TOKEN=${WEBHOOK_TOKEN}
-WEBHOOK_SECRET=
+# HMAC do webhook (X-Chatwoot-Signature sobre "{timestamp}.{corpo}"): secret
+# OPCIONAL do GitHub. Vazio = sem verificação (comportamento atual: o Chatwoot
+# em uso não assina). Só preencher quando o lado do Chatwoot passar a assinar
+# com o MESMO segredo — senão todo webhook é recusado (401).
+WEBHOOK_SECRET=${WEBHOOK_SECRET}
 # Base interna que o Chatwoot alcança — vira a URL a cadastrar no webhook.
 PUBLIC_BASE_URL=http://azapfy-bot:8080
 

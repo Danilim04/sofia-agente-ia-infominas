@@ -84,6 +84,7 @@ Dispara a cada push na `main` (ou `Run workflow` com uma tag à escolha):
 | `OPENROUTER_API_KEY` | chave do OpenRouter (cérebro) |
 | `MONGO_URI` | Mongo da Azapfy (lookup de usuário do gate) |
 | `WEBHOOK_TOKEN` | segredo do `?token=` da URL de webhook cadastrada no Chatwoot |
+| `WEBHOOK_SECRET` | opcional — segredo HMAC do webhook (`X-Chatwoot-Signature` = `sha256=HMAC-SHA256(segredo, "{timestamp}.{corpo}")`). Vazio = sem verificação (o Chatwoot em uso não assina); preenchido, requisição sem assinatura válida recebe 401 — só definir quando o lado do Chatwoot assinar com o mesmo segredo |
 | `TOOLS_API_TOKEN` | segredo compartilhado cérebro↔gateway (tools SAC) |
 | `PGVECTOR_PASSWORD` | senha do Postgres do compose (RAG + estado do gateway); só alfanumérica, entra numa URL |
 | `DOCS_API_KEY` | chave `azk_…` do AzapDocs (escopos `DOCS_LIST` + `DOCS_READ`) — fonte da base de conhecimento |

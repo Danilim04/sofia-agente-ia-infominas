@@ -109,6 +109,9 @@ jobs:
           # Opcionais — vazios não quebram o deploy. O token do Chatwoot é
           # bootstrap/override: o estado da VM (.chatwoot-token) tem precedência.
           CHATWOOT_API_TOKEN: ${{ secrets.CHATWOOT_API_TOKEN }}
+          # HMAC do webhook (ZG-3): vazio = sem verificação. Só definir quando o
+          # Chatwoot assinar com o mesmo segredo — senão todo webhook é recusado.
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
           SAC_API_TOKEN: ${{ secrets.SAC_API_TOKEN }}
           # AzapDocs (fonte da base de conhecimento) — chave azk_... e webhook
           # de alerta do sync. Vazios não quebram o deploy; o sync aborta sem chave.
