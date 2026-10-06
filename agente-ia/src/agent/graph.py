@@ -42,19 +42,24 @@ from src.agent.nodes import (
     safe_response_node,
 )
 from src.agent.state import AgentState
-from src.tools.crm_mocks import rastrear_nota_fiscal
 from src.tools.sac_tools import SAC_TOOLS
 
 
 def get_default_tools() -> list[BaseTool]:
-    """Tools canônicas: rastreio de NF (mock) + chamados reais (SAC via Go).
+    """Tools canônicas: só os chamados reais (SAC via gateway Go).
 
     O agente não acessa a internet. A base de conhecimento NÃO é mais tool: o
     retrieval é etapa fixa do grafo (nó `retrieve`) — o modelo não decide "se"
     consulta. Identidade/escopo nunca são argumentos do LLM: são injetados e
     validados pela política (`src/agent/tool_policy.py`).
+
+    NENHUM mock de `src/tools/crm_mocks.py` entra aqui (ZE-1, rodada 1): a
+    `rastrear_nota_fiscal` de teste estava nesta lista e respondeu "nota não
+    encontrada" a cliente real consultando um dicionário fictício. Rastreio de
+    NF só volta com integração real — `tests/test_default_tools.py` barra
+    qualquer tool de `crm_mocks` na lista.
     """
-    return [rastrear_nota_fiscal, *SAC_TOOLS]
+    return [*SAC_TOOLS]
 
 
 def build_graph(

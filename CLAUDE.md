@@ -130,9 +130,11 @@ do estado e validados pela política (`tool_policy.py`); trabalho determinístic
   exposto via `POST /extract-login`. **Fail-soft** (erro → `login=None`) e o valor
   é só um CANDIDATO — quem autoriza é o gate (Mongo + confirmação). Aceita injeção
   de dependência (`extrator=`) para testar sem rede.
-- **`src/tools/`** — `crm_mocks.py` (`rastrear_nota_fiscal` com escopo
-  `grupos_emp_sessao` **injetado** — o LLM só vê `numero_nota`; os demais mocks
-  de CRM são legado, fora da lista canônica), `sac_tools.py` (chamados reais
+- **`src/tools/`** — `crm_mocks.py` (mocks de CRM, **todos fora da lista
+  canônica** — na rodada 1 a `rastrear_nota_fiscal` mock estava na lista e
+  respondeu "nota não encontrada" a cliente real [ZE-1]; fica só para
+  testes/harness até existir integração real, com o escopo `grupos_emp_sessao`
+  **injetado** pela política — o LLM só veria `numero_nota`), `sac_tools.py` (chamados reais
   via gateway Go; `telefone` injetado; abertura em **duas fases**:
   `preparar_abertura_chamado` é dry-run no gateway — a proposta aprovada vira
   `proposta_chamado` no estado — e `abrir_chamado_suporte` executa EXATAMENTE
