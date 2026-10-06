@@ -34,6 +34,10 @@ type Config struct {
 	// conversa é roteada quando a identificação falha.
 	LabelBot    string
 	LabelHumano string
+	// LabelReportar: etiqueta que o atendente aplica para reportar um problema
+	// do bot (ZC-8); o gateway avisa o responsável com o ID da ocorrência, a
+	// causa e o link da conversa. Vazio = desligado.
+	LabelReportar string
 	// TeamHumanoID: equipe do Chatwoot que recebe a conversa transferida pelo
 	// bot (ZC-3); 0 = não atribui equipe (só troca a etiqueta).
 	TeamHumanoID int64
@@ -105,6 +109,7 @@ func Load() (*Config, error) {
 		PGURL:             strings.TrimSpace(getenv("PG_URL", "")),
 		LabelBot:          getenv("LABEL_BOT", "fila-bot"),
 		LabelHumano:       getenv("LABEL_HUMANO", "fila-humano"),
+		LabelReportar:     getenv("LABEL_REPORTAR", "reportar-zapin"),
 		MongoURI:          getenv("MONGO_URI", ""),
 		MongoDB:           getenv("MONGO_DB", "azapfy"),
 		MongoCollection:   getenv("MONGO_COLLECTION", "users"),

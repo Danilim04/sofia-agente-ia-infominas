@@ -883,3 +883,93 @@ func TestDisjuntorAbertoAlertaUmaVez(t *testing.T) {
 		t.Fatalf("esperava exatamente 1 alerta de disjuntor aberto: %+v", n.alertas)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ZC-8: etiqueta reportar-zapin avisa o responsável (uma vez)
+// ---------------------------------------------------------------------------
+
+func mudancaDeEtiquetas(convID int64, de, para []string) *chatwoot.ConversationUpdated {
+	deJSON, _ := json.Marshal(de)
+	paraJSON, _ := json.Marshal(para)
+	ev := &chatwoot.ConversationUpdated{
+		ChangedAttributes: []map[string]chatwoot.ChangeValue{{
+			"labels": {CurrentValue: paraJSON, PreviousValue: deJSON},
+		}},
+	}
+	ev.ID = convID
+	ev.Labels = para
+	return ev
+}
+
+// TestEtiquetaReportarDisparaNotificadorUmaVez: ao ganhar `reportar-zapin`, o
+// responsável recebe um alerta com o ID e a causa da última ocorrência da
+// conversa e o link; atualizações seguintes com a etiqueta já presente não
+// repetem; conversa sem ocorrência registrada avisa mesmo assim.
+func TestEtiquetaReportarDisparaNotificadorUmaVez(t *testing.T) {
+	e, st := engineComStore(t)
+	e.cfg.LabelReportar = "reportar-zapin"
+	e.cfg.ChatwootBaseURL, e.cfg.ChatwootAccountID = "https://painel.exemplo", "1"
+	n := comNotificadorFalso(e)
+	ctx := context.Background()
+	const conv = int64(150)
+	_ = st.RegistrarFalha(ctx, &store.Falha{ID: "ZPF-20261002-0911-55", ConversationID: conv, Origem: OrigemCerebro,
+		Classe: brain.ClasseDefinitiva, Causa: "saldo do OpenRouter insuficiente (402)"})
+
+	e.HandleConversationUpdated(ctx, mudancaDeEtiquetas(conv, []string{"fila-humano"}, []string{"fila-humano", "reportar-zapin"}))
+	al := n.doTipo(alerta.TipoReportado)
+	if len(al) != 1 {
+		t.Fatalf("esperava 1 alerta de reporte, veio %+v", n.alertas)
+	}
+	if al[0].IDOcorrencia != "ZPF-20261002-0911-55" || al[0].ConversationID != conv ||
+		!strings.Contains(al[0].Texto, "402") || al[0].Link != "https://painel.exemplo/app/accounts/1/conversations/150" {
+		t.Fatalf("alerta de reporte sem ID/causa/link: %+v", al[0])
+	}
+
+	// Etiqueta já presente: outra mudança de etiquetas não repete o aviso.
+	e.HandleConversationUpdated(ctx, mudancaDeEtiquetas(conv, []string{"fila-humano", "reportar-zapin"}, []string{"fila-humano", "reportar-zapin", "vip"}))
+	// Mudança só de status também não.
+	e.HandleConversationUpdated(ctx, mudancaDeStatus(conv, chatwoot.StatusOpen, chatwoot.StatusResolved))
+	if len(n.doTipo(alerta.TipoReportado)) != 1 {
+		t.Fatalf("o aviso de reporte deve sair uma vez por aplicação da etiqueta: %+v", n.alertas)
+	}
+
+	// Conversa sem ocorrência registrada: avisa, sem ID.
+	e.HandleConversationUpdated(ctx, mudancaDeEtiquetas(151, nil, []string{"reportar-zapin"}))
+	al = n.doTipo(alerta.TipoReportado)
+	if len(al) != 2 || al[1].IDOcorrencia != "" || al[1].ConversationID != 151 {
+		t.Fatalf("conversa sem ocorrência devia avisar sem ID: %+v", al)
+	}
+}
+
+// TestEtiquetaReportarDesligadaNaoAvisa: LABEL_REPORTAR vazia = sem reação.
+func TestEtiquetaReportarDesligadaNaoAvisa(t *testing.T) {
+	e, _ := engineComStore(t)
+	n := comNotificadorFalso(e)
+	e.HandleConversationUpdated(context.Background(), mudancaDeEtiquetas(152, nil, []string{"reportar-zapin"}))
+	if len(n.alertas) != 0 {
+		t.Fatalf("etiqueta desligada não avisa: %+v", n.alertas)
+	}
+}
+
+// TestPedidoDeAtendentePassaPelaTransferenciaUnica: "quero falar com
+// atendente" numa conversa identificada → sem chamada ao cérebro, mensagem
+// do gate, fila-humano, nota com origem cliente.
+func TestPedidoDeAtendentePassaPelaTransferenciaUnica(t *testing.T) {
+	e, st, cw, br := engineCompleta(t)
+	comRelogioFalso(e)
+	e.processarLote(context.Background(), []inbound{{
+		conv: conversaDoBot(153, chatwoot.StatusOpen), phone: telefoneIdentificado, content: "quero falar com atendente",
+	}})
+	if br.total() != 0 {
+		t.Fatalf("pedido de atendente não vai ao cérebro; chamadas=%d", br.total())
+	}
+	if labels := cw.labels[153]; len(labels) != 1 || labels[0] != "fila-humano" {
+		t.Fatalf("esperava fila-humano, veio %v", labels)
+	}
+	if f, _ := st.UltimaFalha(context.Background(), 153); f == nil || f.Origem != OrigemCliente {
+		t.Fatalf("registro com origem cliente esperado: %+v", f)
+	}
+	if got := cw.mensagens(153, false); len(got) != 1 || !strings.Contains(got[0], "encaminhar") {
+		t.Fatalf("cliente devia receber a confirmação do encaminhamento: %q", got)
+	}
+}

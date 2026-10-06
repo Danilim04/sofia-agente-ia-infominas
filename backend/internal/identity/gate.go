@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strconv"
@@ -44,6 +45,14 @@ const carenciaRevalidacao = time.Hour
 // OrigemMongo marca, no Resultado de rotear humano, que a causa foi técnica
 // (Mongo), não o cliente — a engine registra a falha com essa origem.
 const OrigemMongo = "mongo"
+
+// OrigemCliente marca a transferência pedida pelo PRÓPRIO cliente (palavra de
+// escape "atendente"/"humano", ZC-8).
+const OrigemCliente = "cliente"
+
+// errExtractorIndisponivel: o cérebro (extrator de login) falhou — é falha
+// TÉCNICA (conta em FalhasTecnicas), nunca erro do cliente (ZC-8).
+var errExtractorIndisponivel = errors.New("extrator de login indisponível")
 
 // LoginExtractor extrai o identificador (login) de uma mensagem em linguagem
 // natural — fallback quando a normalização determinística não casa nenhum
@@ -105,7 +114,12 @@ const (
 	msgConfirmacaoNaoConfere = "Esse dado não bateu com o que tenho aqui no cadastro. Consegue conferir e me enviar de novo, por gentileza?"
 	msgFalhaConfirmacao      = "Não consegui confirmar a sua identidade por aqui, mas fica tranquilo: vou te transferir para um atendente da equipe continuar com você. 🙏"
 	msgFalhaTecnica          = "Estou com uma instabilidade aqui no sistema e não consegui consultar o seu cadastro. Vou te encaminhar para um atendente da equipe continuar o atendimento, tudo bem? 🙏"
+	msgPedidoAtendente       = "Claro! Vou te encaminhar para um de nossos atendentes, só um instante. 🙏"
 )
+
+// motivoPedidoAtendente é a causa (nota privada/log) da transferência pedida
+// pelo cliente.
+const motivoPedidoAtendente = "cliente pediu para falar com um atendente"
 
 // Motivos das transferências por falha técnica (nota privada/log).
 const (
@@ -189,6 +203,15 @@ func (g *Gate) Process(ctx context.Context, convID int64, phone, mensagem string
 	if gs != nil {
 		state = gs.State
 		gd = decodeGate(gs.Data)
+	}
+
+	// Palavra de escape (ZC-8): "atendente"/"humano" em QUALQUER fase (novo,
+	// login, confirmação, identificado) transfere na hora. Conversa já
+	// transferida (GateFalha) segue o tratamento normal abaixo.
+	if state != store.GateFalha && PedeAtendente(mensagem) {
+		g.salvarGate(ctx, convID, store.GateFalha, gateData{})
+		g.log.Info("cliente pediu atendente; transferindo", "conversation_id", convID, "estado_anterior", state)
+		return Resultado{Acao: AcaoRotearHumano, Reply: msgPedidoAtendente, Motivo: motivoPedidoAtendente, Origem: OrigemCliente}
 	}
 
 	switch state {
@@ -454,10 +477,12 @@ func (g *Gate) resolverLogin(ctx context.Context, convID int64, mensagem string)
 	}
 	extraido, err := g.extractor.ExtrairLogin(ctx, mensagem)
 	if err != nil {
-		// Fail-soft: sem IA, seguimos só com o determinístico (já falhou) →
-		// trata como não encontrado, e o usuário tenta de novo.
-		g.log.Warn("extrator de login indisponível; seguindo sem fallback", "conversation_id", convID, "err", err)
-		return mongo.UsuarioDoc{}, "", false, nil
+		// Falha TÉCNICA do cérebro, não do cliente: sobe como erro para o
+		// tratarLogin pedir para repetir SEM gastar tentativa (e transferir na
+		// 2ª falha técnica seguida) — antes virava "não encontrado" e queimava
+		// uma das 3 tentativas do cliente (ZC-8).
+		g.log.Warn("extrator de login indisponível", "conversation_id", convID, "err", err)
+		return mongo.UsuarioDoc{}, "", false, fmt.Errorf("%w: %v", errExtractorIndisponivel, err)
 	}
 	if strings.TrimSpace(extraido) == "" {
 		return mongo.UsuarioDoc{}, "", false, nil
@@ -570,6 +595,29 @@ func cpfCnpjDigitos(s string) string {
 		}
 	}
 	return digitos.String()
+}
+
+// rePedeAtendente: a palavra de escape precisa vir como palavra inteira.
+var rePedeAtendente = regexp.MustCompile(`(?i)(^|[^\p{L}])(atendente|humano|humana)([^\p{L}]|$)`)
+
+// reVerboDePedido: num texto longo, só transfere quando há um pedido de fato
+// ("quero falar com", "me passa para", "tem algum...") — "o atendente me disse
+// ontem que..." em meio a um relato não é pedido.
+var reVerboDePedido = regexp.MustCompile(`(?i)\b(falar|conversar|quero|queria|preciso|chamar|chama|passar|passa|transferir|transfere|encaminhar|encaminha|coloca|colocar|tem|existe|cad[eê]|me d[aá])\b`)
+
+// PedeAtendente detecta o pedido explícito do cliente por um atendente humano
+// (palavra de escape, ZC-8). Exportado para a engine/testes de outros lotes.
+// Mensagem curta (≤ 60 caracteres) com a palavra basta; mensagem longa exige
+// também um verbo de pedido perto.
+func PedeAtendente(mensagem string) bool {
+	m := strings.TrimSpace(mensagem)
+	if m == "" || !rePedeAtendente.MatchString(m) {
+		return false
+	}
+	if len([]rune(m)) <= 60 {
+		return true
+	}
+	return reVerboDePedido.MatchString(m)
 }
 
 // normalizar deixa a comparação de confirmação tolerante a caixa e espaços.

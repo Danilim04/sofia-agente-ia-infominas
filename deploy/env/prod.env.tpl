@@ -150,3 +150,7 @@ ALERTA_WEBHOOK_URL=${ALERTA_WEBHOOK_URL}
 # URL pública do Chatwoot (link da conversa nos alertas; CHATWOOT_BASE_URL é
 # interna à rede docker). GitHub variable; vazia = usa a interna.
 CHATWOOT_PUBLIC_URL=${CHATWOOT_PUBLIC_URL}
+# Etiqueta que o atendente aplica para reportar um problema do bot: o gateway
+# avisa o responsável com ID da ocorrência, causa e link (vazio = desligado).
+# A etiqueta/macro em si é criada à mão no Chatwoot.
+LABEL_REPORTAR=reportar-zapin

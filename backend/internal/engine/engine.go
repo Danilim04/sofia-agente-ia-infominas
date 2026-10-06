@@ -254,15 +254,34 @@ func (e *Engine) processarLote(ctx context.Context, lote []inbound) {
 	}
 }
 
-// HandleConversationUpdated reage a UMA mudança: a conversa foi RESOLVIDA no
-// Chatwoot. Mudanças de etiqueta continuam sem ação (a identificação é dirigida
+// HandleConversationUpdated reage a DUAS mudanças: a conversa foi RESOLVIDA
+// no Chatwoot (fim do episódio) e a etiqueta de reporte (LABEL_REPORTAR) foi
+// APLICADA pelo atendente (ZC-8: avisa o responsável com ID, causa e link).
+// Outras mudanças de etiqueta seguem sem ação (a identificação é dirigida
 // pela mensagem do cliente).
 func (e *Engine) HandleConversationUpdated(ctx context.Context, ev *chatwoot.ConversationUpdated) {
+	if e.cfg.LabelReportar != "" && ev.LabelJustAdded(e.cfg.LabelReportar) {
+		e.reportar(ctx, ev.ID)
+	}
 	if !ev.StatusChangedTo(chatwoot.StatusResolved) {
 		e.log.Debug("conversation_updated sem resolução (sem ação)", "conversation_id", ev.ID)
 		return
 	}
 	e.encerrarEpisodio(ctx, ev.ID)
+}
+
+// reportar avisa o responsável que um atendente marcou a conversa com a
+// etiqueta de reporte: leva a ÚLTIMA ocorrência registrada na conversa (ID e
+// causa) e o link. Dispara uma vez por aplicação da etiqueta (LabelJustAdded).
+func (e *Engine) reportar(ctx context.Context, convID int64) {
+	f := alerta.Falha{ConversationID: convID, Link: e.linkConversa(convID)}
+	if ult, err := e.st.UltimaFalha(ctx, convID); err != nil {
+		e.log.Error("reportar-zapin: última falha", "conversation_id", convID, "err", err)
+	} else if ult != nil {
+		f.ID, f.Origem, f.Classe, f.Causa = ult.ID, ult.Origem, ult.Classe, ult.Causa
+	}
+	e.log.Info("conversa reportada pelo atendente", "conversation_id", convID, "id_ocorrencia", f.ID)
+	e.vigia.Reportado(f)
 }
 
 // HandleConversationStatusChanged é o mesmo tratamento pelo evento dedicado do

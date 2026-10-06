@@ -649,3 +649,109 @@ func contem(xs []string, v string) bool {
 	}
 	return false
 }
+
+// ---------------------------------------------------------------------------
+// ZC-8: falha do extrator não consome tentativa; palavra de escape
+// ---------------------------------------------------------------------------
+
+// TestGateExtractorComErroNaoConsomeTentativa: cérebro fora no /extract-login
+// → "tente de novo" SEM gastar tentativa do cliente; voltando, o login segue.
+func TestGateExtractorComErroNaoConsomeTentativa(t *testing.T) {
+	doc := docDaniel()
+	doc.Login = "joao"
+	repo := fakeRepo{docs: map[string]mongo.UsuarioDoc{"joao": doc}}
+	extractor := &fakeExtractorMutavel{respostas: map[string]string{"meu login é joao": "joao"}, err: errors.New("brain offline")}
+	g, st := newGateComExtractor(t, repo, extractor)
+	ctx := context.Background()
+	const conv = int64(51)
+	const phone = "5511000000051"
+
+	g.Process(ctx, conv, phone, "oi")
+	if r := g.Process(ctx, conv, phone, "meu login é joao"); r.Acao != AcaoPerguntar || r.Reply != msgErroTemporario {
+		t.Fatalf("extrator fora: esperava 'tente de novo', veio %q reply=%q", r.Acao, r.Reply)
+	}
+	gs, _ := st.GetGate(ctx, conv)
+	if gd := decodeGate(gs.Data); gd.Tentativas != 0 || gd.FalhasTecnicas != 1 {
+		t.Fatalf("falha do extrator não é erro do cliente: tentativas=%d falhas_tecnicas=%d", gd.Tentativas, gd.FalhasTecnicas)
+	}
+	extractor.err = nil
+	if r := g.Process(ctx, conv, phone, "meu login é joao"); r.Acao != AcaoPerguntar || r.Reply == msgErroTemporario {
+		t.Fatalf("extrator de volta: esperava pedir confirmação, veio %q reply=%q", r.Acao, r.Reply)
+	}
+	// O cliente ainda tem as 3 tentativas inteiras: 2 erros não transferem.
+	g.Process(ctx, conv, phone, "errado1@x.com")
+	if r := g.Process(ctx, conv, phone, "errado2@x.com"); r.Acao != AcaoPerguntar {
+		t.Fatalf("2 erros do cliente após a falha técnica: esperava perguntar, veio %q", r.Acao)
+	}
+}
+
+type fakeExtractorMutavel struct {
+	respostas map[string]string
+	err       error
+}
+
+func (f *fakeExtractorMutavel) ExtrairLogin(_ context.Context, mensagem string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.respostas[mensagem], nil
+}
+
+// TestGatePedidoDeAtendenteTransfereEmQualquerEstado: "quero falar com
+// atendente" transfere na hora — conversa nova, aguardando login, aguardando
+// confirmação e já identificada.
+func TestGatePedidoDeAtendenteTransfereEmQualquerEstado(t *testing.T) {
+	const pedido = "quero falar com atendente"
+	repo := fakeRepo{docs: map[string]mongo.UsuarioDoc{"10596693664": docDaniel()}}
+	ctx := context.Background()
+
+	confere := func(t *testing.T, r Resultado, estado string) {
+		t.Helper()
+		if r.Acao != AcaoRotearHumano || r.Origem != OrigemCliente || r.Motivo != motivoPedidoAtendente || r.Reply != msgPedidoAtendente {
+			t.Fatalf("%s: esperava rotear humano a pedido do cliente, veio %+v", estado, r)
+		}
+	}
+
+	// Conversa nova.
+	g, _ := newGate(t, repo)
+	confere(t, g.Process(ctx, 61, "5511000000061", pedido), "novo")
+	if r := g.Process(ctx, 61, "5511000000061", "oi?"); r.Acao != AcaoIgnorar {
+		t.Fatalf("após a transferência a conversa é do atendente: esperava ignorar, veio %q", r.Acao)
+	}
+	// Aguardando login.
+	g, _ = newGate(t, repo)
+	g.Process(ctx, 62, "5511000000062", "oi")
+	confere(t, g.Process(ctx, 62, "5511000000062", "Quero falar com um HUMANO, por favor"), "aguardando login")
+	// Aguardando confirmação.
+	g, _ = newGate(t, repo)
+	g.Process(ctx, 63, "5511000000063", "oi")
+	g.Process(ctx, 63, "5511000000063", "10596693664")
+	confere(t, g.Process(ctx, 63, "5511000000063", pedido), "aguardando confirmação")
+	// Identificado.
+	g, _ = newGate(t, repo)
+	identifica(t, g, 64, "5511000000064")
+	confere(t, g.Process(ctx, 64, "5511000000064", "atendente"), "identificado")
+}
+
+// TestPedeAtendente: palavra inteira; relato longo sem pedido não dispara.
+func TestPedeAtendente(t *testing.T) {
+	sim := []string{
+		"atendente", "quero falar com atendente", "Me passa pra um humano", "tem algum atendente aí?",
+		"preciso falar com uma pessoa de verdade, um atendente humano, porque o app não abre desde ontem e já reinstalei duas vezes",
+	}
+	nao := []string{
+		"oi", "10596693664", "o romaneio não fecha",
+		"o atendente me disse ontem que o romaneio ia fechar sozinho depois da sincronização, mas até agora continua aberto na tela",
+		"desumano esse trânsito, mas enfim: a nota 123 não aparece no rastreamento", // "desumano" não é a palavra inteira
+	}
+	for _, m := range sim {
+		if !PedeAtendente(m) {
+			t.Errorf("devia detectar pedido de atendente: %q", m)
+		}
+	}
+	for _, m := range nao {
+		if PedeAtendente(m) {
+			t.Errorf("não devia detectar pedido de atendente: %q", m)
+		}
+	}
+}
