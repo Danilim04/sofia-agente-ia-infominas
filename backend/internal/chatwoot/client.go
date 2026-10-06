@@ -54,6 +54,17 @@ func (c *Client) SendMessage(ctx context.Context, convID int64, content string, 
 	return c.do(ctx, http.MethodPost, c.convPath(convID, "/messages"), body, nil)
 }
 
+// ToggleTyping liga/desliga o indicador "digitando" da conversa (o cliente vê
+// no WhatsApp enquanto o bot tenta de novo).
+func (c *Client) ToggleTyping(ctx context.Context, convID int64, on bool) error {
+	status := "off"
+	if on {
+		status = "on"
+	}
+	body := map[string]any{"typing_status": status}
+	return c.do(ctx, http.MethodPost, c.convPath(convID, "/toggle_typing_status"), body, nil)
+}
+
 // AssignTeam atribui a conversa a uma equipe (team) do Chatwoot.
 func (c *Client) AssignTeam(ctx context.Context, convID int64, teamID int64) error {
 	body := map[string]any{"team_id": teamID}

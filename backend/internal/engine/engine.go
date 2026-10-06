@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ type ChatwootAPI interface {
 	SendMessage(ctx context.Context, convID int64, content string, private bool) error
 	ToggleStatus(ctx context.Context, convID int64, status string) error
 	AssignTeam(ctx context.Context, convID int64, teamID int64) error
+	ToggleTyping(ctx context.Context, convID int64, on bool) error
 }
 
 // BrainAPI é o que a engine usa do cérebro (satisfeito por *brain.Client).
@@ -41,6 +43,12 @@ type Engine struct {
 	st    store.Store
 	log   *slog.Logger
 	agora func() time.Time // relógio injetável (IDs de ocorrência, notas, testes)
+
+	// Resiliência ao cérebro (ZC-5): esperas entre novas tentativas de falha
+	// TRANSITÓRIA, espera injetável (testes não dormem) e o disjuntor.
+	esperasRetry []time.Duration
+	dormir       func(ctx context.Context, d time.Duration) bool
+	disjuntor    *disjuntor
 
 	// Coalescência/serialização por conversa (F11) — ver coalescer.go.
 	baseCtx      context.Context
@@ -63,6 +71,9 @@ func New(cfg *config.Config, cw ChatwootAPI, gate *identity.Gate, brainClient Br
 		st:           st,
 		log:          log,
 		agora:        time.Now,
+		esperasRetry: []time.Duration{2 * time.Second, 5 * time.Second},
+		dormir:       dormirDeVerdade,
+		disjuntor:    novoDisjuntor(),
 		baseCtx:      context.Background(),
 		debounce:     cfg.DebounceJanela,
 		debounceTeto: cfg.DebounceTeto,
@@ -138,11 +149,29 @@ func (e *Engine) HandleMessageCreated(ctx context.Context, msg *chatwoot.Message
 		}
 	}
 
+	recebido := msg.CreatedAt.Time
+	if recebido.IsZero() {
+		recebido = e.agora()
+	}
 	e.enfileirar(convID, inbound{
-		conv:    msg.Conversation,
-		phone:   msg.Phone(),
-		content: content,
+		conv:       msg.Conversation,
+		phone:      msg.Phone(),
+		content:    content,
+		recebidoEm: recebido,
 	})
+}
+
+// dormirDeVerdade espera d ou o cancelamento do ctx (false). Os testes trocam
+// por um relógio falso.
+func dormirDeVerdade(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 // processarLote roda UM turno para a rajada coletada: junta os textos, avança
@@ -184,7 +213,12 @@ func (e *Engine) processarLote(ctx context.Context, lote []inbound) {
 			Origem: origem, Causa: res.Motivo, Mensagem: res.Reply,
 		})
 	case identity.AcaoEncaminhar:
-		e.encaminhar(ctx, &ultimo.conv, ultimo.phone, content, res)
+		// O teto do turno conta desde a PRIMEIRA mensagem da rajada.
+		inicio := lote[0].recebidoEm
+		if inicio.IsZero() {
+			inicio = e.agora()
+		}
+		e.encaminhar(ctx, &ultimo.conv, ultimo.phone, content, res, inicio)
 	case identity.AcaoIgnorar:
 		// já roteado para humano — nada a fazer.
 	}
@@ -267,7 +301,17 @@ func (e *Engine) adotarConversa(ctx context.Context, conv *chatwoot.Conversation
 	return true
 }
 
-func (e *Engine) encaminhar(ctx context.Context, conv *chatwoot.Conversation, phone, content string, res identity.Resultado) {
+// encaminhar chama o cérebro com a política de resiliência (ZC-5):
+//
+//   - disjuntor aberto → não chama; transfere direto (origem disjuntor);
+//   - falha DEFINITIVA → não repete; transfere e alimenta o disjuntor;
+//   - falha TRANSITÓRIA → até len(esperasRetry) novas tentativas silenciosas
+//     (2 s e 5 s), com "digitando" ligado, enquanto couber no teto do turno
+//     (TURNO_TETO desde a mensagem do cliente); esgotou → transfere.
+//
+// A chamada ao cérebro recebe o prazo do teto como deadline do contexto: o
+// cérebro nunca trabalha além do que o cliente espera.
+func (e *Engine) encaminhar(ctx context.Context, conv *chatwoot.Conversation, phone, content string, res identity.Resultado, inicio time.Time) {
 	var login string
 	if res.Perfil != nil {
 		login = res.Perfil.Login
@@ -275,18 +319,72 @@ func (e *Engine) encaminhar(ctx context.Context, conv *chatwoot.Conversation, ph
 	e.log.Debug("encaminhando ao cérebro",
 		"conversation_id", conv.ID, "telefone", phone, "login", login, "mensagem", content)
 
-	resp, err := e.brain.Chat(ctx, brain.ChatRequest{
+	if !e.disjuntor.permite(e.agora()) {
+		_, causa := e.disjuntor.estado()
+		e.TransferirParaHumano(ctx, conv, Transferencia{
+			Origem: OrigemDisjuntor, Classe: brain.ClasseDefinitiva,
+			Causa:   "cérebro em pausa por falhas repetidas (" + causa + ")",
+			Detalhe: "disjuntor aberto; cérebro não foi chamado",
+		})
+		return
+	}
+
+	teto := e.cfg.TurnoTeto
+	if teto <= 0 {
+		teto = 45 * time.Second
+	}
+	prazo := inicio.Add(teto)
+	req := brain.ChatRequest{
 		ConversationID: strconv.FormatInt(conv.ID, 10),
 		Canal:          "whatsapp",
 		Mensagem:       content,
 		Identidade:     res.Perfil,
 		Telefone:       phone,
-	})
-	if err != nil {
-		// Nunca erro técnico ao cliente: transferência silenciosa, com o ID
-		// de ocorrência do cérebro (quando veio) na nota privada e no log.
-		e.TransferirParaHumano(ctx, conv, transferenciaPorErroDoCerebro(err))
-		return
+	}
+
+	var resp *brain.ChatResponse
+	for tentativa := 0; ; tentativa++ {
+		cctx, cancel := context.WithDeadline(ctx, prazo)
+		r, err := e.brain.Chat(cctx, req)
+		cancel()
+		if err == nil {
+			resp = r
+			e.disjuntor.sucesso()
+			break
+		}
+		t := transferenciaPorErroDoCerebro(err)
+		if t.Classe != brain.ClasseTransitoria {
+			// Definitiva: repetir não resolve. Transfere e conta no disjuntor.
+			chave := t.Classe + "|" + t.Causa
+			if be, ok := brain.ComoErro(err); ok {
+				chave = be.Chave()
+			}
+			if e.disjuntor.falhaDefinitiva(chave, t.Causa, e.agora()) {
+				e.log.Error("disjuntor do cérebro ABERTO", "chave", chave, "causa", t.Causa, "por", disjuntorAbertura.String())
+			}
+			e.TransferirParaHumano(ctx, conv, t)
+			return
+		}
+		e.disjuntor.falhaTransitoria()
+		e.log.Warn("falha transitória do cérebro", "conversation_id", conv.ID, "tentativa", tentativa+1, "err", err)
+		if tentativa >= len(e.esperasRetry) {
+			t.Causa = fmt.Sprintf("%s — %d tentativas sem sucesso", t.Causa, tentativa+1)
+			e.TransferirParaHumano(ctx, conv, t)
+			return
+		}
+		espera := e.esperasRetry[tentativa]
+		if e.agora().Add(espera).After(prazo) {
+			t.Causa = fmt.Sprintf("%s — sem tempo para nova tentativa (teto de %s)", t.Causa, teto)
+			e.TransferirParaHumano(ctx, conv, t)
+			return
+		}
+		// O cliente vê "digitando" enquanto o bot tenta de novo em silêncio.
+		if err := e.cw.ToggleTyping(ctx, conv.ID, true); err != nil {
+			e.log.Debug("indicador digitando", "conversation_id", conv.ID, "err", err)
+		}
+		if !e.dormir(ctx, espera) {
+			return
+		}
 	}
 	reply := strings.TrimSpace(resp.Reply)
 	if reply == "" {

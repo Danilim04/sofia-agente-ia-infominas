@@ -137,3 +137,6 @@ LLM_MAX_TOKENS_CLASSIFICADOR=256
 # Equipe do Chatwoot que recebe a conversa transferida pelo bot (ZC-3); id da
 # instância (GitHub variable TEAM_HUMANO_ID; vazia = 0 = só troca a etiqueta).
 TEAM_HUMANO_ID=${TEAM_HUMANO_ID}
+# Teto do turno desde a mensagem do cliente (coalescência + cérebro + novas
+# tentativas em falha transitória: 2 s e 5 s). Falha definitiva não repete.
+TURNO_TETO=45s

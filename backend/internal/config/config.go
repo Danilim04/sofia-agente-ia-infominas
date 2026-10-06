@@ -50,6 +50,10 @@ type Config struct {
 	// Brain: serviço Python que roda o agente (Contrato A, POST /chat).
 	BrainBaseURL string
 	BrainTimeout time.Duration
+	// TurnoTeto: prazo total do turno desde a MENSAGEM do cliente (coalescência
+	// + chamada ao cérebro + novas tentativas). Passado o teto, não há nova
+	// tentativa e a conversa é transferida (ZC-5). Default 45s.
+	TurnoTeto time.Duration
 
 	// Identidade / gate.
 	ConfirmField  string        // dado pedido na confirmação: "email" (default) | "nome"
@@ -117,6 +121,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.BrainTimeout, err = parseDuration(getenv("BRAIN_TIMEOUT", "60s")); err != nil {
 		return nil, fmt.Errorf("BRAIN_TIMEOUT inválido: %w", err)
+	}
+	if cfg.TurnoTeto, err = parseDuration(getenv("TURNO_TETO", "45s")); err != nil {
+		return nil, fmt.Errorf("TURNO_TETO inválido: %w", err)
 	}
 	if cfg.IdentityTTL, err = parseDuration(getenv("IDENTITY_TTL", "24h")); err != nil {
 		return nil, fmt.Errorf("IDENTITY_TTL inválido: %w", err)

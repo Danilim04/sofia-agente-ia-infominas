@@ -34,10 +34,20 @@ type fakeChatwoot struct {
 	labels  map[int64][]string
 	status  map[int64]string
 	equipes map[int64]int64
+	typing  map[int64]int // vezes que "digitando" foi ligado
 }
 
 func novoFakeChatwoot() *fakeChatwoot {
-	return &fakeChatwoot{labels: map[int64][]string{}, status: map[int64]string{}, equipes: map[int64]int64{}}
+	return &fakeChatwoot{labels: map[int64][]string{}, status: map[int64]string{}, equipes: map[int64]int64{}, typing: map[int64]int{}}
+}
+
+func (f *fakeChatwoot) ToggleTyping(_ context.Context, convID int64, on bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if on {
+		f.typing[convID]++
+	}
+	return nil
 }
 
 func (f *fakeChatwoot) SetLabels(_ context.Context, convID int64, labels []string) error {
@@ -156,6 +166,56 @@ func conversaDoBot(id int64, status string) chatwoot.Conversation {
 }
 
 var reIDOcorrencia = regexp.MustCompile(`ZPF-\d{8}-\d{4}-\d{2}`)
+
+// relogioFalso injeta tempo e espera na engine: dormir avança o relógio em vez
+// de dormir de verdade (teste não gasta segundos reais).
+type relogioFalso struct {
+	mu      sync.Mutex
+	agora   time.Time
+	esperas []time.Duration
+}
+
+func (r *relogioFalso) now() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.agora
+}
+
+func (r *relogioFalso) avancar(d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.agora = r.agora.Add(d)
+}
+
+func (r *relogioFalso) dormir(_ context.Context, d time.Duration) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.esperas = append(r.esperas, d)
+	r.agora = r.agora.Add(d)
+	return true
+}
+
+func comRelogioFalso(e *Engine) *relogioFalso {
+	r := &relogioFalso{agora: time.Date(2026, 10, 2, 9, 11, 0, 0, time.UTC)}
+	e.agora, e.dormir = r.now, r.dormir
+	return r
+}
+
+func erroTransitorio() *brain.Erro {
+	return &brain.Erro{Classe: brain.ClasseTransitoria, Causa: "cérebro não respondeu a tempo (timeout)"}
+}
+
+func erro402() *brain.Erro {
+	return &brain.Erro{Classe: brain.ClasseDefinitiva, Causa: "saldo do OpenRouter insuficiente (402)", Status: 500}
+}
+
+// turno roda um lote de uma mensagem do telefone identificado na conversa.
+func turno(e *Engine, conv int64, recebido time.Time) {
+	e.processarLote(context.Background(), []inbound{{
+		conv: conversaDoBot(conv, chatwoot.StatusOpen), phone: telefoneIdentificado,
+		content: "oi", recebidoEm: recebido,
+	}})
+}
 
 // engineComStore monta uma Engine só com o store (sem Chatwoot/gate/cérebro):
 // os handlers de status não falam com ninguém além da persistência.
@@ -442,5 +502,198 @@ func TestRespostaNormalNaoTransfere(t *testing.T) {
 	}
 	if f, _ := st.UltimaFalha(ctx, 63); f != nil {
 		t.Fatalf("caminho feliz não registra falha: %+v", f)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ZC-5: nova tentativa só para falha transitória + teto do turno + disjuntor
+// ---------------------------------------------------------------------------
+
+// TestTransitoriaRepeteEDepoisTransfere: 3 chamadas (1 + 2 novas tentativas,
+// esperas de 2 s e 5 s com "digitando"), então transferência silenciosa.
+func TestTransitoriaRepeteEDepoisTransfere(t *testing.T) {
+	e, st, cw, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio())}
+
+	turno(e, 70, rel.now())
+
+	if br.total() != 3 {
+		t.Fatalf("esperava 3 chamadas ao cérebro (1 + 2 novas tentativas), veio %d", br.total())
+	}
+	if len(rel.esperas) != 2 || rel.esperas[0] != 2*time.Second || rel.esperas[1] != 5*time.Second {
+		t.Fatalf("esperas: queria [2s 5s], veio %v", rel.esperas)
+	}
+	if cw.typing[70] != 2 {
+		t.Fatalf("esperava 'digitando' ligado antes de cada nova tentativa (2), veio %d", cw.typing[70])
+	}
+	if got := cw.mensagens(70, false); len(got) != 1 || got[0] != FormatWhatsApp(MsgTransferencia) {
+		t.Fatalf("esperava só a mensagem neutra, veio %q", got)
+	}
+	f, _ := st.UltimaFalha(context.Background(), 70)
+	if f == nil || f.Classe != brain.ClasseTransitoria || !strings.Contains(f.Causa, "3 tentativas") {
+		t.Fatalf("registro da transferência inesperado: %+v", f)
+	}
+}
+
+// TestTransitoriaRecuperaNaNovaTentativa: a 2ª tentativa dá certo → resposta
+// entregue, sem transferência.
+func TestTransitoriaRecuperaNaNovaTentativa(t *testing.T) {
+	e, st, cw, br := engineCompleta(t)
+	comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio()), responde("tudo certo!")}
+
+	turno(e, 71, e.agora())
+
+	if br.total() != 2 {
+		t.Fatalf("esperava 2 chamadas, veio %d", br.total())
+	}
+	if got := cw.mensagens(71, false); len(got) != 1 || got[0] != "tudo certo!" {
+		t.Fatalf("resposta da nova tentativa não chegou: %q", got)
+	}
+	if f, _ := st.UltimaFalha(context.Background(), 71); f != nil {
+		t.Fatalf("recuperou: não devia registrar falha: %+v", f)
+	}
+}
+
+// TestDefinitivaNaoRepete: 402 → uma única chamada e transferência.
+func TestDefinitivaNaoRepete(t *testing.T) {
+	e, _, cw, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+
+	turno(e, 72, rel.now())
+
+	if br.total() != 1 || len(rel.esperas) != 0 || cw.typing[72] != 0 {
+		t.Fatalf("definitiva não repete: chamadas=%d esperas=%v typing=%d", br.total(), rel.esperas, cw.typing[72])
+	}
+	if labels := cw.labels[72]; len(labels) != 1 || labels[0] != "fila-humano" {
+		t.Fatalf("esperava fila-humano, veio %v", labels)
+	}
+}
+
+// TestTetoDoTurnoImpedeNovaTentativa: mensagem recebida há 44 s (rajada +
+// cérebro lento) → sem tempo para esperar 2 s dentro do teto de 45 s: não
+// repete, transfere.
+func TestTetoDoTurnoImpedeNovaTentativa(t *testing.T) {
+	e, st, _, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio())}
+
+	turno(e, 73, rel.now().Add(-44*time.Second))
+
+	if br.total() != 1 || len(rel.esperas) != 0 {
+		t.Fatalf("fora do teto não repete: chamadas=%d esperas=%v", br.total(), rel.esperas)
+	}
+	if f, _ := st.UltimaFalha(context.Background(), 73); f == nil || !strings.Contains(f.Causa, "teto") {
+		t.Fatalf("causa devia citar o teto: %+v", f)
+	}
+}
+
+// TestDisjuntorAbreNaTerceiraEFechaAposTeste: 3 falhas definitivas iguais em
+// 5 min abrem o disjuntor (10 min sem chamar o cérebro, transferência direta);
+// vencido o prazo, UMA chamada de teste bem-sucedida fecha.
+func TestDisjuntorAbreNaTerceiraEFechaAposTeste(t *testing.T) {
+	e, st, cw, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+
+	for conv := int64(80); conv < 83; conv++ {
+		turno(e, conv, rel.now())
+		rel.avancar(30 * time.Second)
+	}
+	if br.total() != 3 {
+		t.Fatalf("3 falhas → 3 chamadas, veio %d", br.total())
+	}
+	if aberto, _ := e.disjuntor.estado(); !aberto {
+		t.Fatal("3ª falha definitiva igual devia abrir o disjuntor")
+	}
+
+	// Aberto: a 4ª conversa nem chama o cérebro e é transferida direto.
+	turno(e, 83, rel.now())
+	if br.total() != 3 {
+		t.Fatalf("disjuntor aberto não pode chamar o cérebro; chamadas=%d", br.total())
+	}
+	f, _ := st.UltimaFalha(context.Background(), 83)
+	if f == nil || f.Origem != OrigemDisjuntor || !strings.Contains(f.Causa, "402") {
+		t.Fatalf("transferência pelo disjuntor inesperada: %+v", f)
+	}
+	if got := cw.mensagens(83, false); len(got) != 1 || got[0] != FormatWhatsApp(MsgTransferencia) {
+		t.Fatalf("cliente devia receber só a mensagem neutra: %q", got)
+	}
+
+	// Ainda dentro dos 10 min: continua fechado para o cérebro.
+	rel.avancar(9 * time.Minute)
+	turno(e, 84, rel.now())
+	if br.total() != 3 {
+		t.Fatalf("antes de 10 min o disjuntor segue aberto; chamadas=%d", br.total())
+	}
+
+	// Passaram 10 min e o cérebro voltou: a chamada de teste passa e fecha.
+	rel.avancar(2 * time.Minute)
+	br.respostas = []func() (*brain.ChatResponse, error){responde("voltei")}
+	turno(e, 85, rel.now())
+	if br.total() != 4 {
+		t.Fatalf("após 10 min devia liberar a chamada de teste; chamadas=%d", br.total())
+	}
+	if got := cw.mensagens(85, false); len(got) != 1 || got[0] != "voltei" {
+		t.Fatalf("resposta da chamada de teste não chegou: %q", got)
+	}
+	if aberto, _ := e.disjuntor.estado(); aberto {
+		t.Fatal("chamada de teste bem-sucedida devia fechar o disjuntor")
+	}
+	turno(e, 86, rel.now())
+	if br.total() != 5 {
+		t.Fatalf("fechado: toda conversa volta a chamar o cérebro; chamadas=%d", br.total())
+	}
+}
+
+// TestDisjuntorReabreSeTesteFalha: a chamada de teste falha definitiva → mais
+// 10 min fechado, sem chamar o cérebro.
+func TestDisjuntorReabreSeTesteFalha(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+	for conv := int64(90); conv < 93; conv++ {
+		turno(e, conv, rel.now())
+	}
+	rel.avancar(11 * time.Minute)
+	turno(e, 93, rel.now()) // chamada de teste: falha de novo
+	if br.total() != 4 {
+		t.Fatalf("esperava a chamada de teste (4ª), veio %d", br.total())
+	}
+	turno(e, 94, rel.now())
+	if br.total() != 4 {
+		t.Fatalf("teste falhou: disjuntor reaberto, não chama; chamadas=%d", br.total())
+	}
+}
+
+// TestFalhasDefinitivasDiferentesNaoAbremDisjuntor: 2 de um tipo + 1 de outro
+// em 5 min não são "3 falhas iguais".
+func TestFalhasDefinitivasDiferentesNaoAbremDisjuntor(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	outra := &brain.Erro{Classe: brain.ClasseDefinitiva, Causa: "chave do OpenRouter inválida (401)", Status: 500}
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402()), sempre(erro402()), sempre(outra)}
+	for conv := int64(95); conv < 98; conv++ {
+		turno(e, conv, rel.now())
+	}
+	if aberto, _ := e.disjuntor.estado(); aberto {
+		t.Fatal("falhas de chaves diferentes não abrem o disjuntor")
+	}
+}
+
+// TestFalhasForaDaJanelaNaoAbremDisjuntor: 3 falhas iguais espalhadas por mais
+// de 5 min não abrem.
+func TestFalhasForaDaJanelaNaoAbremDisjuntor(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+	for conv := int64(100); conv < 103; conv++ {
+		turno(e, conv, rel.now())
+		rel.avancar(3 * time.Minute)
+	}
+	if aberto, _ := e.disjuntor.estado(); aberto {
+		t.Fatal("3 falhas em 6 min (janela de 5) não abrem o disjuntor")
 	}
 }
