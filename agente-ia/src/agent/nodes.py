@@ -39,15 +39,17 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 
 from src.agent.prompts import (
+    RESPOSTA_ACAO_SEM_FERRAMENTA,
     RESPOSTA_ERRO_INTERNO,
     RESPOSTA_OFF_TOPIC,
     SYSTEM_PROMPT_AGENTE,
 )
 from src.agent.state import AgentState
-from src.agent.tool_policy import aplicar_politica
+from src.agent.tool_policy import aplicar_politica, carimbar_proposta
 from src.config import get_settings
 from src.security.input_guardrails import avaliar_entrada
 from src.security.output_guardrails import (
+    afirmacoes_de_acao,
     contem_vazamento_interno,
     envolver_chunks_rag,
     remover_citacoes,
@@ -566,10 +568,13 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
                 }
 
             # Fluxo em duas fases do chamado: o dry-run aprovado vira estado
-            # (é ELE que a abertura executa); a abertura bem-sucedida o consome.
+            # (é ELE que a abertura executa), carimbado com `criada_em`/`turno`
+            # — a política de `abrir` exige proposta válida (15 min) e a
+            # confirmação explícita do cliente no turno seguinte (ZB-1); a
+            # abertura bem-sucedida o consome.
             if nome == "preparar_abertura_chamado" and isinstance(resultado, dict):
                 if resultado.get("status") and resultado.get("proposta"):
-                    proposta_chamado = dict(resultado["proposta"])
+                    proposta_chamado = carimbar_proposta(resultado["proposta"], state)
             elif nome == "abrir_chamado_suporte" and isinstance(resultado, dict):
                 if resultado.get("status"):
                     proposta_chamado = None
@@ -611,6 +616,50 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
 # ---------------------------------------------------------------------------
 
 
+def _resultado_de_tool_ok(tm: ToolMessage) -> bool:
+    """True quando o `ToolMessage` representa uma execução BEM-SUCEDIDA.
+
+    Recusa da política, tool desconhecida, exceção mascarada (A2) e
+    `status: false` (SAC indisponível / campo inválido) contam como NÃO
+    executada — afirmar ação em cima deles é tão falso quanto sem ferramenta.
+    Conteúdo que não é JSON (texto/RAG legado) é resultado válido.
+    """
+    texto = _texto_de(tm.content).strip()
+    if not texto:
+        return False
+    try:
+        dado = json.loads(texto)
+    except ValueError:
+        return True
+    if not isinstance(dado, dict):
+        return True
+    if dado.get("recusado_pela_politica"):
+        return False
+    status = dado.get("status")
+    if status is True:
+        return True
+    falhou = status is False or status == "rejeitado" or bool(dado.get("erro"))
+    return not falhou
+
+
+def _turno_executou_ferramenta(messages: Iterable[BaseMessage] | None) -> bool:
+    """True se, DEPOIS da última mensagem humana, alguma tool executou com sucesso.
+
+    É o fato que ancora uma afirmação de ação ("registrei", "abri o chamado"):
+    sem ele, a afirmação é invenção do modelo (ZE-2). Ferramenta de turno
+    anterior não conta — o recorte é o turno atual.
+    """
+    msgs = list(messages or [])
+    inicio = 0
+    for i in range(len(msgs) - 1, -1, -1):
+        if isinstance(msgs[i], HumanMessage):
+            inicio = i + 1
+            break
+    return any(
+        isinstance(m, ToolMessage) and _resultado_de_tool_ok(m) for m in msgs[inicio:]
+    )
+
+
 def output_guardrail_node(state: AgentState) -> dict:
     """Valida a resposta final antes de sair do grafo.
 
@@ -619,6 +668,12 @@ def output_guardrail_node(state: AgentState) -> dict:
        seção; a rastreabilidade fica em `fontes_usadas` (LLM09).
     2. Máscara de erro interno (A2): resposta com marca inequívoca de erro
        técnico (traceback, módulos, hosts) é trocada por fallback amigável.
+    3. Ação sem ferramenta (ZE-2): resposta que AFIRMA ter registrado/anotado/
+       avisado o time/aberto chamado num turno em que NENHUMA ferramenta
+       executou com sucesso é trocada por `RESPOSTA_ACAO_SEM_FERRAMENTA` (não
+       afirma nada e oferece abrir chamado). Fora de uma tool não existe
+       "recado" nem "aviso" — a afirmação é invenção do modelo. Determinístico:
+       o LLM nunca faz parte da base confiável.
 
     A mensagem corrigida reusa o `id` da original — o reducer `add_messages`
     SUBSTITUI em vez de acrescentar (o estado persistido fica coerente).
@@ -636,6 +691,16 @@ def output_guardrail_node(state: AgentState) -> dict:
         logger.warning("output_guardrail_vazamento_interno len=%d", len(novo))
         logger.debug("output_guardrail_resposta_original %r", novo)
         novo = RESPOSTA_ERRO_INTERNO
+    elif not _turno_executou_ferramenta(messages):
+        afirmacoes = afirmacoes_de_acao(novo)
+        if afirmacoes:
+            logger.warning(
+                "output_guardrail_acao_sem_ferramenta afirmacoes=%s len=%d",
+                afirmacoes,
+                len(novo),
+            )
+            logger.debug("output_guardrail_resposta_original %r", novo)
+            novo = RESPOSTA_ACAO_SEM_FERRAMENTA
 
     if novo == texto:
         return {}

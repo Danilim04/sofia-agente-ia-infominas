@@ -13,8 +13,10 @@ e-mail, telefone, grupo) vêm da identidade verificada — **nunca** do LLM. O
 agente só decide o conteúdo (resumo/descrição) e a classificação
 (categoria/ocorrência/prioridade), que o Go valida contra a config do SAC.
 
-`telefone` é um `InjectedToolArg`: fica fora do schema que o modelo vê e é
-preenchido pelo `tools_node` a partir do estado da sessão.
+`telefone` e `conversation_id` são `InjectedToolArg`: ficam fora do schema
+que o modelo vê e são preenchidos pelo `tools_node` a partir do estado da
+sessão. O `conversation_id` (id da conversa no Chatwoot) vai em toda chamada
+só para o gateway correlacionar seus logs de erro do SAC com a conversa.
 
 As docstrings abaixo são lidas pelo LLM para escolher e usar a tool — edite com
 intenção (elas custam tokens e guiam o comportamento).
@@ -57,6 +59,7 @@ def _post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
 @tool
 def consultar_tipos_de_chamado(
     telefone: Annotated[str, InjectedToolArg] = "",
+    conversation_id: Annotated[str, InjectedToolArg] = "",
 ) -> dict[str, Any]:
     """Lista as categorias e ocorrências válidas para abrir um chamado no SAC.
 
@@ -69,7 +72,10 @@ def consultar_tipos_de_chamado(
         dict: status (bool), categorias (list[str]), ocorrencias (list de
         {categoria, ocorrencia, descricao, prazo}).
     """
-    return _post("/tools/sac/tipos", {"telefone": telefone})
+    return _post(
+        "/tools/sac/tipos",
+        {"telefone": telefone, "conversation_id": conversation_id},
+    )
 
 
 @tool
@@ -80,7 +86,9 @@ def preparar_abertura_chamado(
     ocorrencia: str,
     prioridade: str = "MEDIA",
     empresa: str = "",
+    novo_chamado: bool = False,
     telefone: Annotated[str, InjectedToolArg] = "",
+    conversation_id: Annotated[str, InjectedToolArg] = "",
 ) -> dict[str, Any]:
     """Valida e prepara a abertura de um chamado (dry-run — NÃO cria nada).
 
@@ -89,10 +97,18 @@ def preparar_abertura_chamado(
     vier motivo "ocorrencia_invalida", a resposta traz a lista `ocorrencias`
     válidas — escolha a que melhor casa e chame de novo AGORA, sem envolver o
     cliente. Se vier "empresa_ambigua", pergunte de qual das empresas DO
-    CLIENTE é o chamado e repita passando `empresa`.
+    CLIENTE é o chamado e repita passando `empresa`. Se vier "chamado_aberto",
+    o cliente JÁ TEM chamado(s) em aberto (lista `chamados_abertos`, com
+    protocolo, resumo e link): mostre-os e pergunte se o problema é de um
+    deles — não abra outro por conta própria; só repita com
+    `novo_chamado=true` se o cliente pedir explicitamente um chamado NOVO.
+    "sem_email"/"sem_empresa": o cadastro não permite abrir por aqui — explique
+    o motivo (está em `erro`) e ofereça um atendente.
 
     Com status true, apresente ao cliente o resumo do que será registrado (da
-    `proposta`) e peça confirmação; só então chame `abrir_chamado_suporte`.
+    `proposta`) e peça um "sim"/"pode abrir"; só na mensagem SEGUINTE dele, se
+    for essa confirmação, chame `abrir_chamado_suporte`. A proposta vale 15
+    minutos.
 
     Args:
         resumo: título curto do problema (1 linha). Será registrado em MAIÚSCULAS.
@@ -103,23 +119,30 @@ def preparar_abertura_chamado(
             URGENTE só quando o impacto for claramente alto (operação parada).
         empresa: informe SÓ quando o cliente tiver mais de uma empresa e o
             sistema pedir para desambiguar (motivo "empresa_ambigua").
+        novo_chamado: True SÓ quando o cliente pediu explicitamente um chamado
+            NOVO apesar de já ter chamado em aberto (motivo "chamado_aberto").
+            Nunca decida isso por ele.
 
     Returns:
         dict: status (bool); em sucesso, proposta {resumo, descricao, categoria,
-        ocorrencia, prioridade, empresa, prazo}. Em falha, erro e às vezes
-        motivo ("ocorrencia_invalida" com `ocorrencias` | "empresa_ambigua"
-        com `empresas` | "campo_invalido" | "nao_identificado").
+        ocorrencia, prioridade, empresa, prazo, novo_chamado}. Em falha, erro e
+        às vezes motivo ("ocorrencia_invalida" com `ocorrencias` |
+        "empresa_ambigua" com `empresas` | "chamado_aberto" com
+        `chamados_abertos` | "campo_invalido" | "sem_email" | "sem_empresa" |
+        "nao_identificado").
     """
     return _post(
         "/tools/sac/preparar",
         {
             "telefone": telefone,
+            "conversation_id": conversation_id,
             "resumo": resumo,
             "descricao": descricao,
             "categoria": categoria,
             "ocorrencia": ocorrencia,
             "prioridade": prioridade,
             "grupo_emp": empresa,
+            "novo_chamado": bool(novo_chamado),
         },
     )
 
@@ -128,14 +151,17 @@ def preparar_abertura_chamado(
 def abrir_chamado_suporte(
     proposta: Annotated[Optional[dict], InjectedToolArg] = None,
     telefone: Annotated[str, InjectedToolArg] = "",
+    conversation_id: Annotated[str, InjectedToolArg] = "",
 ) -> dict[str, Any]:
     """Abre o chamado da proposta JÁ PREPARADA e confirmada pelo cliente.
 
     AÇÃO COM EFEITO COLATERAL (LLM08): cria um chamado real. Só chame DEPOIS de
     `preparar_abertura_chamado` ter retornado status true E de o cliente
-    confirmar explicitamente (ex.: "pode abrir", "sim"). Não recebe argumentos:
-    o chamado criado é EXATAMENTE a proposta preparada — para mudar qualquer
-    coisa (resumo, prioridade...), prepare de novo antes de abrir.
+    confirmar explicitamente NA MENSAGEM SEGUINTE (só "pode abrir", "sim",
+    "ok" — um protocolo, "esse", uma pergunta ou um pedido de mudança NÃO
+    confirmam e o sistema recusa). Não recebe argumentos: o chamado criado é
+    EXATAMENTE a proposta preparada — para mudar qualquer coisa (resumo,
+    prioridade...), prepare de novo antes de abrir.
 
     Returns:
         dict: status (bool); em sucesso, protocolo, link (URL do chat do
@@ -147,12 +173,16 @@ def abrir_chamado_suporte(
         "/tools/sac/criar",
         {
             "telefone": telefone,
+            "conversation_id": conversation_id,
             "resumo": proposta.get("resumo", ""),
             "descricao": proposta.get("descricao", ""),
             "categoria": proposta.get("categoria", ""),
             "ocorrencia": proposta.get("ocorrencia", ""),
             "prioridade": proposta.get("prioridade", "MEDIA"),
             "grupo_emp": proposta.get("empresa", ""),
+            # Pedido explícito de chamado novo conferido no preparo (ZB-2): a
+            # abertura o repete para o gateway reconferir os abertos.
+            "novo_chamado": bool(proposta.get("novo_chamado", False)),
         },
     )
 
@@ -160,6 +190,7 @@ def abrir_chamado_suporte(
 @tool
 def listar_chamados_abertos(
     telefone: Annotated[str, InjectedToolArg] = "",
+    conversation_id: Annotated[str, InjectedToolArg] = "",
 ) -> dict[str, Any]:
     """Lista os chamados EM ABERTO do cliente (pendentes / em andamento) no SAC.
 
@@ -172,7 +203,10 @@ def listar_chamados_abertos(
         dict: status (bool), total (int), chamados (list de {protocolo, resumo,
         status, categoria, ocorrencia, dt_abertura, link}).
     """
-    return _post("/tools/sac/listar", {"telefone": telefone})
+    return _post(
+        "/tools/sac/listar",
+        {"telefone": telefone, "conversation_id": conversation_id},
+    )
 
 
 SAC_TOOLS = [

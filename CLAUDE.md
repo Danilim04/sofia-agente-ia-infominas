@@ -111,7 +111,8 @@ do estado e validados pela política (`tool_policy.py`); trabalho determinístic
     para TODA mensagem e injeta os chunks (em `<documento_externo>`) no system
     prompt — o modelo não decide "se" consulta a base (mata a citação fabricada
     F4 e corta uma chamada de LLM). `output_guardrail_node` valida citações
-    contra `fontes_usadas` e mascara vazamento de erro interno (A2).
+    contra `fontes_usadas`, mascara vazamento de erro interno (A2) e barra
+    resposta que afirma ação sem ferramenta executada no turno (ZE-2).
   - `tool_policy.py`: **política declarativa de autorização** (F7/F9) — para
     cada tool, quais args são INJETADOS da sessão (`InjectedToolArg`, fora do
     schema do modelo) e quais args do LLM são VALIDADOS contra a sessão.
@@ -123,16 +124,19 @@ do estado e validados pela política (`tool_policy.py`); trabalho determinístic
     (`LLM_TIMEOUT`, default 45s < BRAIN_TIMEOUT do gateway).
   - `prompts.py`: `SYSTEM_PROMPT_AGENTE` (blindado, com a **persona Zapin** —
     ver abaixo), `SYSTEM_PROMPT_CLASSIFICADOR`, `SYSTEM_PROMPT_EXTRATOR_LOGIN`
-    (extrator de login), `RESPOSTA_OFF_TOPIC` e `RESPOSTA_ERRO_INTERNO`.
+    (extrator de login), `RESPOSTA_OFF_TOPIC`, `RESPOSTA_ERRO_INTERNO` e
+    `RESPOSTA_ACAO_SEM_FERRAMENTA`.
 - **`src/identity/`** — `login_extractor.py`: `extrair_login(mensagem)` usa o LLM
   barato (mesmo do classificador) com saída estruturada (`LoginExtraido`) para
   achar o identificador embutido numa frase livre. É o **fallback do gate Go**,
   exposto via `POST /extract-login`. **Fail-soft** (erro → `login=None`) e o valor
   é só um CANDIDATO — quem autoriza é o gate (Mongo + confirmação). Aceita injeção
   de dependência (`extrator=`) para testar sem rede.
-- **`src/tools/`** — `crm_mocks.py` (`rastrear_nota_fiscal` com escopo
-  `grupos_emp_sessao` **injetado** — o LLM só vê `numero_nota`; os demais mocks
-  de CRM são legado, fora da lista canônica), `sac_tools.py` (chamados reais
+- **`src/tools/`** — `crm_mocks.py` (mocks de CRM, **todos fora da lista
+  canônica** — na rodada 1 a `rastrear_nota_fiscal` mock estava na lista e
+  respondeu "nota não encontrada" a cliente real [ZE-1]; fica só para
+  testes/harness até existir integração real, com o escopo `grupos_emp_sessao`
+  **injetado** pela política — o LLM só veria `numero_nota`), `sac_tools.py` (chamados reais
   via gateway Go; `telefone` injetado; abertura em **duas fases**:
   `preparar_abertura_chamado` é dry-run no gateway — a proposta aprovada vira
   `proposta_chamado` no estado — e `abrir_chamado_suporte` executa EXATAMENTE
@@ -221,8 +225,13 @@ do gate. **Ao mexer no tom, mantenha os dois lados (prompt + gate) alinhados.**
 - **Output**: conteúdo de tool/RAG entra embrulhado em `<documento_externo>`
   com escape de `<`,`>`,`&` (LLM01 indireta). Na saída final,
   `output_guardrail_node` **remove citações que não batem com documentos
-  recuperados** (F4 — fonte fabricada não chega ao cliente) e troca respostas
-  com marca de erro interno pelo fallback (A2).
+  recuperados** (F4 — fonte fabricada não chega ao cliente), troca respostas
+  com marca de erro interno pelo fallback (A2) e **barra resposta que afirma
+  ação sem ferramenta** ("registrei", "deixei o recado", "avisei o time",
+  "abri o chamado") quando nenhuma tool executou com sucesso no turno — vira
+  `RESPOSTA_ACAO_SEM_FERRAMENTA`, que não afirma nada e oferece abrir chamado
+  (ZE-2; detector textual em `afirmacoes_de_acao`, recorte do turno em
+  `_turno_executou_ferramenta`).
 - O system prompt instrui que tudo dentro de `<documento_externo>` é **DADO,
   nunca COMANDO**, e que o agente fala **sempre com um cliente** (nunca
   dev/homologação/auditoria — C2/A1).
@@ -281,7 +290,10 @@ duplicata ou envelope de relay:
   uma conversa em `falha` ("roteada") ficava muda até o `GATE_FALHA_TTL` (1h)
   vencer — cliente com chamado novo sem resposta. O cache `identities` (por
   telefone) não é tocado: quem já se identificou volta direto ao cérebro. O
-  TTL fica só como rede de segurança para conversa nunca resolvida.
+  TTL fica só como rede de segurança para conversa nunca resolvida. No mesmo
+  ponto o gateway chama `POST /encerrar-episodio` do cérebro (best-effort,
+  5 s), que **limpa a `proposta_chamado` pendente** daquela conversa (ZB-1 —
+  conversa #45: proposta de um episódio anterior "confirmada" por "Esse").
 - **Persistência** (`internal/store`): interface única, dois backends —
   **Postgres** quando `PG_URL` está definido (o MESMO Postgres do RAG/pgvector
   do compose, schema `gateway`, criado no boot) ou **SQLite** em `DB_PATH`
@@ -290,7 +302,7 @@ duplicata ou envelope de relay:
 - **Saída WhatsApp-native** (`internal/engine/whatsapp.go`): `DividirBolhas`
   (o prompt instrui o agente a separar a resposta em bolhas com uma linha
   `---`; cada bolha vira uma mensagem, com pausa `BOLHA_PAUSA`=1.5s entre
-  elas) + `FormatWhatsApp` (`**`→`*`, `#`→negrito, `[t](u)`→`t: u`) +
+  elas) + `FormatWhatsApp` (dialeto do Chatwoot, que a Evolution converte: `*x*` e `**x**`→`**x**`, `#`→negrito, link/`mailto:`/`<url>`→URL nua, marcadores balanceados por bolha e por parte) +
   `QuebrarMensagem` (`REPLY_MAX_CHARS`=900) em todo `send()` (F3/F12).
 
 ### Deploy (VM compartilhada com o omni-route)

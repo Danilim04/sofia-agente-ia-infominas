@@ -39,6 +39,18 @@ CREATE TABLE IF NOT EXISTS gateway.identities (
     perfil     TEXT NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS gateway.falhas (
+    seq             BIGSERIAL PRIMARY KEY,
+    id              TEXT   NOT NULL,
+    conversation_id BIGINT NOT NULL,
+    origem          TEXT   NOT NULL DEFAULT '',
+    classe          TEXT   NOT NULL DEFAULT '',
+    causa           TEXT   NOT NULL DEFAULT '',
+    detalhe         TEXT   NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS falhas_conversa ON gateway.falhas (conversation_id, seq);
 `
 
 // NewPostgres abre o pool, valida a conexão (fail-fast no boot) e aplica o
@@ -153,6 +165,33 @@ func (s *PostgresStore) PutIdentity(ctx context.Context, ci *CachedIdentity) err
 		     expires_at = EXCLUDED.expires_at`,
 		ci.Phone, ci.Login, ci.Perfil, ci.ExpiresAt)
 	return err
+}
+
+func (s *PostgresStore) RegistrarFalha(ctx context.Context, f *Falha) error {
+	quando := f.CreatedAt
+	if quando.IsZero() {
+		quando = time.Now()
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO gateway.falhas (id, conversation_id, origem, classe, causa, detalhe, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		f.ID, f.ConversationID, f.Origem, f.Classe, f.Causa, f.Detalhe, quando)
+	return err
+}
+
+func (s *PostgresStore) UltimaFalha(ctx context.Context, convID int64) (*Falha, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, conversation_id, origem, classe, causa, detalhe, created_at
+		   FROM gateway.falhas WHERE conversation_id = $1 ORDER BY seq DESC LIMIT 1`, convID)
+	var f Falha
+	err := row.Scan(&f.ID, &f.ConversationID, &f.Origem, &f.Classe, &f.Causa, &f.Detalhe, &f.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
 }
 
 func (s *PostgresStore) Close() error { return s.db.Close() }

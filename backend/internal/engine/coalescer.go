@@ -23,9 +23,11 @@ import (
 
 // inbound é uma mensagem de cliente já filtrada/higienizada, aguardando lote.
 type inbound struct {
-	conv    chatwoot.Conversation
-	phone   string
-	content string
+	conv       chatwoot.Conversation
+	phone      string
+	content    string
+	recebidoEm time.Time // quando o cliente mandou (created_at do Chatwoot; senão a chegada) — base do teto do turno
+	anexo      string    // file_type do anexo ("audio", "image", "file"...); vazio = só texto (ZD-2)
 }
 
 // filaOciosaTTL: worker sem mensagens por esse tempo encerra e libera o slot.

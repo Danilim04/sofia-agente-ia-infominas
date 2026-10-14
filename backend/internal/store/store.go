@@ -39,6 +39,21 @@ type CachedIdentity struct {
 	ExpiresAt time.Time
 }
 
+// Falha é uma ocorrência registrada quando a conversa é transferida à fila
+// humana por falha (cérebro, Mongo, disjuntor, gate) ou a pedido do cliente.
+// O ID (`ZPF-AAAAMMDD-HHMM-NN`) é o MESMO da nota privada na conversa, do log
+// `zapin_falha` do gateway e — quando a falha veio do cérebro — do log
+// `chat_erro` do Python: é por ele que o atendente e o responsável se acham.
+type Falha struct {
+	ID             string
+	ConversationID int64
+	Origem         string // gate | cerebro | mongo | disjuntor | cliente
+	Classe         string // transitoria | definitiva | "" (não se aplica)
+	Causa          string // linguagem simples (vai na nota privada e no alerta)
+	Detalhe        string // técnico, sem dado pessoal (só log/tabela)
+	CreatedAt      time.Time
+}
+
 // Store é a interface de persistência usada pelo resto da aplicação.
 type Store interface {
 	// MarkProcessed registra um delivery_id; devolve true se for novo.
@@ -59,6 +74,12 @@ type Store interface {
 	GetIdentity(ctx context.Context, phone string) (*CachedIdentity, error)
 	// PutIdentity grava/atualiza o cache telefone→perfil.
 	PutIdentity(ctx context.Context, ci *CachedIdentity) error
+
+	// RegistrarFalha grava uma ocorrência (tabela `falhas`). CreatedAt vazio =
+	// agora.
+	RegistrarFalha(ctx context.Context, f *Falha) error
+	// UltimaFalha devolve a ocorrência mais recente da conversa, ou nil.
+	UltimaFalha(ctx context.Context, convID int64) (*Falha, error)
 
 	Close() error
 }

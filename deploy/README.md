@@ -84,6 +84,7 @@ Dispara a cada push na `main` (ou `Run workflow` com uma tag à escolha):
 | `OPENROUTER_API_KEY` | chave do OpenRouter (cérebro) |
 | `MONGO_URI` | Mongo da Azapfy (lookup de usuário do gate) |
 | `WEBHOOK_TOKEN` | segredo do `?token=` da URL de webhook cadastrada no Chatwoot |
+| `WEBHOOK_SECRET` | opcional — segredo HMAC do webhook (`X-Chatwoot-Signature` = `sha256=HMAC-SHA256(segredo, "{timestamp}.{corpo}")`). Vazio = sem verificação (o Chatwoot em uso não assina); preenchido, requisição sem assinatura válida recebe 401 — só definir quando o lado do Chatwoot assinar com o mesmo segredo |
 | `TOOLS_API_TOKEN` | segredo compartilhado cérebro↔gateway (tools SAC) |
 | `PGVECTOR_PASSWORD` | senha do Postgres do compose (RAG + estado do gateway); só alfanumérica, entra numa URL |
 | `DOCS_API_KEY` | chave `azk_…` do AzapDocs (escopos `DOCS_LIST` + `DOCS_READ`) — fonte da base de conhecimento |
@@ -91,7 +92,7 @@ Dispara a cada push na `main` (ou `Run workflow` com uma tag à escolha):
 
 | Variable | O que é |
 |---|---|
-| `INBOX_ID` | caixa do Chatwoot cujas conversas novas o gateway põe na `fila-bot`. Vazia = `0` = todas. Os ids são da instância — a pipeline "Configurar Chatwoot" lista as caixas ao final. |
+| `INBOX_ID` | caixa do Chatwoot que o bot atende: conversas novas dela entram na `fila-bot` e só mensagens dela são respondidas. **Obrigatória e > 0** — o `render-env.sh` aborta o deploy se vier vazia ou `0` (que faria o bot atender todas as caixas). Os ids são da instância — a pipeline "Configurar Chatwoot" lista as caixas ao final. |
 
 O `CHATWOOT_API_TOKEN` de verdade é **estado da VM**: a pipeline "Configurar
 Chatwoot" grava o access token do usuário "Zapin" em
@@ -126,8 +127,9 @@ Sem registry de imagens ⇒ sem secrets de Docker Hub/GHCR.
    etiquetas e webhook pela API do Chatwoot (o mesmo caminho do front do
    omni), verificação via `GET /api/auth/workspace/me`, e recarrega o
    gateway. **Sem passo manual**: ao final dela o bot está atendendo. Ela
-   também **lista as caixas de entrada** da conta: se o bot deve atender só
-   uma, grave o id na variable `INBOX_ID` e rode o Deploy de novo.
+   também **lista as caixas de entrada** da conta: grave o id da caixa do bot
+   na variable `INBOX_ID` (obrigatória — sem ela o Deploy aborta) e rode o
+   Deploy de novo.
    Conversa nova entra na fila do bot pelo próprio gateway
    (`conversation_created` → aplica `fila-bot`, escopo pela `INBOX_ID` do
    `.env`) — sem automation rule no Chatwoot, que o omni-route não gerencia.

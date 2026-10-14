@@ -5,7 +5,10 @@
 // telefone, grupo) vêm SEMPRE da identidade resolvida no gate (cache
 // telefone→perfil) — nunca de argumentos do LLM. O agente só fornece conteúdo
 // (resumo/descrição) e classificação (categoria/ocorrência/prioridade), que aqui
-// são validados contra a configuração do SAC antes de criar o chamado.
+// são validados contra a configuração do SAC antes de criar o chamado. Antes
+// de preparar ou abrir, os chamados EM ABERTO do relator são consultados: com
+// chamado aberto, só um pedido explícito de chamado novo (`novo_chamado`)
+// permite seguir (ZB-2).
 //
 // As rotas são protegidas por um token compartilhado (header X-Tools-Token).
 package toolsapi
@@ -74,7 +77,8 @@ const (
 // ---------------------------------------------------------------------------
 
 type reqTelefone struct {
-	Telefone string `json:"telefone"`
+	Telefone       string `json:"telefone"`
+	ConversationID string `json:"conversation_id"` // opcional: id da conversa (Contrato A), só para correlação nos logs
 }
 
 func (h *Handler) handleTipos(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +92,7 @@ func (h *Handler) handleTipos(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, err := h.sac.BuscarConfig(r.Context(), h.sac.GrupoEmp())
 	if err != nil {
-		h.log.Error("toolsapi tipos: buscarConfig", "err", err)
+		h.log.Error("toolsapi tipos: buscarConfig", "conversation_id", req.ConversationID, "err", err)
 		writeJSON(w, http.StatusOK, map[string]any{"status": false, "erro": "não consegui consultar as opções de chamado agora"})
 		return
 	}
@@ -115,26 +119,35 @@ func opcoesOcorrencias(cfg sac.Config) []map[string]any {
 }
 
 type reqCriar struct {
-	Telefone   string `json:"telefone"`
-	GrupoEmp   string `json:"grupo_emp"` // opcional: desambigua quando o usuário tem várias empresas
-	Categoria  string `json:"categoria"`
-	Ocorrencia string `json:"ocorrencia"`
-	Prioridade string `json:"prioridade"`
-	Resumo     string `json:"resumo"`
-	Descricao  string `json:"descricao"`
+	Telefone       string `json:"telefone"`
+	ConversationID string `json:"conversation_id"` // opcional: id da conversa (Contrato A), só para correlação nos logs
+	GrupoEmp       string `json:"grupo_emp"`       // opcional: desambigua quando o usuário tem várias empresas
+	Categoria      string `json:"categoria"`
+	Ocorrencia     string `json:"ocorrencia"`
+	Prioridade     string `json:"prioridade"`
+	Resumo         string `json:"resumo"`
+	Descricao      string `json:"descricao"`
+	// NovoChamado: o cliente pediu EXPLICITAMENTE um chamado novo mesmo tendo
+	// chamado(s) em aberto (ZB-2). Sem ele, relator com chamado aberto é
+	// recusado com motivo `chamado_aberto` e a lista dos abertos. O cérebro só
+	// manda true depois de a política dele conferir o pedido na mensagem do
+	// cliente; a proposta do dry-run carrega o valor para a abertura.
+	NovoChamado bool `json:"novo_chamado"`
 }
 
 // pedidoValidado é o resultado da análise campo a campo de um pedido de
 // abertura: conteúdo sanitizado, empresa resolvida contra o perfil e
 // classificação autoritativa da config do SAC.
 type pedidoValidado struct {
-	telefone     string
-	resumo       string
-	descricao    string
-	clienteGrupo string
-	prioridade   string
-	tipo         sac.Tipo
-	perfil       *mongo.Perfil
+	telefone       string
+	conversationID string // só para correlação nos logs (pode vir vazio)
+	resumo         string
+	descricao      string
+	clienteGrupo   string
+	prioridade     string
+	tipo           sac.Tipo
+	perfil         *mongo.Perfil
+	novoChamado    bool // pedido explícito de chamado novo apesar de abertos (ZB-2)
 }
 
 // validarCriar decodifica e analisa CADA campo do pedido, sem confiar no
@@ -152,6 +165,17 @@ func (h *Handler) validarCriar(w http.ResponseWriter, r *http.Request) (*pedidoV
 	if !ok {
 		return nil, false
 	}
+	// O SAC exige o e-mail do relator (cod_relator) e devolve 422 sem ele.
+	// Cadastro sem e-mail é recusado AQUI — antes de qualquer chamada ao SAC
+	// (inclusive a de config) — com um motivo que o cérebro sabe explicar. O
+	// e-mail vem do cadastro, nunca da conversa: pedir ao cliente não resolve.
+	if strings.TrimSpace(perfil.Email) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": false, "motivo": "sem_email",
+			"erro": "o cadastro do cliente não tem e-mail e o SAC exige e-mail para abrir chamado — não é possível abrir por aqui; explique isso ao cliente, oriente-o a regularizar o e-mail do cadastro e ofereça encaminhar a um atendente (não peça o e-mail na conversa: o dado tem que vir do cadastro)",
+		})
+		return nil, false
+	}
 	// Conteúdo do LLM é analisado campo a campo, nunca repassado cru: controle
 	// fora, resumo vira 1 linha, e texto que sobrevive à limpeza é obrigatório.
 	resumo, resumoTruncado := sanitizarTexto(req.Resumo, resumoMax, true)
@@ -167,6 +191,17 @@ func (h *Handler) validarCriar(w http.ResponseWriter, r *http.Request) (*pedidoV
 		h.log.Warn("toolsapi criar: conteúdo truncado no teto",
 			"resumo_truncado", resumoTruncado, "descricao_truncada", descTruncada)
 	}
+	// A empresa do chamado (incidente.empresa) é SEMPRE uma do perfil do
+	// cliente — nunca a equipe (SAC_GRUPO_EMP) nem um valor fixo. Perfil sem
+	// grupo não tem como abrir chamado: recusa com motivo próprio (não é caso
+	// de desambiguação).
+	if len(gruposDe(perfil)) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": false, "motivo": "sem_empresa",
+			"erro": "o cadastro do cliente não tem empresa ativa vinculada, e o chamado precisa ser aberto em nome de uma empresa — não é possível abrir por aqui; explique isso ao cliente e ofereça encaminhar a um atendente",
+		})
+		return nil, false
+	}
 	clienteGrupo, ok := escolherGrupo(perfil, req.GrupoEmp)
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -178,7 +213,7 @@ func (h *Handler) validarCriar(w http.ResponseWriter, r *http.Request) (*pedidoV
 
 	cfg, err := h.sac.BuscarConfig(r.Context(), h.sac.GrupoEmp())
 	if err != nil {
-		h.log.Error("toolsapi criar: buscarConfig", "err", err)
+		h.log.Error("toolsapi criar: buscarConfig", "conversation_id", req.ConversationID, "err", err)
 		writeJSON(w, http.StatusOK, map[string]any{"status": false, "erro": "não consegui validar a categoria agora"})
 		return nil, false
 	}
@@ -196,10 +231,67 @@ func (h *Handler) validarCriar(w http.ResponseWriter, r *http.Request) (*pedidoV
 		h.log.Warn("toolsapi criar: prioridade inválida normalizada",
 			"proposta", req.Prioridade, "usada", prioridade)
 	}
+
+	// Chamados em aberto do relator ANTES de preparar/abrir outro (ZB-2): o
+	// cliente que já tem chamado aberto quase sempre está falando dele (na
+	// conversa #45 citou o protocolo e ganhou um chamado novo). Os abertos
+	// voltam ao cérebro e a recusa só cai com o pedido EXPLÍCITO de chamado
+	// novo. Falha ao consultar = recusa (não abrimos no escuro).
+	abertos, err := h.chamadosAbertos(r.Context(), perfil)
+	if err != nil {
+		h.log.Error("toolsapi criar: buscarRelator", "conversation_id", req.ConversationID, "err", err)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": false, "motivo": "chamados_indisponiveis",
+			"erro": "não consegui conferir os chamados em aberto do cliente agora — não abra um chamado; tente de novo em instantes ou ofereça encaminhar a um atendente",
+		})
+		return nil, false
+	}
+	if len(abertos) > 0 && !req.NovoChamado {
+		h.log.Info("toolsapi criar: recusado — relator com chamado em aberto",
+			"conversation_id", req.ConversationID, "abertos", len(abertos))
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": false, "motivo": "chamado_aberto",
+			"total": len(abertos), "chamados_abertos": abertos,
+			"erro": "o cliente já tem chamado(s) em aberto — não abra outro por conta própria: mostre a ele os chamados abertos (protocolo, resumo e LINK) e pergunte se o problema é de um deles; o atendimento segue pelo chat do chamado. Só prepare um chamado NOVO se o cliente pedir isso explicitamente, repetindo a chamada com novo_chamado=true",
+		})
+		return nil, false
+	}
+	if len(abertos) > 0 {
+		h.log.Info("toolsapi criar: chamado novo com pedido explícito apesar de abertos",
+			"conversation_id", req.ConversationID, "abertos", len(abertos))
+	}
 	return &pedidoValidado{
-		telefone: telefone, resumo: resumo, descricao: descricao,
+		telefone: telefone, conversationID: strings.TrimSpace(req.ConversationID),
+		resumo: resumo, descricao: descricao,
 		clienteGrupo: clienteGrupo, prioridade: prioridade, tipo: tipo, perfil: perfil,
+		novoChamado: req.NovoChamado,
 	}, true
+}
+
+// chamadosAbertos lista os chamados EM ABERTO do relator (pendente / em
+// andamento), já no formato devolvido ao cérebro (com link). Usado por
+// /listar e pela checagem de duplicidade de /preparar e /criar.
+func (h *Handler) chamadosAbertos(ctx context.Context, perfil *mongo.Perfil) ([]map[string]any, error) {
+	chamados, err := h.sac.BuscarRelator(ctx, perfil.Email)
+	if err != nil {
+		return nil, err
+	}
+	abertos := make([]map[string]any, 0, len(chamados))
+	for _, ch := range chamados {
+		if !ch.Aberto() {
+			continue
+		}
+		abertos = append(abertos, map[string]any{
+			"protocolo":   ch.Protocolo,
+			"resumo":      ch.Incidente.Resumo,
+			"status":      ch.Status,
+			"categoria":   ch.Incidente.Categoria,
+			"ocorrencia":  ch.Incidente.Ocorrencia,
+			"dt_abertura": ch.DtAbertura,
+			"link":        h.sac.LinkChamado(perfil.Email, ch.GrupoEmp, ch.Protocolo),
+		})
+	}
+	return abertos, nil
 }
 
 // handlePreparar é o dry-run da abertura: valida tudo que /criar validaria e
@@ -221,6 +313,9 @@ func (h *Handler) handlePreparar(w http.ResponseWriter, r *http.Request) {
 			"prioridade": p.prioridade,
 			"empresa":    p.clienteGrupo,
 			"prazo":      p.tipo.Prazo,
+			// A abertura repete o pedido explícito: com chamado aberto no meio
+			// do caminho, /criar sem ele recusa de novo (chamado_aberto).
+			"novo_chamado": p.novoChamado,
 		},
 	})
 }
@@ -244,7 +339,10 @@ func (h *Handler) handleCriar(w http.ResponseWriter, r *http.Request) {
 		Descricao:    p.descricao,
 	})
 	if err != nil {
-		h.log.Error("toolsapi criar: sac.Criar", "err", err)
+		// O erro do cliente SAC já traz o corpo da resposta higienizado (sem
+		// dado pessoal); o id da conversa liga a falha ao atendimento.
+		h.log.Error("toolsapi criar: sac.Criar", "conversation_id", p.conversationID,
+			"empresa", p.clienteGrupo, "err", err)
 		writeJSON(w, http.StatusOK, map[string]any{"status": false, "erro": "não consegui abrir o chamado agora"})
 		return
 	}
@@ -252,14 +350,16 @@ func (h *Handler) handleCriar(w http.ResponseWriter, r *http.Request) {
 	prioridadeDefinida := false
 	if err := h.sac.DefinirPrioridade(r.Context(), proto, prioridade); err != nil {
 		// Best-effort: o chamado já existe; só a prioridade não foi setada.
-		h.log.Warn("toolsapi criar: prioridade não definida", "protocolo", proto, "err", err)
+		h.log.Warn("toolsapi criar: prioridade não definida", "conversation_id", p.conversationID,
+			"protocolo", proto, "err", err)
 	} else {
 		prioridadeDefinida = true
 	}
 
 	link := h.sac.LinkChamado(perfil.Email, h.sac.GrupoEmp(), proto)
-	h.log.Info("chamado aberto via bot", "protocolo", proto, "categoria", tipo.Categoria,
-		"ocorrencia", tipo.Nome, "prioridade", prioridade, "prioridade_definida", prioridadeDefinida)
+	h.log.Info("chamado aberto via bot", "conversation_id", p.conversationID, "protocolo", proto,
+		"empresa", p.clienteGrupo, "categoria", tipo.Categoria, "ocorrencia", tipo.Nome,
+		"prioridade", prioridade, "prioridade_definida", prioridadeDefinida)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":              true,
 		"protocolo":           proto,
@@ -284,26 +384,11 @@ func (h *Handler) handleListar(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": false, "erro": "sem e-mail na identidade para consultar chamados"})
 		return
 	}
-	chamados, err := h.sac.BuscarRelator(r.Context(), perfil.Email)
+	abertos, err := h.chamadosAbertos(r.Context(), perfil)
 	if err != nil {
-		h.log.Error("toolsapi listar: buscarRelator", "err", err)
+		h.log.Error("toolsapi listar: buscarRelator", "conversation_id", req.ConversationID, "err", err)
 		writeJSON(w, http.StatusOK, map[string]any{"status": false, "erro": "não consegui consultar seus chamados agora"})
 		return
-	}
-	abertos := make([]map[string]any, 0, len(chamados))
-	for _, ch := range chamados {
-		if !ch.Aberto() {
-			continue
-		}
-		abertos = append(abertos, map[string]any{
-			"protocolo":   ch.Protocolo,
-			"resumo":      ch.Incidente.Resumo,
-			"status":      ch.Status,
-			"categoria":   ch.Incidente.Categoria,
-			"ocorrencia":  ch.Incidente.Ocorrencia,
-			"dt_abertura": ch.DtAbertura,
-			"link":        h.sac.LinkChamado(perfil.Email, ch.GrupoEmp, ch.Protocolo),
-		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": true, "total": len(abertos), "chamados": abertos})
 }
@@ -339,8 +424,9 @@ func (h *Handler) resolver(w http.ResponseWriter, ctx context.Context, telefone 
 	return &perfil, true
 }
 
-// escolherGrupo decide o incidente.cliente. Com 1 empresa, usa-a; com várias,
-// exige `grupoPedido` ∈ empresas do usuário. Devolve ok=false se ambíguo.
+// escolherGrupo decide a empresa do chamado (incidente.empresa). Com 1 empresa,
+// usa-a; com várias, exige `grupoPedido` ∈ empresas do usuário. Devolve
+// ok=false se ambíguo (ou sem empresa alguma).
 func escolherGrupo(p *mongo.Perfil, grupoPedido string) (string, bool) {
 	grupos := gruposDe(p)
 	if len(grupos) == 0 {

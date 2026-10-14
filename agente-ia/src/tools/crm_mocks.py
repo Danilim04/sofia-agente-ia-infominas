@@ -14,9 +14,13 @@ argumento de identidade/escopo vindo do LLM. O escopo de `rastrear_nota_fiscal`
 partir da identidade resolvida pelo gate (ver `src/agent/tool_policy.py`) —
 não existe sequência de tokens que consulte NF de outro cliente.
 
-`buscar_cliente_por_telefone`, `verificar_chamados_abertos` e
-`abrir_novo_chamado` são LEGADO (Épicos 2-4): não entram em
-`get_default_tools()` — chamados reais são as SAC tools via gateway Go.
+NENHUMA tool deste módulo entra em `get_default_tools()` (lista canônica do
+agente). `buscar_cliente_por_telefone`, `verificar_chamados_abertos` e
+`abrir_novo_chamado` são LEGADO (Épicos 2-4) — chamados reais são as SAC
+tools via gateway Go. `rastrear_nota_fiscal` saiu da lista na rodada 1
+(ZE-1): mock na lista oficial respondia "nota não encontrada" a cliente real
+consultando dados fictícios. Só volta com integração real (mesmo nome, mesma
+política). `tests/test_default_tools.py` barra qualquer tool daqui na lista.
 """
 
 from __future__ import annotations

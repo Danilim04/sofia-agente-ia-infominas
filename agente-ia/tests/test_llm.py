@@ -70,6 +70,57 @@ def test_get_llm_e_cacheado_por_processo():
 
 
 # ---------------------------------------------------------------------------
+# max_tokens (ZC-1): sem teto, o OpenRouter reserva 65.536 tokens por chamada
+# e responde 402 quando o saldo não cobre a reserva (incidente 2026-10-02).
+# ---------------------------------------------------------------------------
+
+
+def test_get_llm_define_max_tokens_do_settings():
+    client = llm_factory.get_llm()
+    settings = get_settings()
+    assert client.max_tokens is not None
+    assert client.max_tokens == settings.llm_max_tokens
+
+
+def test_defaults_de_max_tokens_sao_conservadores():
+    settings = get_settings()
+    assert settings.llm_max_tokens == 1024
+    assert settings.llm_max_tokens_classificador == 256
+
+
+# ---------------------------------------------------------------------------
+# Timeouts alinhados (ZC-6): LLM_TIMEOUT 20s; prazo do turno no cérebro menor
+# que o BRAIN_TIMEOUT (60s) e que o teto do turno do gateway (45s).
+# ---------------------------------------------------------------------------
+
+BRAIN_TIMEOUT_GATEWAY = 60.0
+TURNO_TETO_GATEWAY = 45.0
+
+
+def test_timeouts_cabem_no_prazo_do_gateway(monkeypatch):
+    # Só os defaults do código (um .env local não pode mascarar o teste).
+    monkeypatch.delenv("LLM_TIMEOUT", raising=False)
+    monkeypatch.delenv("BRAIN_TURNO_PRAZO", raising=False)
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert settings.llm_timeout == 20.0
+    assert settings.brain_turno_prazo == 40.0
+    assert settings.llm_timeout < settings.brain_turno_prazo
+    assert settings.brain_turno_prazo < TURNO_TETO_GATEWAY < BRAIN_TIMEOUT_GATEWAY
+    # Uma chamada + o retry do cliente OpenAI ainda cabem no prazo do turno.
+    assert 2 * settings.llm_timeout <= settings.brain_turno_prazo
+    assert llm_factory.get_llm().request_timeout == settings.llm_timeout
+
+
+def test_max_tokens_configuravel_por_env(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_TOKENS", "512")
+    monkeypatch.setenv("LLM_MAX_TOKENS_CLASSIFICADOR", "128")
+    get_settings.cache_clear()
+    assert llm_factory.get_llm().max_tokens == 512
+    assert llm_factory.get_classifier_llm().max_tokens == 128
+
+
+# ---------------------------------------------------------------------------
 # get_classifier_llm
 # ---------------------------------------------------------------------------
 
@@ -81,6 +132,14 @@ def test_get_classifier_llm_usa_modelo_classifier_e_temp_zero():
     assert client.model_name == settings.openrouter_classifier_model
     # Classificação tem que ser determinística.
     assert client.temperature == 0.0
+
+
+def test_get_classifier_llm_define_max_tokens_curto():
+    """Classificador e extrator de login (mesmo cliente) devolvem JSON curto."""
+    client = llm_factory.get_classifier_llm()
+    settings = get_settings()
+    assert client.max_tokens == settings.llm_max_tokens_classificador
+    assert client.max_tokens <= 256
 
 
 def test_classifier_e_principal_sao_clientes_distintos():

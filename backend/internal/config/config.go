@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,6 +18,7 @@ type Config struct {
 	PublicBaseURL string // URL pública (só para montar a URL do webhook nos logs)
 
 	ChatwootBaseURL   string
+	ChatwootPublicURL string // URL que um humano abre no navegador (links de alerta); vazio = ChatwootBaseURL
 	ChatwootAccountID string
 	ChatwootAPIToken  string
 	WebhookSecret     string
@@ -33,10 +35,25 @@ type Config struct {
 	// conversa é roteada quando a identificação falha.
 	LabelBot    string
 	LabelHumano string
-	// InboxID: caixa de entrada cujas conversas NOVAS ganham a LabelBot no
-	// conversation_created (o bot mesmo etiqueta — sem automation rule no
-	// Chatwoot, que o omni-route não gerencia). 0 = todas as caixas.
+	// LabelReportar: etiqueta que o atendente aplica para reportar um problema
+	// do bot (ZC-8); o gateway avisa o responsável com o ID da ocorrência, a
+	// causa e o link da conversa. Vazio = desligado.
+	LabelReportar string
+	// TeamHumanoID: equipe do Chatwoot que recebe a conversa transferida pelo
+	// bot (ZC-3); 0 = não atribui equipe (só troca a etiqueta).
+	TeamHumanoID int64
+	// InboxID: caixa de entrada do bot. Conversas NOVAS dela ganham a LabelBot
+	// no conversation_created (o bot mesmo etiqueta — sem automation rule no
+	// Chatwoot, que o omni-route não gerencia) e SÓ mensagens dela são
+	// atendidas (ZD-2). 0 = todas as caixas — aceitável só em dev; o deploy de
+	// produção (deploy/env/render-env.sh) exige um id > 0.
 	InboxID int64
+	// BotUserID: id do usuário do Chatwoot que o gateway usa (o "Zapin").
+	// Conversa cujo responsável (assignee) é OUTRO usuário está com um
+	// atendente humano e o bot não responde (ZD-1). 0 = descobrir no boot
+	// pelo próprio token (GET /api/v1/profile); se a descoberta falhar,
+	// QUALQUER responsável é tratado como humano.
+	BotUserID int64
 
 	// Mongo da Azapfy (lookup de usuário por login — a 1ª "tool").
 	MongoURI        string
@@ -47,6 +64,15 @@ type Config struct {
 	// Brain: serviço Python que roda o agente (Contrato A, POST /chat).
 	BrainBaseURL string
 	BrainTimeout time.Duration
+	// TurnoTeto: prazo total do turno desde a MENSAGEM do cliente (coalescência
+	// + chamada ao cérebro + novas tentativas). Passado o teto, não há nova
+	// tentativa e a conversa é transferida (ZC-5). Default 45s.
+	TurnoTeto time.Duration
+
+	// Alertas ao responsável (ZC-7): a decisão de QUANDO alertar é do pacote
+	// alerta; o destino é o log `zapin_alerta` + este webhook opcional
+	// (POST JSON {"text": ...}). Vazio = só log.
+	AlertaWebhookURL string
 
 	// Identidade / gate.
 	ConfirmField  string        // dado pedido na confirmação: "email" (default) | "nome"
@@ -66,8 +92,7 @@ type Config struct {
 	SACBaseURL    string        // raiz do backend SAC (PHP)
 	SACPortalURL  string        // raiz do portal p/ montar o link do chamado
 	SACServiceCod string        // login privilegiado p/ definir prioridade (editar)
-	SACGrupoEmp   string        // desk onde os chamados são abertos (ex.: AZAPERS)
-	SACEmpresa    string        // incidente.empresa (ex.: AZAPFY)
+	SACGrupoEmp   string        // equipe/desk do SAC onde os chamados são abertos (ex.: AZAPERS); a empresa do chamado é a do cliente (perfil) — sem valor fixo
 	SACTimezone   string        // ex.: America/Sao_Paulo
 	SACAPIToken   string        // bearer opcional do backend SAC
 	SACConfigTTL  time.Duration // validade do cache de configuração (categorias/ocorrências)
@@ -83,6 +108,8 @@ func Load() (*Config, error) {
 		LogLevel:          strings.ToLower(getenv("LOG_LEVEL", "info")),
 		PublicBaseURL:     strings.TrimRight(getenv("PUBLIC_BASE_URL", ""), "/"),
 		ChatwootBaseURL:   strings.TrimRight(getenv("CHATWOOT_BASE_URL", ""), "/"),
+		ChatwootPublicURL: strings.TrimRight(getenv("CHATWOOT_PUBLIC_URL", ""), "/"),
+		AlertaWebhookURL:  strings.TrimSpace(getenv("ALERTA_WEBHOOK_URL", "")),
 		ChatwootAccountID: getenv("CHATWOOT_ACCOUNT_ID", ""),
 		ChatwootAPIToken:  getenv("CHATWOOT_API_TOKEN", ""),
 		WebhookSecret:     getenv("WEBHOOK_SECRET", ""),
@@ -91,18 +118,19 @@ func Load() (*Config, error) {
 		PGURL:             strings.TrimSpace(getenv("PG_URL", "")),
 		LabelBot:          getenv("LABEL_BOT", "fila-bot"),
 		LabelHumano:       getenv("LABEL_HUMANO", "fila-humano"),
+		LabelReportar:     getenv("LABEL_REPORTAR", "reportar-zapin"),
 		MongoURI:          getenv("MONGO_URI", ""),
 		MongoDB:           getenv("MONGO_DB", "azapfy"),
 		MongoCollection:   getenv("MONGO_COLLECTION", "users"),
 		BrainBaseURL:      strings.TrimRight(getenv("BRAIN_BASE_URL", "http://localhost:8001"), "/"),
 		ConfirmField:      strings.ToLower(getenv("CONFIRM_FIELD", "email")),
-		InboxID:           int64(getenvInt("INBOX_ID", 0)),
+		TeamHumanoID:      int64(getenvInt("TEAM_HUMANO_ID", 0)),
+		BotUserID:         int64(getenvInt("BOT_USER_ID", 0)),
 		MaxTentativas:     getenvInt("MAX_TENTATIVAS", 3),
 		SACBaseURL:        strings.TrimRight(getenv("SAC_BASE_URL", ""), "/"),
 		SACPortalURL:      strings.TrimRight(getenv("SAC_PORTAL_URL", "https://atendimento.azapfy.com.br"), "/"),
 		SACServiceCod:     getenv("SAC_SERVICE_COD", ""),
 		SACGrupoEmp:       getenv("SAC_GRUPO_EMP", "AZAPERS"),
-		SACEmpresa:        getenv("SAC_EMPRESA", "AZAPFY"),
 		SACTimezone:       getenv("SAC_TIMEZONE", "America/Sao_Paulo"),
 		SACAPIToken:       getenv("SAC_API_TOKEN", ""),
 		ToolsAPIToken:     getenv("TOOLS_API_TOKEN", ""),
@@ -110,11 +138,20 @@ func Load() (*Config, error) {
 	}
 
 	var err error
+	// INBOX_ID é lido ESTRITO (ZD-2): valor malformado — inclusive o placeholder
+	// "${INBOX_ID}" de um template que escapou da renderização — não pode virar
+	// 0 em silêncio, porque 0 é atender TODAS as caixas da conta.
+	if cfg.InboxID, err = parseInboxID(getenv("INBOX_ID", "")); err != nil {
+		return nil, err
+	}
 	if cfg.MongoTimeout, err = parseDuration(getenv("MONGO_TIMEOUT", "8s")); err != nil {
 		return nil, fmt.Errorf("MONGO_TIMEOUT inválido: %w", err)
 	}
 	if cfg.BrainTimeout, err = parseDuration(getenv("BRAIN_TIMEOUT", "60s")); err != nil {
 		return nil, fmt.Errorf("BRAIN_TIMEOUT inválido: %w", err)
+	}
+	if cfg.TurnoTeto, err = parseDuration(getenv("TURNO_TETO", "45s")); err != nil {
+		return nil, fmt.Errorf("TURNO_TETO inválido: %w", err)
 	}
 	if cfg.IdentityTTL, err = parseDuration(getenv("IDENTITY_TTL", "24h")); err != nil {
 		return nil, fmt.Errorf("IDENTITY_TTL inválido: %w", err)
@@ -174,6 +211,25 @@ func getenvInt(key string, def int) int {
 	}
 	return def
 }
+
+// parseInboxID aceita vazio (= 0 = todas as caixas) ou um inteiro >= 0.
+// Qualquer outro texto é erro de configuração, com a mensagem dizendo o que
+// preencher — nunca um 0 silencioso.
+func parseInboxID(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("INBOX_ID inválido (%q): use o id numérico da caixa do Chatwoot que o bot atende (0 = todas as caixas, só em dev)", s)
+	}
+	return n, nil
+}
+
+// AtendeTodasAsCaixas informa se o gateway está sem caixa fixa (INBOX_ID=0):
+// adota conversa nova de qualquer caixa e responde em qualquer uma.
+func (c *Config) AtendeTodasAsCaixas() bool { return c.InboxID == 0 }
 
 func parseDuration(s string) (time.Duration, error) {
 	if s == "" {

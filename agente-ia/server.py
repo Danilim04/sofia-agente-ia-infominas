@@ -15,6 +15,10 @@ Contrato A — request:
 Contrato A — resposta:
     {"reply": "...", "acoes": [], "fontes": [...]}
 
+`POST /encerrar-episodio` `{"conversation_id": "..."}`: o gateway avisa que a
+conversa foi RESOLVIDA no Chatwoot; a proposta de chamado pendente é limpa
+(ZB-1). O histórico da conversa fica.
+
 Obs.: `session_token` é aceito e ignorado nesta fase. Ele só passa a importar
 no plano deferido (tools MCP), onde o Python o repassa ao Go para escopar as
 consultas de dados ao usuário autorizado.
@@ -22,6 +26,7 @@ consultas de dados ao usuário autorizado.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
@@ -30,9 +35,16 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
+from src.agent.falhas import (
+    CAUSA_PRAZO_TURNO,
+    CLASSE_TRANSITORIA,
+    classificar_falha,
+    gerar_id_ocorrencia,
+)
 from src.agent.graph import build_graph
 from src.config import get_settings
 from src.identity.login_extractor import extrair_login
@@ -72,10 +84,24 @@ class ChatRequest(BaseModel):
     session_token: Optional[str] = None
 
 
+class ErroChat(BaseModel):
+    """Falha do turno, classificada para o gateway decidir (ver `src/agent/falhas.py`).
+
+    `classe`: "transitoria" (vale repetir) | "definitiva" (transferir na hora).
+    `id_ocorrencia`: o MESMO id vai no log do cérebro, no log do gateway, na
+    nota privada da conversa e na tabela `gateway.falhas`.
+    """
+
+    classe: str
+    id_ocorrencia: str
+    causa: str
+
+
 class ChatResponse(BaseModel):
-    reply: str
+    reply: str = ""
     acoes: list[dict[str, Any]] = Field(default_factory=list)
     fontes: list[str] = Field(default_factory=list)
+    erro: ErroChat | None = None
 
 
 class ExtractLoginRequest(BaseModel):
@@ -84,6 +110,18 @@ class ExtractLoginRequest(BaseModel):
 
 class ExtractLoginResponse(BaseModel):
     login: Optional[str] = None
+
+
+class EncerrarEpisodioRequest(BaseModel):
+    """Corpo de `POST /encerrar-episodio`: a conversa foi RESOLVIDA no Chatwoot."""
+
+    conversation_id: str
+
+
+class EncerrarEpisodioResponse(BaseModel):
+    status: str = "ok"
+    #: True quando havia uma proposta de chamado pendente e ela foi limpa.
+    proposta_limpa: bool = False
 
 
 def _mascarar(valor: str) -> str:
@@ -153,12 +191,25 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
 
     inputs: dict[str, Any] = {
         "identidade": req.identidade,
+        # Vai ao estado para as tools do SAC repassarem ao gateway (correlação
+        # do log de erro do SAC com a conversa — ponta Python do ZA-3).
+        "conversation_id": req.conversation_id,
         "messages": [HumanMessage(content=req.mensagem)],
     }
     if req.telefone:
         inputs["telefone"] = req.telefone
 
-    valores = await graph.ainvoke(inputs, config=config)
+    try:
+        # Prazo do turno MENOR que o BRAIN_TIMEOUT/TURNO_TETO do gateway: o
+        # cérebro desiste primeiro e devolve falha transitória classificada.
+        valores = await asyncio.wait_for(
+            graph.ainvoke(inputs, config=config),
+            timeout=get_settings().brain_turno_prazo,
+        )
+    except TimeoutError as exc:
+        return _falha_do_turno(req, exc, classe=CLASSE_TRANSITORIA, causa=CAUSA_PRAZO_TURNO)
+    except Exception as exc:  # noqa: BLE001 — classificada, nunca um 500 mudo
+        return _falha_do_turno(req, exc)
     resposta = ChatResponse(
         reply=_extrair_reply(valores),
         fontes=list(valores.get("fontes_usadas") or []),
@@ -175,6 +226,69 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
         resposta.reply,
     )
     return resposta
+
+
+async def encerrar_episodio(graph: Any, conversation_id: str) -> EncerrarEpisodioResponse:
+    """Fim do episódio (conversa resolvida no Chatwoot): limpa a proposta de
+    chamado pendente da conversa (ZB-1).
+
+    O Chatwoot REUTILIZA a conversa quando o contato volta a escrever — o
+    `thread_id` é o mesmo — e uma proposta preparada num episódio anterior não
+    pode ser "confirmada" por uma mensagem qualquer do episódio seguinte (caso
+    "Esse" → ZPRS25208029 da conversa #45). O histórico de mensagens fica
+    intacto; só `proposta_chamado` é zerada, gravada como se o último nó do
+    grafo (`output_guardrail`) a tivesse escrito — nada fica pendente para o
+    próximo turno. Conversa sem proposta (ou desconhecida) não ganha checkpoint.
+    """
+    config: dict[str, Any] = {"configurable": {"thread_id": conversation_id}}
+    estado = await graph.aget_state(config)
+    valores = getattr(estado, "values", None) or {}
+    if not valores.get("proposta_chamado"):
+        logger.info(
+            "episodio_encerrado conversation_id=%s proposta_limpa=False", conversation_id
+        )
+        return EncerrarEpisodioResponse(proposta_limpa=False)
+    await graph.aupdate_state(
+        config, {"proposta_chamado": None}, as_node="output_guardrail"
+    )
+    logger.info(
+        "episodio_encerrado conversation_id=%s proposta_limpa=True", conversation_id
+    )
+    return EncerrarEpisodioResponse(proposta_limpa=True)
+
+
+def _falha_do_turno(
+    req: ChatRequest,
+    exc: BaseException,
+    *,
+    classe: str | None = None,
+    causa: str | None = None,
+) -> ChatResponse:
+    """Transforma a exceção do grafo em `ChatResponse.erro` (classe + ID).
+
+    O gateway Go lê a classe para decidir (repetir × transferir) e o ID para
+    a nota privada; aqui o log `chat_erro` leva o mesmo ID e o
+    `conversation_id`, sem o conteúdo da mensagem (PII). `classe`/`causa`
+    explícitas pulam a classificação (ex.: prazo do turno estourado).
+    """
+    if classe is None or causa is None:
+        classe, causa = classificar_falha(exc)
+    id_ocorrencia = gerar_id_ocorrencia()
+    logger.error(
+        "chat_erro conversation_id=%s classe=%s id_ocorrencia=%s causa=%s tipo=%s",
+        req.conversation_id,
+        classe,
+        id_ocorrencia,
+        causa,
+        type(exc).__name__,
+        # Traceback só para falha definitiva (bug/configuração) — a
+        # transitória é ruído de rede e já tem a causa resumida.
+        exc_info=classe != CLASSE_TRANSITORIA,
+    )
+    return ChatResponse(
+        reply="",
+        erro=ErroChat(classe=classe, id_ocorrencia=id_ocorrencia, causa=causa),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -263,8 +377,34 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
-    return await processar_chat(_get_graph(), req)
+async def chat(req: ChatRequest):
+    """Contrato A. Falha do turno sai com status HTTP por classe + corpo com
+    `erro` (classe, id_ocorrencia, causa): 503 = transitória (o gateway pode
+    repetir), 500 = definitiva (o gateway transfere ao atendente na hora)."""
+    resposta = await processar_chat(_get_graph(), req)
+    if resposta.erro is not None:
+        status = 503 if resposta.erro.classe == CLASSE_TRANSITORIA else 500
+        return JSONResponse(status_code=status, content=resposta.model_dump())
+    return resposta
+
+
+@app.post("/encerrar-episodio", response_model=EncerrarEpisodioResponse)
+async def encerrar_episodio_endpoint(req: EncerrarEpisodioRequest):
+    """Chamado pelo gateway Go quando a conversa é resolvida no Chatwoot
+    (`encerrarEpisodio` em `engine.go`). Falha sai como 500 com corpo — o
+    gateway só loga: a validade de 15 min da proposta é a rede de segurança."""
+    try:
+        return await encerrar_episodio(_get_graph(), req.conversation_id)
+    except Exception as exc:  # nunca um 500 mudo
+        logger.exception(
+            "episodio_erro conversation_id=%s tipo=%s",
+            req.conversation_id,
+            type(exc).__name__,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"status": "erro", "proposta_limpa": False},
+        )
 
 
 @app.post("/extract-login", response_model=ExtractLoginResponse)

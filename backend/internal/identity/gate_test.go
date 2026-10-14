@@ -1,8 +1,11 @@
 package identity
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -401,16 +404,22 @@ func TestGateIdentificadoCacheVencidoRevalidaNaOrigem(t *testing.T) {
 }
 
 func TestGateIdentificadoCacheVencidoOrigemFora(t *testing.T) {
-	// Mongo fora durante a revalidação → mesma mensagem de erro temporário do
-	// tratarLogin; o estado NÃO muda e a próxima mensagem tenta de novo.
+	// ZC-4: Mongo fora durante a revalidação → segue com o perfil ANTIGO por
+	// carência (cache renovado), sem incomodar o cliente nem travá-lo num laço
+	// de "tente de novo". Antes: AcaoPerguntar com msgErroTemporario.
 	repo := &fakeRepoMutavel{docs: map[string]mongo.UsuarioDoc{"10596693664": docDaniel()}}
 	g := newGateTTL(t, repo, time.Nanosecond)
 	identifica(t, g, 33, "5511999990033")
 
 	repo.err = errors.New("mongo fora")
 	r := g.Process(context.Background(), 33, "5511999990033", "oi?")
-	if r.Acao != AcaoPerguntar || r.Reply != msgErroTemporario {
-		t.Fatalf("origem fora: esperava perguntar com erro temporário, veio %q reply=%q", r.Acao, r.Reply)
+	if r.Acao != AcaoEncaminhar || r.Perfil == nil || r.Perfil.Login != "10596693664" {
+		t.Fatalf("origem fora: esperava encaminhar com o perfil antigo, veio %q perfil=%v", r.Acao, r.Perfil)
+	}
+	// O cache telefone→perfil foi renovado por carência: a API de tools (que
+	// lê `identities`) continua funcionando enquanto o Mongo não volta.
+	if ci, _ := g.store.GetIdentity(context.Background(), "5511999990033"); ci == nil {
+		t.Fatal("carência: esperava o cache telefone→perfil renovado")
 	}
 	// Origem voltou → a mesma conversa encaminha sem re-identificação.
 	repo.err = nil
@@ -513,5 +522,368 @@ func TestGateConfirmacaoCertaAposErrosDeLoginIdentifica(t *testing.T) {
 	g.Process(ctx, conv, phone, "10596693664")
 	if r := g.Process(ctx, conv, phone, "daniel.ferraz@azapfy.com.br"); r.Acao != AcaoSaudar {
 		t.Fatalf("confirmação certa: esperava saudar, veio %q", r.Acao)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ZC-4: falha do Mongo transfere na 2ª seguida; cadastro ilegível na hora
+// ---------------------------------------------------------------------------
+
+// TestGateMongoForaDuasVezesTransfere: a 1ª falha técnica pede para tentar de
+// novo; a 2ª seguida transfere ao atendente (não há laço infinito). Nenhuma
+// das duas gasta tentativa do CLIENTE.
+func TestGateMongoForaDuasVezesTransfere(t *testing.T) {
+	repo := &fakeRepoMutavel{docs: map[string]mongo.UsuarioDoc{"10596693664": docDaniel()}}
+	g, st := newGate(t, repo)
+	ctx := context.Background()
+	const conv = int64(41)
+	const phone = "5511000000041"
+
+	g.Process(ctx, conv, phone, "oi") // pede login
+	repo.err = errors.New("mongo fora")
+	if r := g.Process(ctx, conv, phone, "10596693664"); r.Acao != AcaoPerguntar || r.Reply != msgErroTemporario {
+		t.Fatalf("1ª falha técnica: esperava 'tente de novo', veio %q reply=%q", r.Acao, r.Reply)
+	}
+	gs, _ := st.GetGate(ctx, conv)
+	if gd := decodeGate(gs.Data); gd.Tentativas != 0 || gd.FalhasTecnicas != 1 {
+		t.Fatalf("falha técnica não é erro do cliente: tentativas=%d falhas_tecnicas=%d", gd.Tentativas, gd.FalhasTecnicas)
+	}
+	r := g.Process(ctx, conv, phone, "10596693664")
+	if r.Acao != AcaoRotearHumano || r.Reply != msgFalhaTecnica || r.Origem != OrigemMongo || r.Motivo == "" {
+		t.Fatalf("2ª falha técnica seguida: esperava rotear humano (origem mongo), veio %+v", r)
+	}
+}
+
+// TestGateMongoVoltaZeraFalhasTecnicas: uma falha, depois sucesso → a
+// sequência zera e o fluxo segue normal (confirmação).
+func TestGateMongoVoltaZeraFalhasTecnicas(t *testing.T) {
+	repo := &fakeRepoMutavel{docs: map[string]mongo.UsuarioDoc{"10596693664": docDaniel()}}
+	g, st := newGate(t, repo)
+	ctx := context.Background()
+	const conv = int64(42)
+	const phone = "5511000000042"
+
+	g.Process(ctx, conv, phone, "oi")
+	repo.err = errors.New("mongo fora")
+	g.Process(ctx, conv, phone, "10596693664")
+	repo.err = nil
+	if r := g.Process(ctx, conv, phone, "10596693664"); r.Acao != AcaoPerguntar || r.Reply == msgErroTemporario {
+		t.Fatalf("origem de volta: esperava pedir confirmação, veio %q reply=%q", r.Acao, r.Reply)
+	}
+	gs, _ := st.GetGate(ctx, conv)
+	if gd := decodeGate(gs.Data); gd.FalhasTecnicas != 0 || gs.State != store.GateAguardConfirm {
+		t.Fatalf("esperava falhas técnicas zeradas e confirmação pendente: %+v %s", gd, gs.State)
+	}
+}
+
+// TestGateCadastroIlegivelTransfereNaHora: documento que existe mas não
+// decodifica (ErrDocumentoInvalido) → repetir não resolve: transfere já.
+func TestGateCadastroIlegivelTransfereNaHora(t *testing.T) {
+	repo := &fakeRepoMutavel{docs: map[string]mongo.UsuarioDoc{}}
+	g, _ := newGate(t, repo)
+	ctx := context.Background()
+	const conv = int64(43)
+
+	g.Process(ctx, conv, "5511000000043", "oi")
+	repo.err = fmt.Errorf("%w: cannot decode array into map", mongo.ErrDocumentoInvalido)
+	r := g.Process(ctx, conv, "5511000000043", "10596693664")
+	if r.Acao != AcaoRotearHumano || r.Origem != OrigemMongo || r.Motivo != motivoCadastroIlegivel {
+		t.Fatalf("cadastro ilegível: esperava rotear humano na hora, veio %+v", r)
+	}
+	if r := g.Process(ctx, conv, "5511000000043", "oi?"); r.Acao != AcaoIgnorar {
+		t.Fatalf("pós-transferência: esperava ignorar, veio %q", r.Acao)
+	}
+}
+
+// fakeRepoLote implementa UserRepoLote: conta as consultas `$in` e registra o
+// prazo do contexto recebido.
+type fakeRepoLote struct {
+	fakeRepo
+	lotes      int
+	comPrazo   bool
+	ultimoLote []string
+}
+
+func (f *fakeRepoLote) BuscarPorLogins(ctx context.Context, logins []string) ([]mongo.UsuarioDoc, error) {
+	f.lotes++
+	_, f.comPrazo = ctx.Deadline()
+	f.ultimoLote = append([]string{}, logins...)
+	var out []mongo.UsuarioDoc
+	for _, l := range logins {
+		if d, ok := f.docs[l]; ok {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+// TestGateCandidatosNumaConsultaSo: os vários candidatos de uma frase viram
+// UMA consulta `$in` com prazo, e o primeiro candidato (na ordem) que existir
+// é o escolhido.
+func TestGateCandidatosNumaConsultaSo(t *testing.T) {
+	repo := &fakeRepoLote{fakeRepo: fakeRepo{docs: map[string]mongo.UsuarioDoc{"10596693664": docDaniel()}}}
+	st, err := store.NewSQLite(filepath.Join(t.TempDir(), "gate.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	g := New(st, repo, "email", 3, time.Hour, time.Hour, nil, nil)
+	ctx := context.Background()
+	const conv = int64(44)
+
+	g.Process(ctx, conv, "5511000000044", "oi")
+	if r := g.Process(ctx, conv, "5511000000044", "meu login é 105.966.936-64"); r.Acao != AcaoPerguntar {
+		t.Fatalf("esperava pedir confirmação, veio %q", r.Acao)
+	}
+	if repo.lotes != 1 || !repo.comPrazo {
+		t.Fatalf("esperava exatamente 1 consulta em lote com prazo, veio lotes=%d prazo=%v", repo.lotes, repo.comPrazo)
+	}
+	if len(repo.ultimoLote) < 2 || !contem(repo.ultimoLote, "10596693664") {
+		t.Fatalf("o lote devia conter os candidatos derivados (inclusive os dígitos): %v", repo.ultimoLote)
+	}
+}
+
+func contem(xs []string, v string) bool {
+	for _, x := range xs {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// ZC-8: falha do extrator não consome tentativa; palavra de escape
+// ---------------------------------------------------------------------------
+
+// TestGateExtractorComErroNaoConsomeTentativa: cérebro fora no /extract-login
+// → "tente de novo" SEM gastar tentativa do cliente; voltando, o login segue.
+func TestGateExtractorComErroNaoConsomeTentativa(t *testing.T) {
+	doc := docDaniel()
+	doc.Login = "joao"
+	repo := fakeRepo{docs: map[string]mongo.UsuarioDoc{"joao": doc}}
+	extractor := &fakeExtractorMutavel{respostas: map[string]string{"meu login é joao": "joao"}, err: errors.New("brain offline")}
+	g, st := newGateComExtractor(t, repo, extractor)
+	ctx := context.Background()
+	const conv = int64(51)
+	const phone = "5511000000051"
+
+	g.Process(ctx, conv, phone, "oi")
+	if r := g.Process(ctx, conv, phone, "meu login é joao"); r.Acao != AcaoPerguntar || r.Reply != msgErroTemporario {
+		t.Fatalf("extrator fora: esperava 'tente de novo', veio %q reply=%q", r.Acao, r.Reply)
+	}
+	gs, _ := st.GetGate(ctx, conv)
+	if gd := decodeGate(gs.Data); gd.Tentativas != 0 || gd.FalhasTecnicas != 1 {
+		t.Fatalf("falha do extrator não é erro do cliente: tentativas=%d falhas_tecnicas=%d", gd.Tentativas, gd.FalhasTecnicas)
+	}
+	extractor.err = nil
+	if r := g.Process(ctx, conv, phone, "meu login é joao"); r.Acao != AcaoPerguntar || r.Reply == msgErroTemporario {
+		t.Fatalf("extrator de volta: esperava pedir confirmação, veio %q reply=%q", r.Acao, r.Reply)
+	}
+	// O cliente ainda tem as 3 tentativas inteiras: 2 erros não transferem.
+	g.Process(ctx, conv, phone, "errado1@x.com")
+	if r := g.Process(ctx, conv, phone, "errado2@x.com"); r.Acao != AcaoPerguntar {
+		t.Fatalf("2 erros do cliente após a falha técnica: esperava perguntar, veio %q", r.Acao)
+	}
+}
+
+type fakeExtractorMutavel struct {
+	respostas map[string]string
+	err       error
+}
+
+func (f *fakeExtractorMutavel) ExtrairLogin(_ context.Context, mensagem string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.respostas[mensagem], nil
+}
+
+// TestGatePedidoDeAtendenteTransfereEmQualquerEstado: "quero falar com
+// atendente" transfere na hora — conversa nova, aguardando login, aguardando
+// confirmação e já identificada.
+func TestGatePedidoDeAtendenteTransfereEmQualquerEstado(t *testing.T) {
+	const pedido = "quero falar com atendente"
+	repo := fakeRepo{docs: map[string]mongo.UsuarioDoc{"10596693664": docDaniel()}}
+	ctx := context.Background()
+
+	confere := func(t *testing.T, r Resultado, estado string) {
+		t.Helper()
+		if r.Acao != AcaoRotearHumano || r.Origem != OrigemCliente || r.Motivo != motivoPedidoAtendente || r.Reply != msgPedidoAtendente {
+			t.Fatalf("%s: esperava rotear humano a pedido do cliente, veio %+v", estado, r)
+		}
+	}
+
+	// Conversa nova.
+	g, _ := newGate(t, repo)
+	confere(t, g.Process(ctx, 61, "5511000000061", pedido), "novo")
+	if r := g.Process(ctx, 61, "5511000000061", "oi?"); r.Acao != AcaoIgnorar {
+		t.Fatalf("após a transferência a conversa é do atendente: esperava ignorar, veio %q", r.Acao)
+	}
+	// Aguardando login.
+	g, _ = newGate(t, repo)
+	g.Process(ctx, 62, "5511000000062", "oi")
+	confere(t, g.Process(ctx, 62, "5511000000062", "Quero falar com um HUMANO, por favor"), "aguardando login")
+	// Aguardando confirmação.
+	g, _ = newGate(t, repo)
+	g.Process(ctx, 63, "5511000000063", "oi")
+	g.Process(ctx, 63, "5511000000063", "10596693664")
+	confere(t, g.Process(ctx, 63, "5511000000063", pedido), "aguardando confirmação")
+	// Identificado.
+	g, _ = newGate(t, repo)
+	identifica(t, g, 64, "5511000000064")
+	confere(t, g.Process(ctx, 64, "5511000000064", "atendente"), "identificado")
+}
+
+// TestPedeAtendente: palavra inteira; relato longo sem pedido não dispara.
+func TestPedeAtendente(t *testing.T) {
+	sim := []string{
+		"atendente", "quero falar com atendente", "Me passa pra um humano", "tem algum atendente aí?",
+		"preciso falar com uma pessoa de verdade, um atendente humano, porque o app não abre desde ontem e já reinstalei duas vezes",
+	}
+	nao := []string{
+		"oi", "10596693664", "o romaneio não fecha",
+		"o atendente me disse ontem que o romaneio ia fechar sozinho depois da sincronização, mas até agora continua aberto na tela",
+		"desumano esse trânsito, mas enfim: a nota 123 não aparece no rastreamento", // "desumano" não é a palavra inteira
+	}
+	for _, m := range sim {
+		if !PedeAtendente(m) {
+			t.Errorf("devia detectar pedido de atendente: %q", m)
+		}
+	}
+	for _, m := range nao {
+		if PedeAtendente(m) {
+			t.Errorf("não devia detectar pedido de atendente: %q", m)
+		}
+	}
+}
+
+// ZG-1: cadastro SEM o dado de confirmação (e-mail) não pode ser identificado
+// só pelo login — quem soubesse o login de outra pessoa via os chamados dela
+// (conversas #28, #59, #82). Sem segunda verificação possível, a saída segura é
+// a fila humana: nada de saudação, nada de perfil, nada no cache do telefone.
+func TestGateCadastroSemEmailNaoIdentificaSoPeloLogin(t *testing.T) {
+	semEmail := docDaniel()
+	semEmail.Email = ""
+	g, st := newGate(t, fakeRepo{docs: map[string]mongo.UsuarioDoc{"10596693664": semEmail}})
+	ctx := context.Background()
+	const conv = int64(41)
+	const phone = "5511000000041"
+
+	g.Process(ctx, conv, phone, "oi") // pede login
+	r := g.Process(ctx, conv, phone, "10596693664")
+	if r.Acao != AcaoRotearHumano || r.Reply != msgSemDadoConfirmacao {
+		t.Fatalf("login de cadastro sem e-mail: esperava rotear humano, veio %q reply=%q", r.Acao, r.Reply)
+	}
+	if r.Perfil != nil {
+		t.Fatalf("não pode devolver perfil sem confirmação: %+v", r.Perfil)
+	}
+	ci, err := st.GetIdentity(ctx, phone)
+	if err != nil {
+		t.Fatalf("getIdentity: %v", err)
+	}
+	if ci != nil {
+		t.Fatalf("telefone não pode entrar no cache de identidade sem confirmação: %+v", ci)
+	}
+	// Conversa já roteada: a próxima mensagem NÃO vai ao cérebro.
+	if r := g.Process(ctx, conv, phone, "quais são os meus chamados?"); r.Acao != AcaoIgnorar {
+		t.Fatalf("pós-roteamento: esperava ignorar, veio %q", r.Acao)
+	}
+}
+
+// ZG-1 (contraprova): cadastro COM e-mail segue o fluxo de confirmação atual —
+// pede o e-mail, só identifica (e só cacheia) depois de o dado conferir.
+func TestGateCadastroComEmailSegueConfirmacao(t *testing.T) {
+	g, st := newGate(t, fakeRepo{docs: map[string]mongo.UsuarioDoc{"10596693664": docDaniel()}})
+	ctx := context.Background()
+	const conv = int64(42)
+	const phone = "5511000000042"
+
+	g.Process(ctx, conv, phone, "oi")
+	r := g.Process(ctx, conv, phone, "10596693664")
+	if r.Acao != AcaoPerguntar || !strings.Contains(r.Reply, "e-mail") {
+		t.Fatalf("cadastro com e-mail: esperava pedir confirmação do e-mail, veio %q reply=%q", r.Acao, r.Reply)
+	}
+	if ci, _ := st.GetIdentity(ctx, phone); ci != nil {
+		t.Fatalf("antes de confirmar não pode haver cache: %+v", ci)
+	}
+	if r := g.Process(ctx, conv, phone, "daniel.ferraz@azapfy.com.br"); r.Acao != AcaoSaudar {
+		t.Fatalf("e-mail confere: esperava saudar, veio %q", r.Acao)
+	}
+	if ci, _ := st.GetIdentity(ctx, phone); ci == nil {
+		t.Fatal("após confirmar, o telefone deve estar no cache de identidade")
+	}
+}
+
+// ZG-2 (LGPD): o log de nível INFO do gate não pode trazer login/e-mail em
+// claro — só a forma mascarada (3 últimos caracteres). Captura o logger em
+// INFO e percorre o fluxo feliz, o cache, o login via IA e o acesso inativo.
+func TestGateLogInfoNaoExpoeLogin(t *testing.T) {
+	var buf bytes.Buffer
+	logInfo := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	st, err := store.NewSQLite(filepath.Join(t.TempDir(), "gate.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	joao := docDaniel()
+	joao.Login = "joao.silva"
+	inativo := mongo.UsuarioDoc{Login: "inativo999", Nome: "Fulano", Email: "f@x.com",
+		Grupos: map[string]mongo.GrupoDoc{"AZAPFY": {Ativo: false}}}
+	repo := fakeRepo{docs: map[string]mongo.UsuarioDoc{
+		"10596693664": docDaniel(), "joao.silva": joao, "inativo999": inativo,
+	}}
+	extractor := fakeExtractor{respostas: map[string]string{"meu login é o joao": "joao.silva"}}
+	g := New(st, repo, "email", 3, time.Hour, time.Hour, extractor, logInfo)
+	ctx := context.Background()
+
+	// Fluxo feliz (login resolvido + identidade confirmada) e cache em conversa nova.
+	g.Process(ctx, 51, "5511000000051", "oi")
+	g.Process(ctx, 51, "5511000000051", "10596693664")
+	if r := g.Process(ctx, 51, "5511000000051", "daniel.ferraz@azapfy.com.br"); r.Acao != AcaoSaudar {
+		t.Fatalf("setup: esperava saudar, veio %q", r.Acao)
+	}
+	if r := g.Process(ctx, 52, "5511000000051", "oi de novo"); r.Acao != AcaoEncaminhar {
+		t.Fatalf("setup: esperava cache hit, veio %q", r.Acao)
+	}
+	// Login extraído por IA.
+	g.Process(ctx, 53, "5511000000053", "oi")
+	if r := g.Process(ctx, 53, "5511000000053", "meu login é o joao"); r.Acao != AcaoPerguntar {
+		t.Fatalf("setup: esperava pedir confirmação, veio %q", r.Acao)
+	}
+	// Login sem empresa ativa.
+	g.Process(ctx, 54, "5511000000054", "oi")
+	if r := g.Process(ctx, 54, "5511000000054", "inativo999"); r.Acao != AcaoRotearHumano {
+		t.Fatalf("setup: esperava rotear humano, veio %q", r.Acao)
+	}
+
+	logs := buf.String()
+	for _, segredo := range []string{"10596693664", "daniel.ferraz@azapfy.com.br", "joao.silva", "inativo999"} {
+		if strings.Contains(logs, segredo) {
+			t.Errorf("log INFO expõe %q em claro:\n%s", segredo, logs)
+		}
+	}
+	// A linha continua existindo, com o login mascarado (correlação sem PII).
+	for _, quer := range []string{"identidade confirmada", "login=********664", "identidade via cache", "login extraído por IA", "login_extraido=*******lva", "login sem empresa ativa"} {
+		if !strings.Contains(logs, quer) {
+			t.Errorf("esperava %q no log INFO:\n%s", quer, logs)
+		}
+	}
+}
+
+func TestMascararLogin(t *testing.T) {
+	casos := map[string]string{
+		"":                            "",
+		"ab":                          "**",
+		"abc":                         "***",
+		"10596693664":                 "********664",
+		"daniel.ferraz@azapfy.com.br": "************************.br",
+		"  joao  ":                    "*oao",
+	}
+	for in, quer := range casos {
+		if got := mascararLogin(in); got != quer {
+			t.Errorf("mascararLogin(%q) = %q, esperava %q", in, got, quer)
+		}
 	}
 }

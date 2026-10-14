@@ -11,17 +11,26 @@
 //     portal (LinkChamado).
 //   - `criar` pode devolver `status:true` com um aviso de e-mail (SMTP) em
 //     `notificacao`: isso NÃO invalida a criação; tratamos status:true como ok.
+//   - No contrato do SAC, `grupo_emp` é a EQUIPE que atende (o desk, ex.:
+//     AZAPERS — fixo, SAC_GRUPO_EMP) e `incidente.empresa` é a EMPRESA DO
+//     CLIENTE (o grupo do perfil escolhido na abertura). Não existe empresa
+//     fixa: sem grupo no perfil, a abertura é recusada antes de chamar o SAC.
 package sac
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Options configura o cliente.
@@ -29,8 +38,7 @@ type Options struct {
 	BaseURL    string        // raiz do backend SAC (ex.: https://backdev.azapfy.com.br)
 	PortalURL  string        // raiz do portal p/ montar o link do chat
 	ServiceCod string        // login privilegiado p/ `editar` (define prioridade)
-	GrupoEmp   string        // "desk" do SAC (ex.: AZAPERS) — grupo onde o chamado é aberto
-	Empresa    string        // incidente.empresa (ex.: AZAPFY)
+	GrupoEmp   string        // equipe/desk do SAC (ex.: AZAPERS) — grupo onde o chamado é aberto
 	Timezone   string        // ex.: America/Sao_Paulo
 	APIToken   string        // bearer opcional
 	ConfigTTL  time.Duration // validade do cache de configuração
@@ -45,7 +53,6 @@ type Client struct {
 	portalURL  string
 	serviceCod string
 	grupoEmp   string
-	empresa    string
 	timezone   string
 	apiToken   string
 	now        func() time.Time
@@ -74,10 +81,6 @@ func New(opts Options) *Client {
 	if grupo == "" {
 		grupo = "AZAPERS"
 	}
-	empresa := opts.Empresa
-	if empresa == "" {
-		empresa = "AZAPFY"
-	}
 	tz := opts.Timezone
 	if tz == "" {
 		tz = "America/Sao_Paulo"
@@ -96,7 +99,6 @@ func New(opts Options) *Client {
 		portalURL:  portal,
 		serviceCod: opts.ServiceCod,
 		grupoEmp:   grupo,
-		empresa:    empresa,
 		timezone:   tz,
 		apiToken:   opts.APIToken,
 		now:        now,
@@ -205,7 +207,7 @@ type NovoChamado struct {
 	NomeRelator  string
 	Email        string // cod_relator + contato_relator.email
 	Telefone     string
-	ClienteGrupo string // incidente.cliente (grupo do usuário)
+	ClienteGrupo string // incidente.empresa: empresa (grupo) do cliente, escolhida entre as do perfil
 	Categoria    string
 	Ocorrencia   string
 	Item         string
@@ -214,9 +216,27 @@ type NovoChamado struct {
 	Descricao    string
 }
 
+// Pré-condições da abertura que o SAC recusaria (422): checadas aqui, antes de
+// qualquer requisição — e nunca contornadas com um valor fixo.
+var (
+	// ErrSemEmail: o relator não tem e-mail no cadastro. O SAC exige
+	// cod_relator/contato_relator.email; o dado vem do perfil, nunca do LLM.
+	ErrSemEmail = errors.New("sac criar: relator sem e-mail no cadastro (cod_relator é obrigatório no SAC)")
+	// ErrSemEmpresa: o chamado não tem a empresa do cliente (incidente.empresa).
+	ErrSemEmpresa = errors.New("sac criar: chamado sem empresa do cliente (incidente.empresa)")
+)
+
 // Criar abre o incidente e devolve o protocolo. status:true é sucesso mesmo com
-// aviso de e-mail (notificacao).
+// aviso de e-mail (notificacao). Pré-condições são checadas ANTES de qualquer
+// requisição: sem e-mail do relator ou sem empresa do cliente não há chamada
+// ao SAC.
 func (c *Client) Criar(ctx context.Context, ch NovoChamado) (string, error) {
+	if strings.TrimSpace(ch.Email) == "" {
+		return "", ErrSemEmail
+	}
+	if strings.TrimSpace(ch.ClienteGrupo) == "" {
+		return "", ErrSemEmpresa
+	}
 	item := strings.TrimSpace(ch.Item)
 	if item == "" {
 		item = "INCIDENTE" // mesmo default do backend quando o tipo não traz item
@@ -232,10 +252,9 @@ func (c *Client) Criar(ctx context.Context, ch NovoChamado) (string, error) {
 			"item":       item,
 			"categoria":  ch.Categoria,
 			"ocorrencia": ch.Ocorrencia,
-			"empresa":    c.empresa,
+			"empresa":    ch.ClienteGrupo, // empresa do CLIENTE — nunca a equipe nem um valor fixo
 			"icone":      "none",
 			"prazo":      ch.Prazo,
-			"cliente":    ch.ClienteGrupo,
 		},
 		"anexos":     []any{},
 		"status_doc": "",
@@ -248,11 +267,13 @@ func (c *Client) Criar(ctx context.Context, ch NovoChamado) (string, error) {
 		Protocolo string `json:"protocolo"`
 		Mensagem  string `json:"mensagem"`
 	}
-	if err := c.post(ctx, "/api/sac/incidente/criar", body, &resp); err != nil {
+	// Valores pessoais que enviamos: se o SAC os ecoar num erro, saem do log.
+	pessoais := []string{ch.NomeRelator, ch.Email, ch.Telefone, ch.Resumo, ch.Descricao}
+	if err := c.post(ctx, "/api/sac/incidente/criar", body, &resp, pessoais...); err != nil {
 		return "", err
 	}
 	if !resp.Status || resp.Protocolo == "" {
-		return "", fmt.Errorf("sac criar: %s", firstNonEmpty(resp.Mensagem, "status false"))
+		return "", fmt.Errorf("sac criar: %s", firstNonEmpty(higienizarTexto(resp.Mensagem, pessoais...), "status false"))
 	}
 	return resp.Protocolo, nil
 }
@@ -273,11 +294,11 @@ func (c *Client) DefinirPrioridade(ctx context.Context, protocolo, prioridade st
 		Status   bool   `json:"status"`
 		Mensagem string `json:"mensagem"`
 	}
-	if err := c.post(ctx, "/api/sac/incidente/editar", body, &resp); err != nil {
+	if err := c.post(ctx, "/api/sac/incidente/editar", body, &resp, c.serviceCod); err != nil {
 		return err
 	}
 	if !resp.Status {
-		return fmt.Errorf("sac editar prioridade: %s", firstNonEmpty(resp.Mensagem, "status false"))
+		return fmt.Errorf("sac editar prioridade: %s", firstNonEmpty(higienizarTexto(resp.Mensagem, c.serviceCod), "status false"))
 	}
 	return nil
 }
@@ -309,7 +330,7 @@ func (c *Client) BuscarRelator(ctx context.Context, email string) ([]Chamado, er
 		Status bool      `json:"status"`
 		Dados  []Chamado `json:"dados"`
 	}
-	if err := c.post(ctx, "/api/sac/incidente/buscarrelator", body, &resp); err != nil {
+	if err := c.post(ctx, "/api/sac/incidente/buscarrelator", body, &resp, email); err != nil {
 		return nil, err
 	}
 	if !resp.Status {
@@ -331,7 +352,11 @@ func (c *Client) LinkChamado(codRelator, grupoEmp, protocolo string) string {
 // HTTP helper
 // ---------------------------------------------------------------------------
 
-func (c *Client) post(ctx context.Context, path string, body any, out any) error {
+// post faz a requisição e decodifica a resposta em `out`. `redigir` são os
+// valores pessoais enviados nesta chamada (nome, e-mail, telefone...): se o SAC
+// os ecoar numa resposta de erro, eles são removidos antes de o corpo entrar
+// no erro devolvido (e, por ele, no log).
+func (c *Client) post(ctx context.Context, path string, body any, out any, redigir ...string) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -352,7 +377,11 @@ func (c *Client) post(ctx context.Context, path string, body any, out any) error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("sac %s: status http %d", path, resp.StatusCode)
+		// O corpo é a única pista do porquê (ex.: 422 de validação): entra no
+		// erro já higienizado — sem dado pessoal, truncado — para o log de
+		// quem chamou. O corpo cru nunca é guardado.
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, corpoErroLeituraMax))
+		return &HTTPError{Path: path, Status: resp.StatusCode, Corpo: higienizarTexto(string(raw), redigir...)}
 	}
 	if out == nil {
 		return nil
@@ -361,6 +390,113 @@ func (c *Client) post(ctx context.Context, path string, body any, out any) error
 		return fmt.Errorf("sac %s: decode: %w", path, err)
 	}
 	return nil
+}
+
+// HTTPError é uma resposta de erro HTTP (>= 400) do SAC. Além do status, traz
+// um trecho do corpo já higienizado (sem dado pessoal, truncado): o 422 de
+// validação, por exemplo, só é diagnosticável pelo corpo.
+type HTTPError struct {
+	Path   string
+	Status int
+	Corpo  string
+}
+
+func (e *HTTPError) Error() string {
+	if e.Corpo == "" {
+		return fmt.Sprintf("sac %s: status http %d", e.Path, e.Status)
+	}
+	return fmt.Sprintf("sac %s: status http %d: %s", e.Path, e.Status, e.Corpo)
+}
+
+// Tetos do texto de erro do SAC que vai para o log.
+const (
+	corpoErroLeituraMax = 8 << 10 // bytes lidos da resposta de erro (o resto é descartado)
+	corpoErroMax        = 500     // runas do trecho higienizado que entra no erro/log
+)
+
+var (
+	// reEmailCorpo e reNumeroCorpo mascaram o que parecer dado pessoal em texto
+	// vindo do SAC: e-mails e números longos (telefone, CPF/CNPJ, CEP — 7+
+	// dígitos, com ou sem separadores). Protocolos (ZPRS25208042) continuam
+	// legíveis: o prefixo de letras não forma fronteira de palavra antes dos
+	// dígitos.
+	reEmailCorpo  = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
+	reNumeroCorpo = regexp.MustCompile(`\b\d(?:[\s().\-/]{0,2}\d){6,}\b`)
+)
+
+// higienizarTexto prepara um texto vindo do SAC (corpo de erro HTTP, campo
+// `mensagem`) para o log: normaliza JSON (desfaz os \uXXXX do PHP), remove os
+// valores pessoais que nós mesmos enviamos (`redigir`), mascara o que parecer
+// e-mail ou número longo, achata espaços/controle numa linha e corta em
+// corpoErroMax runas.
+func higienizarTexto(s string, redigir ...string) string {
+	s = normalizarJSON(s)
+	for _, v := range redigir {
+		v = strings.TrimSpace(v)
+		if utf8.RuneCountInString(v) < 3 {
+			continue // curto demais: não identifica ninguém e redigir viraria ruído
+		}
+		formas := []string{v}
+		if j := jsonTexto(v); j != v {
+			formas = append(formas, j) // como o SAC ecoaria dentro de uma string JSON
+		}
+		for _, forma := range formas {
+			s = regexp.MustCompile(`(?i)`+regexp.QuoteMeta(forma)).ReplaceAllLiteralString(s, "[omitido]")
+		}
+	}
+	s = reEmailCorpo.ReplaceAllLiteralString(s, "[email]")
+	s = reNumeroCorpo.ReplaceAllLiteralString(s, "[numero]")
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+	s = strings.Join(strings.Fields(s), " ")
+	return truncarRunas(s, corpoErroMax)
+}
+
+// normalizarJSON reescreve um corpo JSON de forma canônica e legível (o PHP
+// escapa não-ASCII como \u00e9 e barras como \/): assim a redação de valores
+// conhecidos casa com o que o SAC ecoou e o log sai legível. Texto que não é
+// JSON volta como está.
+func normalizarJSON(s string) string {
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return s
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return s
+	}
+	return strings.TrimSpace(buf.String())
+}
+
+// jsonTexto devolve v como apareceria dentro de uma string JSON, sem as aspas
+// (quebras de linha viram \n etc.).
+func jsonTexto(v string) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return v
+	}
+	s := strings.TrimSpace(buf.String())
+	if len(s) >= 2 {
+		s = s[1 : len(s)-1]
+	}
+	return s
+}
+
+func truncarRunas(s string, max int) string {
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	return string([]rune(s)[:max]) + "… [truncado]"
 }
 
 func firstNonEmpty(a, b string) string {
