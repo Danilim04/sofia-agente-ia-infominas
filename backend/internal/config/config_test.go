@@ -35,7 +35,7 @@ func TestInboxIDMalformadoNaoViraZero(t *testing.T) {
 // as caixas, sinalizado por AtendeTodasAsCaixas.
 func TestInboxIDValido(t *testing.T) {
 	comObrigatorias(t)
-	casos := map[string]int64{"7": 7, " 12 ": 12, "0": 0, "": 0}
+	casos := map[string]int64{"7": 7, " 12 ": 12, "0": 0, "": 0} //nolint:gocritic // mapKey: espaço intencional — testa o trim do parser
 	for v, quer := range casos {
 		t.Setenv("INBOX_ID", v)
 		cfg, err := Load()

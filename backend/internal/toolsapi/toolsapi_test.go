@@ -19,7 +19,7 @@ import (
 	"bot-azapfy/internal/store"
 )
 
-const tokenTeste = "segredo-tools"
+const tokenTeste = "segredo-tools" //nolint:gosec // G101: valor de teste
 
 // fakeSAC implementa SACClient sem rede, registrando o que foi chamado.
 type fakeSAC struct {
@@ -129,7 +129,7 @@ func do(t *testing.T, h *Handler, path, token string, body map[string]any) (int,
 	mux := http.NewServeMux()
 	h.Register(mux)
 	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(b)))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, strings.NewReader(string(b)))
 	if token != "" {
 		req.Header.Set("X-Tools-Token", token)
 	}

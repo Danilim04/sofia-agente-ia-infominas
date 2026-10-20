@@ -60,13 +60,13 @@ func NewSQLite(path string) (*SQLiteStore, error) {
 	}
 	db.SetMaxOpenConns(1)
 
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.ExecContext(context.Background(), schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrar schema: %w", err)
 	}
 	// Higiene: eventos processados (dedup por delivery/WAID) mais velhos que
 	// 7 dias não têm mais valor — sem isto a tabela cresce para sempre.
-	if _, err := db.Exec(
+	if _, err := db.ExecContext(context.Background(),
 		`DELETE FROM processed_events WHERE created_at < ?`,
 		time.Now().Add(-7*24*time.Hour).Unix(),
 	); err != nil {

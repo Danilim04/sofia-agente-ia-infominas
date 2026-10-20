@@ -54,7 +54,7 @@ func main() {
 	repo, err := mongo.NewRepo(ctx, cfg.MongoURI, cfg.MongoDB, cfg.MongoCollection, cfg.MongoTimeout)
 	if err != nil {
 		log.Error("conectar ao Mongo", "err", err)
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic // exitAfterDefer: o boot aborta; não há nada a liberar ainda
 	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
