@@ -86,10 +86,15 @@ e registra as chamadas. Um cenário é um teste `pytest` parametrizado.
 
 Checks obrigatórios (nomes dos jobs em `ci.yml`): `lint-python`, `lint-go`,
 `arquitetura`, `test-python`, `test-go`, `contratos`, `e2e`, `evals-pr`,
-`gitleaks`. Mais: **1 aprovação humana** (Daniel ou quem ele delegar),
-conversa resolvida, branch atualizada com a `main` (merge queue ou rebase),
-sem force-push. O agente `revisor` comenta no PR, mas sua aprovação **não**
-substitui a humana (D13).
+`gitleaks` — valem **para todos, inclusive admins** (`enforce_admins`). Mais:
+conversas resolvidas, branch atualizada com a `main`, sem force-push nem
+deleção. **Revisão humana (D13)**: hoje o repositório tem um único
+colaborador (Daniel), e o GitHub não deixa ninguém aprovar o próprio PR, então
+a aprovação humana **é o próprio merge feito por ele** depois de ler o
+comentário do `revisor` — não há regra de "1 aprovação" na proteção (ela
+bloquearia tudo). Quando entrar um segundo revisor, ligar
+`required_pull_request_reviews` (1 aprovação, dispensar aprovações antigas).
+O agente `revisor` comenta no PR, mas sua aprovação **não** substitui a humana.
 
 ## Camada 3 — o revisor
 
