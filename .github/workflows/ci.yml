@@ -160,4 +160,12 @@ jobs:
         run: |
           v=8.30.0
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" | tar xz gitleaks
-          ./gitleaks detect --source . --redact --no-banner --config .gitleaks.toml
+          # Sem --log-opts o gitleaks faz `git log --all`: varre TODAS as branches do
+          # remoto, e um achado em qualquer branch quebra todos os PRs. Em PR varre só
+          # os commits do PR (base..HEAD); no push da main, o histórico inteiro.
+          # -v: sem ele o log só diz "leaks found: N", sem arquivo nem linha.
+          opts=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            opts="--log-opts=origin/${{ github.base_ref }}..HEAD"
+          fi
+          ./gitleaks detect --source . -v --redact=50 --no-banner --config .gitleaks.toml $opts

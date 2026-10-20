@@ -28,4 +28,5 @@ paths = [
 regexes = [
   '''ik_live_x{10,}''',        # placeholder da documentação
   '''sk-or-v1-troque-aqui''',
+  '''ik_test_mock''',          # chave FICTÍCIA do mock-infodesk (MOCK_API_KEY default); aparece em docs/exemplos e no histórico do PR #2
 ]
