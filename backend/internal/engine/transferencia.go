@@ -73,6 +73,11 @@ var reVerboDePedido = regexp.MustCompile(`(?i)\b(falar|conversar|quero|queria|pr
 // (palavra de escape, decidida por CÓDIGO no gateway — nunca pelo LLM).
 // Mensagem curta (≤ 60 caracteres) com a palavra basta; mensagem longa exige
 // também um verbo de pedido perto.
+//
+// Hipótese de trabalho herdada do gate: negação ("não quero atendente") e
+// pergunta ("você é atendente virtual?") curtas TAMBÉM transferem — o custo
+// de um falso positivo (humano atende) é menor que o de prender o cliente
+// no bot. TODO(E2.4): medir nos evals de conversa e refinar se preciso.
 func PedeAtendente(mensagem string) bool {
 	m := strings.TrimSpace(mensagem)
 	if m == "" || !rePedeAtendente.MatchString(m) {

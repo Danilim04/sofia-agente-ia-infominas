@@ -159,6 +159,10 @@ func TestWebhookDeduplicaPorIdDeEntrega(t *testing.T) {
 	if rec := post(s, "/webhook", `não é json`, nil); rec.Code != http.StatusBadRequest {
 		t.Fatalf("json inválido: esperava 400, veio %d", rec.Code)
 	}
+	grande := `{"id":"g","event":"x","pad":"` + strings.Repeat("x", maxBodyBytes) + `"}`
+	if rec := post(s, "/webhook", grande, nil); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("corpo acima do teto: esperava 413, veio %d", rec.Code)
+	}
 }
 
 func TestComputeSignatureVetorConhecido(t *testing.T) {

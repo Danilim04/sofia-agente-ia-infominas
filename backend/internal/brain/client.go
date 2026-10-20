@@ -27,7 +27,7 @@ const (
 type Erro struct {
 	Classe       string
 	IDOcorrencia string
-	Causa        string // linguagem simples, p/ nota privada e alerta (sem PII)
+	Causa        string // linguagem simples, p/ registro e alerta (sem PII)
 	Status       int    // status HTTP, 0 = falha de transporte
 	Err          error  // erro de transporte subjacente, se houver
 }

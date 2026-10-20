@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -122,8 +123,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	// Corpo além do teto é recusado com 413 (não truncado em silêncio, que
+	// cairia em 401 por HMAC errado e esconderia a causa).
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var grande *http.MaxBytesError
+		if errors.As(err, &grande) {
+			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}

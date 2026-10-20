@@ -64,7 +64,8 @@ func main() {
 	if cfg.InfodeskWebhookSecret == "" && cfg.WebhookToken == "" {
 		log.Warn("webhook SEM autenticação: defina INFODESK_WEBHOOK_SECRET (HMAC) ou WEBHOOK_TOKEN (?token=...)")
 	}
-	log.Info("configure este URL no webhook do Infodesk", "url", webhookURL(cfg), "brain", cfg.BrainBaseURL)
+	// O token NÃO vai ao log (segredo): a URL logada mostra só onde ele entra.
+	log.Info("configure este URL no webhook do Infodesk", "url", webhookURL(cfg, true), "brain", cfg.BrainBaseURL)
 	srv := webhook.NewServer(cfg.InfodeskWebhookSecret, cfg.WebhookToken, st, eng, log, 4, 256)
 	go srv.Start(ctx)
 
@@ -145,15 +146,20 @@ func abrirStore(cfg *config.Config, log *slog.Logger) (store.Store, error) {
 	return st, nil
 }
 
-// webhookURL monta a URL a cadastrar no webhook do Infodesk, incluindo o token.
-func webhookURL(cfg *config.Config) string {
+// webhookURL monta a URL a cadastrar no webhook do Infodesk. Com mascarar, o
+// token aparece como <WEBHOOK_TOKEN> (para log); senão vai escapado.
+func webhookURL(cfg *config.Config, mascarar bool) string {
 	base := cfg.PublicBaseURL
 	if base == "" {
 		base = "https://<seu-host>"
 	}
 	u := base + "/webhook"
 	if cfg.WebhookToken != "" {
-		u += "?token=" + url.QueryEscape(cfg.WebhookToken)
+		if mascarar {
+			u += "?token=<WEBHOOK_TOKEN>"
+		} else {
+			u += "?token=" + url.QueryEscape(cfg.WebhookToken)
+		}
 	}
 	return u
 }

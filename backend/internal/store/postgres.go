@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS gateway.falhas (
     detalhe         TEXT   NOT NULL DEFAULT '',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-ALTER TABLE gateway.falhas ALTER COLUMN conversation_id TYPE TEXT;
+ALTER TABLE gateway.falhas ALTER COLUMN conversation_id TYPE TEXT USING conversation_id::text;
 CREATE INDEX IF NOT EXISTS falhas_conversa ON gateway.falhas (conversation_id, seq);
 
 DROP TABLE IF EXISTS gateway.gate_state;

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	"bot-infominas/internal/alerta"
 	"bot-infominas/internal/brain"
@@ -811,6 +812,9 @@ func TestPedeAtendente(t *testing.T) {
 		"atendente", "quero falar com atendente", "Me passa pra um humano", "tem algum atendente aí?",
 		"quero uma pessoa de verdade",
 		"preciso falar com uma pessoa de verdade, um atendente humano, porque o app não abre desde ontem e já reinstalei duas vezes",
+		// Hipótese de trabalho declarada em PedeAtendente: negação/pergunta
+		// curtas transferem (falso positivo barato).
+		"não quero atendente, me responde você", "você é um atendente virtual?",
 	}
 	nao := []string{
 		"oi", "10596693664", "o boleto não abre",
@@ -899,6 +903,18 @@ func TestMensagemSoComMidiaEntraNaFila(t *testing.T) {
 // Persona
 // ---------------------------------------------------------------------------
 
+// contarEmojis conta runas de símbolo (categoria So — onde vivem os emojis)
+// fora do ASCII; modificadores/ZWJ não contam, o que basta para "≤ 1".
+func contarEmojis(s string) int {
+	n := 0
+	for _, r := range s {
+		if r > 0x7f && unicode.Is(unicode.So, r) {
+			n++
+		}
+	}
+	return n
+}
+
 // TestMensagensDaPersona: pt-BR informal ("você"), no máximo 1 emoji, sem
 // prometer prazo e sem o nome do produto antigo.
 func TestMensagensDaPersona(t *testing.T) {
@@ -906,8 +922,8 @@ func TestMensagensDaPersona(t *testing.T) {
 	for nome, m := range map[string]string{
 		"transferencia": MsgTransferencia, "pedido": MsgPedidoAtendente, "midia": MsgMidia, "sem_resposta": MsgSemResposta,
 	} {
-		if n := strings.Count(m, "🙏") + strings.Count(m, "🧡") + strings.Count(m, "😊"); n > 1 {
-			t.Errorf("%s: mais de um emoji: %q", nome, m)
+		if n := contarEmojis(m); n > 1 {
+			t.Errorf("%s: mais de um emoji (%d): %q", nome, n, m)
 		}
 		for _, p := range proibidos {
 			if strings.Contains(strings.ToLower(m), strings.ToLower(p)) {
