@@ -43,7 +43,7 @@
 | Pedido explícito de atendente | **regex no gateway** (determinístico) **e** intenção `pedir_atendente` do JEV | redundância barata para um caso crítico |
 | Confirmação de abertura ("sim", "pode abrir") | **código** (`CONFIRMACOES_EXPLICITAS`) | consentimento não pode depender de modelo |
 | Texto da resposta, resumo/descrição do ticket, pergunta de esclarecimento | **LLM** | é a parte humanizada |
-| Mesa, departamento, `priorityId` | **tabela** `config/taxonomia.yaml` | nunca texto livre |
+| Mesa, item de catálogo (`catalogItemId`), departamento do handoff, `priorityId` | **tabela** `config/taxonomia.yaml` (nomes) + resolução de UUID **no boot** contra `GET /desks/:id` e `GET /departments` | nunca texto livre; prioridades e catálogo são **por mesa** no Infodesk (`docs/infodesk/02`) |
 | Dado cadastral (CPF/contrato) | LLM extrai para a tool; **código valida** (DV do CPF) | o modelo pode errar dígito; a validação é determinística |
 
 ## As perguntas enviadas ao JEV (uma chamada por turno)
@@ -123,47 +123,68 @@ Regras adicionais:
 
 Formato (valores **placeholder** até o export P1 — arquivo versionado com
 `placeholder: true` no topo; o boot do gateway avisa e os evals de categoria
-ficam marcados `xfail` enquanto o flag existir):
+ficam marcados `xfail` enquanto o flag existir). O insumo real do P1 está em
+`docs/infodesk/09-inventario-mesas-catalogos.md` (15 mesas e 15 catálogos
+observados no painel em 2026-10-20; departamentos de chat ainda não vistos):
+os nomes de mesa abaixo são **ilustrativos** e devem ser trocados pelos nomes
+**exatos** do 09 (ex.: "Suporte Tecnico N1", "Incidente Externo") quando a
+Infominas confirmar o mapeamento (`07`, D1).
 
 ```yaml
-placeholder: true          # remover quando vier o export do Infodesk
-versao: 2026-10-19
-mesa_triagem: "Triagem"    # destino de 'indefinida' (P11)
-departamento_humano_padrao: "Atendimento"   # P11
+placeholder: true          # remover quando vier o export do Infodesk (P1; insumo: docs/infodesk/09)
+versao: 2026-10-20
+mesa_triagem: "Abertura de Ticket"          # destino de 'indefinida' (P11) — hipótese a partir do 09
+departamento_humano_padrao: "Atendimento"   # P11 / 07 D6 (departamentos de chat ainda não observados)
 categorias:
   sem_conexao:
     descricao: "Internet totalmente sem funcionar"
     exemplos: ["minha internet caiu", "sem sinal desde ontem"]
     nao_e: ["lentidão com conexão ativa"]
-    mesa: "Suporte Técnico"
-    departamento: "Suporte"
+    mesa: "Incidente Externo"               # nome exato de GET /desks (09)
+    catalogo: "Serviços de Suporte"         # OPCIONAL: item de catálogo da mesa (catalogItemId); omitir = não enviar (07 D5)
+    departamento: "Suporte"                 # destino do handoff (GET /departments)
+    prioridade: alta                        # nome; UUID resolvido no boot NA MESA (GET /desks/:id.priorities)
     prioridade_minima: alta
   lentidao:
     descricao: "Conexão funciona, mas lenta ou instável"
-    mesa: "Suporte Técnico"
+    mesa: "Incidente Remoto"
     departamento: "Suporte"
+    prioridade: media
   cobranca:
     descricao: "Fatura, valor errado, 2ª via, pagamento"
     mesa: "Financeiro"
     departamento: "Financeiro"
+    prioridade: media
   # ... (export P1)
   indefinida:
     descricao: "Não foi possível determinar"
-    mesa: "Triagem"
+    mesa: "Abertura de Ticket"
     departamento: "Atendimento"
-prioridades:                # nome → UUID do Infodesk (P4); null = omitir priorityId
-  baixa: null
-  media: null
-  alta: null
-  urgente: null
+    prioridade: media
+prioridades:                # nomes canônicos da Sofia → NOME da prioridade no Infodesk (por mesa)
+  baixa: "Baixa"            # o gateway resolve o UUID em cada mesa via GET /desks/:id no boot (P4 = "resolver no boot")
+  media: "Média"            # nome ausente numa mesa → alerta (ou falha em STRICT_TAXONOMIA) e priorityId omitido só nessa mesa
+  alta: "Alta"
+  urgente: "Urgente"
 ```
 
-`taxonomia.py` carrega, valida (nomes únicos, mesa/departamento obrigatórios,
+`taxonomia.py` carrega, valida (nomes únicos, `mesa`/`departamento`
+obrigatórios, `catalogo` opcional, `prioridade` ∈ chaves de `prioridades`,
 `indefinida` presente), gera os `criteria` do JEV (`descricao` + `exemplos`
 + `nao_e` viram o objeto estruturado que a doc recomenda) e exporta para o
 gateway via `GET /taxonomia` do cérebro no boot **ou** arquivo compartilhado
 (decisão: **arquivo compartilhado** `config/taxonomia.yaml` lido pelos dois
 processos — uma fonte, zero chamada; o compose monta o mesmo volume).
+
+Resolução no gateway (`internal/taxonomia`, E3.1), **no boot** e a cada
+recarga do cache de referência: para cada categoria, `mesa` → `deskId` em
+`GET /desks`; `GET /desks/:id` dessa mesa → `priorityId` pelo nome em
+`prioridades[categoria.prioridade]` e `catalogItemId` pelo nome em
+`catalogItems` (ou `GET /catalog?deskId=`); `departamento` → `departmentId`
+em `GET /departments`. Comparação por nome **exato**, com aviso quando só o
+nome normalizado (acentos/caixa) bate (o 09 mostra grafias como "Suporte
+Tecnico N1"). Nada disso passa pelo LLM nem pelo cérebro: o cérebro só
+conhece os nomes das categorias.
 
 ## Onde o LLM entra (e só aí)
 
@@ -202,8 +223,8 @@ bloqueia o PR que mexeu em `perguntas.py`/`taxonomia.yaml`/limiar.
 
 | ID | Pendência |
 |---|---|
-| P1 | export de categorias/mesas/departamentos (taxonomia real) |
-| P4 | UUIDs de prioridade |
+| P1 | mapeamento categoria → mesa / item de catálogo / departamento / prioridade (taxonomia real). Insumo parcial já em `docs/infodesk/09-inventario-mesas-catalogos.md` (nomes das mesas e catálogos); faltam ids (`GET /desks`, `/desks/:id`, `/catalog`), departamentos de chat (`07` D6) e a **decisão da Infominas** por categoria (`07` D1) |
+| P4 | prioridades: **resolver no boot** — nomes por mesa vêm de `GET /desks/:id.priorities` (`07` T3 respondido); pendente só confirmar que os nomes `Baixa/Média/Alta/Urgente` existem em cada mesa de destino (senão a taxonomia mapeia nome a nome por mesa) |
 | P8 | chave do JEV, limites, desempenho em pt-BR (decide se os limiares acima são viáveis ou se o fallback LLM vai dominar) |
 | P9 | export do histórico + aprovação da anonimização |
 | P11 | mesa de triagem e departamento humano padrão |

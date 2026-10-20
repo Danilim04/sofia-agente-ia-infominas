@@ -50,12 +50,12 @@ flowchart LR
     DOCS[API/portal de docs<br/>da Infominas]
 
     WA -->|mensagem| ID
-    ID -->|webhook message.received<br/>HMAC sha256| GW
+    ID -->|webhook message.received · conversation.assigned · ticket.*<br/>HMAC sha256 de timestamp.corpo| GW
     GW -->|POST /chat · Contrato A| BR
     BR -->|POST /v1/systemone| JEV
     BR -->|chat completions| LLM
     BR -->|POST /tools/infodesk/*| GW
-    GW -->|POST /conversations/:id/messages<br/>POST /tickets<br/>POST /conversations/:id/department| ID
+    GW -->|GET /contacts/lookup · POST /conversations/:id/messages<br/>POST /conversations/:id/ticket · POST /conversations/:id/handoff<br/>GET /events?after=| ID
     GW --- PG
     BR --- PG
     DOCS -->|sync diário| PG
@@ -65,7 +65,7 @@ flowchart LR
 
 | Componente | Dono de | Nunca faz |
 |---|---|---|
-| **gateway Go** (`backend/`) | receber webhook (HMAC, dedup, idade, `organizationId`), fila FIFO + coalescência por conversa, estado da conversa (bot/transferida/encerrada), cache de contato identificado, **cliente HTTP do Infodesk**, **idempotência e registro de tickets**, transferência para humano (inclusive por mídia/falha/pedido explícito), bolhas WhatsApp, alertas, reconciliação por polling | decidir conteúdo de resposta; classificar |
+| **gateway Go** (`backend/`) | receber webhook (HMAC, dedup, idade, `organizationId`), fila FIFO + coalescência por conversa, estado da conversa (bot/transferida/encerrada), cache de contato identificado, **cliente HTTP do Infodesk**, **idempotência e registro de tickets**, transferência para humano via handoff (inclusive por mídia/falha/pedido explícito/humano assumiu), lookup do telefone, bolhas WhatsApp, alertas, reconciliação pelo feed `GET /events` | decidir conteúdo de resposta; classificar |
 | **cérebro Python** (`agente-ia/`) | grafo da conversa, **classificação (JEV → fallback LLM)**, guardrails de entrada/saída, RAG, tools que o modelo pode chamar (com política de injeção/validação), persona Sofia | falar com o Infodesk diretamente (sempre via `/tools/infodesk/*` do gateway); escolher mesa/prioridade por texto livre |
 | **JEV** | rótulo + `probabilities` + `confidence` para intenção, categoria, prioridade, frustração, segurança | gerar texto |
 | **LLM** | conversa humanizada, resumo/descrição do ticket (proposta), perguntas de esclarecimento, classificação **só** quando o JEV está abaixo do limiar | autorização, escolha de fila, abertura sem confirmação |
@@ -83,18 +83,20 @@ sequenceDiagram
     participant L as LLM
 
     C->>I: "minha internet caiu de novo"
-    I->>G: webhook message.received (HMAC)
+    I->>G: webhook message.received (HMAC de "timestamp.corpo", handledBy=EXTERNAL_BOT)
     G-->>I: 200 em <100 ms
-    G->>G: dedup (id entrega + message.id), idade, organizationId, fila por conversa, debounce 8 s
-    G->>G: conversa transferida/encerrada? mídia sem texto? pediu atendente? → transfere e para
-    G->>B: POST /chat {conversation_id, mensagem, telefone, nome, contato_identificado?}
+    G->>G: assinatura + janela 5 min, dedup (id do evento + message.id), organizationId, seq, fila por conversa, debounce 8 s
+    G->>G: handledBy != EXTERNAL_BOT? conversa transferida/encerrada? mídia? pediu atendente? → handoff e para
+    G->>I: GET /contacts/lookup?phone= (1º turno do episódio)
+    I-->>G: requesters[] (telefone conhecido → identificado sem CPF)
+    G->>B: POST /chat {conversation_id, mensagem, telefone, nome, contato{forma: telefone|cpf|contrato}?}
     B->>B: input_guardrail (regex) 
     B->>J: systemone(state=últimas msgs, questions={intencao, categoria, prioridade, frustracao, seguranca})
     J-->>B: {intencao: reclamacao 0.93, categoria: sem_conexao 0.88, prioridade: alta 0.71, frustracao: 0.4, ...}
     B->>B: roteador: confiança ≥ limiar → classificação fixa no estado; senão fallback LLM; senão pergunta de esclarecimento
     B->>B: retrieve (RAG) só se intenção = dúvida
     B->>L: agent (persona Sofia + classificação + contexto) 
-    L-->>B: pergunta de identificação (CPF/contrato) se contato não identificado
+    L-->>B: pergunta de identificação (CPF/contrato) só se o lookup não identificou (ou IDENT_EXIGIR_CPF=true)
     B-->>G: reply
     G->>I: POST /conversations/:id/messages (bolhas)
     I->>C: "Boa tarde! Sou a Sofia... pode me passar o CPF ou nº do contrato?"
@@ -111,13 +113,14 @@ sequenceDiagram
     B->>B: política exige confirmação explícita no turno seguinte + proposta válida (15 min)
     B->>G: /tools/infodesk/ticket/abrir (proposta injetada)
     G->>G: grava ticket 'pendente' (idempotência) 
-    G->>I: POST /tickets {deskId, title, description, channel, contactPhone, priorityId?}
-    I-->>G: {number: 4821, ...}
-    G->>I: POST /conversations/:id/department {departmentId}
-    G-->>B: {status: true, numero: 4821}
+    G->>I: POST /conversations/:id/ticket {deskId, title, description, priorityId, catalogItemId?, period: session, finish: false}
+    I-->>G: {number: 4821, status: {name: "Aberto", isOpen: true}, conversationId, ...}
+    Note over G,I: sem resposta? GET /tickets?phone=&status=open casa conversationId antes de qualquer nova tentativa (ADR 0005)
+    G->>I: POST /conversations/:id/handoff {departmentId, note gerada por código} (se TRANSFERIR_APOS_TICKET)
+    G-->>B: {status: true, numero: "4821"}
     L-->>B: "Pronto! Seu chamado é o nº 4821..."
-    G->>I: POST /messages
-    Note over G,I: humano assume no departamento; conversation.finished → gateway limpa estado
+    G->>I: POST /messages {text}
+    Note over G,I: handoff tira o bot; atendente assume (conversation.assigned); conversation.finished → gateway limpa estado
 ```
 
 **Caminhos alternativos**
@@ -128,29 +131,35 @@ sequenceDiagram
   saída do Zapin mantido).
 - **Status de chamado**: intenção `status_chamado` → o modelo pede o número →
   tool `consultar_status_chamado(numero)` → `GET /tickets/:number`; o gateway
-  só devolve se o ticket pertence ao telefone/CPF da sessão (regra de posse
-  depende do schema do ticket — pendência T1; sem schema, só tickets que o
-  próprio bot abriu, tabela local).
+  só devolve se o ticket pertence ao telefone da sessão (posse por código:
+  tabela local → `conversationId` → `contactPhone`/`requester.phone` →
+  `requester_id` do lookup; `01` A4). `status` é objeto por mesa: a Sofia
+  repete `status.name`, nunca inventa.
 - **Transferência para humano** (sempre pelo gateway, caminho único como
   `transferencia.go`): pedido explícito (detecção determinística no Go, como
-  `PedeAtendente`, + intenção `pedir_atendente` do JEV), mídia/áudio (`body`
-  vazio), frustração alta, baixa confiança após esclarecimento, falha do
-  cérebro/JEV/disjuntor, fora do horário humano (pendente). Ação:
-  mensagem de aviso + `POST /conversations/:id/department {departamento
-  humano}` + marca local `transferida` → o gateway ignora webhooks dessa
-  conversa até `conversation.finished`.
-- **Reconciliação**: job periódico `GET /conversations` para pegar mensagens
-  perdidas (webhook best-effort). **Bloqueado** pelo schema (pendência C1).
+  `PedeAtendente`, + intenção `pedir_atendente` do JEV), mídia/áudio
+  (`message.type != TEXT` ou `attachment`), frustração alta, baixa confiança
+  após esclarecimento, falha do cérebro/JEV/disjuntor, fora do horário humano
+  (pendente), conversa sem resposta nossa por 5 min (vigia). Ação: mensagem
+  de aviso + **`POST /conversations/:id/handoff {departmentId, note}`**
+  (ADR 0007; a `note` é montada por código) + marca local `transferida` → o
+  gateway ignora webhooks dessa conversa até `conversation.finished`.
+  **Humano que assume por conta própria** também é detectado:
+  `conversation.assigned` / `handledBy != EXTERNAL_BOT` cala o bot.
+- **Reconciliação**: no boot e a cada minuto, `GET /events?after=<seq>`
+  entrega ao mesmo handler do webhook os eventos que não chegaram (entrega
+  é *pelo menos uma vez*, com reentregas por até 6 h; dedup pelo `id` do
+  evento). Nasce ligada (E3.3).
 
 ## O que muda em relação ao Zapin
 
 | Área | Zapin (Azapfy) | Sofia (Infominas) |
 |---|---|---|
-| Transporte | Chatwoot + Evolution (webhooks `message_created`, labels, equipes, assignee) | **Infodesk** (`message.received`, HMAC `X-Infominas-Signature`, sem labels; estado bot/humano vive no nosso Postgres) |
-| Identidade | Gate FSM: login → Mongo → confirmação de e-mail | **Sem login.** Telefone do webhook + CPF/contrato pedido na conversa (validado por código) + cache 24 h; lookup no Infodesk quando houver rota (pendente) |
-| Chamados | SAC da Azapfy via `/tools/sac/*` | **Infodesk tickets** via `/tools/infodesk/*`; idempotência e listagem **locais** (a API não lista nem tem chave de idempotência) |
+| Transporte | Chatwoot + Evolution (webhooks `message_created`, labels, equipes, assignee) | **Infodesk** (`message.received` + 15 outros eventos, HMAC `X-Infominas-Signature` sobre `timestamp.corpo`, reentrega *pelo menos uma vez*, feed `GET /events`; `handledBy`/`botActive` dizem se é a vez do bot; o estado `bot/transferida/encerrada` continua no nosso Postgres) |
+| Identidade | Gate FSM: login → Mongo → confirmação de e-mail | **Sem login.** `GET /contacts/lookup?phone=` no 1º turno (telefone conhecido → solicitante/cliente, sem CPF quando `IDENT_EXIGIR_CPF=false`); fallback: CPF/contrato pedido na conversa (validado por código) + cache 24 h (ADR 0004 revisado) |
+| Chamados | SAC da Azapfy via `/tools/sac/*` | **Infodesk tickets** via `/tools/infodesk/*`, abertos **a partir da conversa** (`POST /conversations/:id/ticket`); idempotência **local** (a API não tem chave de idempotência) com reconciliação por `GET /tickets?phone=`; "meus chamados" = listagem do Infodesk por telefone ∪ local |
 | Classificação | Classificador LLM só para segurança (suporte/off_topic/malicioso) | **JEV** para intenção, categoria, prioridade, frustração e segurança; LLM só abaixo do limiar |
-| Roteamento | Nenhum (uma equipe) | Tabela categoria → mesa/departamento/prioridade; transferência de departamento no Infodesk |
+| Roteamento | Nenhum (uma equipe) | Tabela categoria → mesa/catálogo/prioridade (ticket) + departamento (handoff); UUIDs resolvidos no boot por mesa; transferência para humano = `handoff` (ADR 0007) |
 | RAG | AzapDocs (Contrato B) → pgvector | Mesmo pipeline; **fonte nova** (API/portal da Infominas, pendente) |
 | Persona | Zapin, "Boníssimo dia" 🧡 | **Sofia**, pt-BR informal, 1 emoji, saudação por período |
 | Grafo | `entry → input_guardrail → retrieve → agent ⇄ tools → output_guardrail` | `entry → input_guardrail → classificar → retrieve? → agent ⇄ tools → output_guardrail` (nó `classificar` novo; `retrieve` condicional à intenção) |
@@ -191,10 +200,10 @@ sofia-agente-ia-infominas/
 | ID | Pendência | Bloqueia | Dono |
 |---|---|---|---|
 | P1 | Export das categorias do Infodesk + lista de mesas/departamentos + mapeamento | `config/taxonomia.yaml` real (etapas de classificação rodam com taxonomia **placeholder** marcada) | Daniel / Infominas |
-| P2 | Rota de busca de cliente por telefone no Infodesk (não documentada) | identificação automática; até lá, CPF/contrato na conversa | Infominas |
-| P3 | Schemas de resposta (`POST /tickets`, `GET /tickets/:number`, `GET /conversations`, `GET /conversations/:id`, payloads de `conversation.*`) — `docs/infodesk/07` | tipagem forte no Go, posse de ticket, reconciliador | Infominas |
-| P4 | `priorityId`: lista de UUIDs de prioridade | envio de prioridade ao Infodesk (até lá vai no texto) | Infominas |
-| P5 | Como detectar que um humano assumiu a conversa sem o bot ter transferido (C3) | risco de bot falar por cima do humano | Infominas |
+| P2 | ~~Rota de busca de cliente por telefone~~ **Respondida (2026-10-19):** `GET /contacts/lookup?phone=` (`docs/infodesk/04`). Resta a decisão de negócio `07` N3 (valor de `IDENT_EXIGIR_CPF`; cadastrar via `POST /requesters`?) — E5.3 | — | Infominas (N3) |
+| P3 | ~~Schemas de resposta~~ **Respondida (2026-10-19):** objetos `ticket`, `conversation`, `message`, envelope de evento em `docs/infodesk/03–05`. Restam T11/T12/T13, W7, C9 (campos secundários) no `07` | — | Infominas (itens do 07) |
+| P4 | `priorityId`: **resolver no boot** por mesa via `GET /desks/:id.priorities` (`02`); pendente só confirmar os nomes das prioridades em cada mesa de destino | nada bloqueado (nome ausente → `priorityId` omitido + alerta) | Infominas (com P1) |
+| P5 | ~~Como detectar que um humano assumiu~~ **Respondida (2026-10-19):** `conversation.handledBy`/`botActive` em todo evento + `conversation.assigned` (`docs/infodesk/08`); gateway cala quando `handledBy != EXTERNAL_BOT` (E2.1) | — | — |
 | P6 | API/portal de documentos da Infominas para o RAG (URL, auth, formato) | fonte do RAG (pipeline fica pronto com fonte local) | Daniel |
 | P7 | Horário de atendimento humano e mensagem fora do horário | regra de transferência "fora do horário" | Infominas |
 | P8 | Acesso ao JEV (chave `TYPESAFE_API_KEY`, limites de rate, plano) e desempenho em pt-BR | thresholds reais; evals de classificação com JEV real | Daniel |

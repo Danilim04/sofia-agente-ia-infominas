@@ -1,65 +1,94 @@
-# 01 — Autenticação e escopos
+# 01 — Autenticação, escopos e configuração da chave
 
-Fonte: PDF, seção "1. Autenticação" + escopos citados ao longo das seções 3–4 e
-erros 401/403 da seção 6.
+Fonte: PDF v1 (2026-10-19), "Passo a passo no Desk: criar a chave" e seção
+"2. Autenticação e escopos".
 
-## Chave de API
+## Como a chave nasce (lado Infominas, painel do Desk)
 
-- A integração usa **uma chave de API por parceiro/uso** (formato observado nos
-  exemplos: `ik_live_xxxxxxxxxxxxxxxxxxxxxxxx`).
-- A chave deve ir em **todas** as chamadas, de **uma** das duas formas
-  (equivalentes):
+Feito por um **administrador** em **Configurações › Integrações**:
+
+1. A tela mostra a **URL base da API** (botão de copiar), o formulário de nova
+   chave e a lista de chaves ativas.
+2. Nova chave: **Nome** (aparece como **autor das mensagens do bot** no inbox),
+   **permissões** (escopos; "o mínimo necessário" ou *Acesso total*),
+   **Conduz o atendimento** (liga o modo *bot externo* — ver
+   [08-bot-externo.md](08-bot-externo.md); **só uma chave por organização**
+   pode ter isso), **URL do webhook** e os **eventos** a receber (agrupados).
+3. Ao criar, o Desk mostra **uma única vez** a chave de API (`ik_live_…`) e o
+   **segredo do webhook** (`whsec_…`). São dois segredos distintos.
+4. **Enviar teste**: o Desk faz um `POST` assinado com o evento `ping` e mostra
+   o HTTP e o tempo de resposta (também via `POST /webhook/test`, ver 05).
+5. **Entregas**: log de cada evento enviado (Entregue / Na fila / Falhou),
+   tentativas, resposta do nosso servidor e **Reentregar** manual.
+6. **Editar** troca escopos, eventos, URL e modo bot sem gerar outra chave.
+   **Rotacionar segredo** ao trocar de servidor. **Revogar** se vazar.
+
+## Enviar a chave
+
+Em **todas** as chamadas, de uma das duas formas (equivalentes):
 
 ```http
-Authorization: Bearer ik_live_xxxxxxxxxxxxxxxxxxxxxxxx
+Authorization: Bearer ik_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
-
-ou
 
 ```http
-X-Api-Key: ik_live_xxxxxxxxxxxxxxxxxxxxxxxx
+X-Api-Key: ik_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-Recomendação de implementação (nossa, não do PDF): usar `Authorization: Bearer`
-por ser o padrão HTTP; manter o nome do header configurável só se a Infominas
-pedir.
+Recomendação nossa: `Authorization: Bearer`.
+
+## Testar a chave — `GET /me`
+
+```json
+{ "organizationId": "…", "keyId": "…", "name": "Bot de atendimento",
+  "scopes": ["tickets:read", "conversations:write", "whatsapp:send"],
+  "handlesConversations": true }
+```
+
+`organizationId` daqui é o valor a conferir contra o `organizationId` dos
+webhooks; `handlesConversations` diz se a chave é o bot externo.
 
 ## Escopos
 
-A chave carrega escopos; cada rota exige um. Os escopos citados no PDF:
-
-| Escopo | Rotas que exigem |
+| Escopo | Libera |
 |---|---|
-| `tickets:write` | `POST /tickets`, `POST /tickets/:number/reply` |
-| `tickets:read` | `GET /tickets/:number` |
-| `conversations:read` | `GET /conversations`, `GET /conversations/:id` |
-| `conversations:write` | `POST /conversations/:id/messages`, `/assign`, `/department`, `/finish` |
-| (não informado) | `GET /desks`, `GET /users`, `GET /departments` — **NÃO DOCUMENTADO** se exigem escopo |
+| `tickets:read` | listar e consultar chamados |
+| `tickets:write` | abrir, alterar, comentar, responder, encerrar, reabrir, cancelar, escalar chamados; alertas |
+| `conversations:read` | listar e ler conversas e mensagens, retroativo de mensagens, anexos, janela de 24 h |
+| `conversations:write` | enviar mensagem em conversa, nota interna, atribuir, transferir, encerrar, handoff, vínculos |
+| `whatsapp:send` | enviar WhatsApp para um número (inclusive novo) |
+| `contacts:read` | identificar telefone, buscar clientes e solicitantes |
+| `contacts:write` | cadastrar solicitante |
+| `events:read` | feed de eventos e log/reentrega de webhooks |
+| `*` | tudo |
 
-Chamada com escopo insuficiente → `403` com corpo
-`{"statusCode":403,"message":"Escopo insuficiente. Necessário: tickets:write."}`.
+**Dados de referência** (`/desks`, `/desks/:id`, `/users`, `/departments`,
+`/catalog`, `/whatsapp/templates`) valem para **qualquer chave válida**, sem
+escopo específico.
 
-## Configuração da chave (lado Infominas)
-
-Na chave também se configuram `webhookUrl`, `webhookEvents` e o `webhookSecret`
-usado na assinatura HMAC (ver [05-webhooks.md](05-webhooks.md)). O PDF não diz
-**quem** configura (painel do Infodesk? pedido à Infominas?) nem se há rota de
-auto-serviço — ver 07.
+Escopo insuficiente → `403 FORBIDDEN` (ver 06).
 
 ## Erros relacionados
 
-| Código | Significado |
-|---|---|
-| 401 | Chave ausente, inválida ou revogada |
-| 403 | Escopo insuficiente para a operação |
+| HTTP | `code` | Significado |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | chave ausente, inválida ou revogada |
+| 403 | `FORBIDDEN` | escopo insuficiente |
 
 ## Implicações para o nosso lado
 
-- A chave é **segredo de produção**: vive em variável de ambiente/secret
-  (`INFODESK_API_KEY`), nunca em código, log ou prompt. Mascarar nos logs como o
-  Zapin faz com telefone/login (F5/LGPD).
-- Pedir à Infominas uma chave com **apenas** os escopos necessários ao agente
-  (princípio do menor privilégio): `tickets:write`, `tickets:read`,
-  `conversations:read`, `conversations:write`. Reavaliar `conversations:write`
-  se o agente nunca for encerrar conversa.
-- Pedir **chave separada para homologação** (se existir ambiente) — ver 07.
+- Dois segredos em config: `INFODESK_API_KEY` (`ik_live_…`) e
+  `INFODESK_WEBHOOK_SECRET` (`whsec_…`). Nunca em código, log ou prompt;
+  mascarar nos logs.
+- Escopos que a Sofia precisa na v1 (menor privilégio):
+  `tickets:read`, `tickets:write`, `conversations:read`, `conversations:write`,
+  `contacts:read`, `events:read`. `contacts:write` só se o plano adotar
+  `POST /requesters` (ver 07, N3); `whatsapp:send` só para mensagens
+  proativas/templates (fora da v1).
+- A chave da Sofia deve ter **Conduz o atendimento** ligado — é o que faz a
+  conversa nascer com `handledBy: EXTERNAL_BOT` e silencia os atendentes até o
+  handoff (08). O **nome da chave** é o nome que o atendente vê como autor das
+  mensagens do bot: usar "Sofia" (ou o que a Infominas preferir).
+- `GET /me` no boot: valida chave, confere `organizationId` esperado e
+  `handlesConversations == true`; divergência = erro de configuração explícito.
+- Pedir **chave separada para homologação** se existir ambiente (07, A1).
