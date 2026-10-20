@@ -1,0 +1,31 @@
+# Regras extras do gitleaks (job `gitleaks` do ci.yml) sobre as padrão.
+title = "sofia"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "infodesk-api-key"
+description = "Chave de API do Infodesk (ik_live_...)"
+regex = '''ik_live_[A-Za-z0-9]{16,}'''
+
+[[rules]]
+id = "openrouter-key"
+description = "Chave do OpenRouter"
+regex = '''sk-or-v1-[A-Za-z0-9]{20,}'''
+
+[[rules]]
+id = "typesafe-key-em-env"
+description = "TYPESAFE_API_KEY com valor preenchido"
+regex = '''TYPESAFE_API_KEY\s*=\s*["']?[A-Za-z0-9_\-]{16,}'''
+
+[allowlist]
+paths = [
+  '''docs/infodesk/.*\.pdf''',
+  '''\.env\.example$''',
+  '''deploy/env/prod\.env\.tpl$''',
+]
+regexes = [
+  '''ik_live_x{10,}''',        # placeholder da documentação
+  '''sk-or-v1-troque-aqui''',
+]

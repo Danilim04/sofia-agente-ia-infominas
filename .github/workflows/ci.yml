@@ -1,0 +1,163 @@
+# ==============================================================================
+# CI — camadas 1 e 2 da esteira (docs/plano/04-esteira-qualidade.md).
+# Os jobs abaixo são os checks obrigatórios da branch protection da main:
+#   lint-python · lint-go · arquitetura · test-python · test-go · contratos ·
+#   e2e · evals-pr · gitleaks
+# Cada job roda o MESMO comando que scripts/verificar.sh roda localmente.
+# ==============================================================================
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CI: "true"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  # ------------------------------------------------------------------ Python
+  lint-python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults: { run: { working-directory: agente-ia } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: agente-ia/requirements-dev.txt }
+      - run: pip install -r requirements-dev.txt
+      - run: python -m ruff format --check src tests
+      - run: python -m ruff check src tests
+
+  test-python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults: { run: { working-directory: agente-ia } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*.txt" }
+      # torch CPU antes do resto (mesmo truque do Dockerfile) — evita baixar CUDA.
+      - run: pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m mypy
+      - name: pytest (unit, sem rede)
+        run: python -m pytest --cov=src --cov-report=term-missing:skip-covered
+        env:
+          OPENROUTER_API_KEY: test-openrouter-key
+
+  # ---------------------------------------------------------------------- Go
+  lint-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with: { go-version-file: backend/go.mod, cache-dependency-path: backend/go.sum }
+      - name: gofmt
+        working-directory: backend
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - uses: golangci/golangci-lint-action@v8
+        with: { version: latest, working-directory: backend }
+
+  test-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env: { POSTGRES_DB: rag, POSTGRES_USER: rag, POSTGRES_PASSWORD: rag }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U rag -d rag" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with: { go-version-file: backend/go.mod, cache-dependency-path: backend/go.sum }
+      - working-directory: backend
+        run: go vet ./...
+      - name: go test -race (SQLite e Postgres)
+        working-directory: backend
+        run: go test -race -cover ./...
+        env:
+          PG_TEST_URL: postgresql://rag:rag@localhost:5432/rag
+
+  # ------------------------------------------------------------ Arquitetura
+  arquitetura:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*.txt" }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: backend/go.mod, cache-dependency-path: backend/go.sum }
+      - working-directory: agente-ia
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: import-linter (camadas do cérebro)
+        working-directory: agente-ia
+        run: lint-imports
+      - name: testes de arquitetura (Python + varredura de legado)
+        working-directory: agente-ia
+        run: python -m pytest tests/test_arquitetura.py -v
+        env:
+          OPENROUTER_API_KEY: test-openrouter-key
+      - name: testes de arquitetura (Go)
+        working-directory: backend
+        run: go test ./internal/arquitetura/... -v
+
+  # ------------------------------------------------- Contratos, E2E, evals
+  contratos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: testes de contrato Go <-> Python
+        run: |
+          if [ -d contratos ]; then
+            echo "TODO(E1.6): rodar go test -run Contrato e pytest -m contrato"; exit 0
+          fi
+          echo "contratos/ ainda não existe (entra em E1.6)"
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: E2E com mock-infodesk
+        run: |
+          if [ -d backend/internal/e2e ]; then
+            echo "TODO(E4.1): go test -tags e2e ./internal/e2e/..."; exit 0
+          fi
+          echo "backend/internal/e2e ainda não existe (entra em E4.1)"
+
+  evals-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: evals determinísticos de conversa
+        run: |
+          if [ -d agente-ia/evals/conversa ]; then
+            echo "TODO(E3.5): cd agente-ia && pytest -m evals_pr evals/"; exit 0
+          fi
+          echo "agente-ia/evals/conversa ainda não existe (entra em E1.5/E3.5)"
+
+  # --------------------------------------------------------------- Segredos
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - name: gitleaks (binário oficial; sem licença de org)
+        run: |
+          v=8.30.0
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" | tar xz gitleaks
+          ./gitleaks detect --source . --redact --no-banner --config .gitleaks.toml
