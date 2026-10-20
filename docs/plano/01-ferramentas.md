@@ -168,7 +168,7 @@ manda oferecer chamado/atendente, nunca inventar.
 
 `acoes` passa a ser **usado** pelo gateway (no Zapin era sempre vazio): `transferir` é executado pelo caminho único de transferência. `classificacao` vai para o log/alerta e para a tabela `conversas` (auditoria).
 
-Endpoints do cérebro: `POST /chat`, `POST /encerrar-episodio` (limpa `proposta_chamado`, `classificacao`, `identificacao` **não** — ela é por telefone no gateway), `GET /health`, `POST /classificar` (**só para evals/ops**: roda o JEV/roteador sem o grafo; protegido pelo mesmo `X-Tools-Token`).
+Endpoints do cérebro: `POST /chat`, `POST /encerrar-episodio` (limpa `proposta_chamado`, `classificacao` e `identificacao` do estado da conversa e devolve `campos_limpos`; o cache de identificação por telefone vive no gateway e volta em `contato` no próximo `/chat`, e o estado do cérebro só guarda o registro mascarado), `GET /health`, `POST /classificar` (**só para evals/ops**: roda o JEV/roteador sem o grafo; protegido pelo mesmo `X-Tools-Token`).
 
 ---
 
