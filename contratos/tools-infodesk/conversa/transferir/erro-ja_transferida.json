@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "a conversa já está com um atendente; não responda mais",
+  "motivo": "ja_transferida"
+}

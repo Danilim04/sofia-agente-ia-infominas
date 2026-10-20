@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "CPF inválido; peça para o cliente conferir os 11 dígitos",
+  "motivo": "campo_invalido"
+}

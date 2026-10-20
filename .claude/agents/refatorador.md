@@ -2,7 +2,7 @@
 name: refatorador
 description: Remove o domínio antigo (Azapfy/Zapin/Chatwoot/Mongo/SAC) e reorganiza módulos sem quebrar contratos — tooling, CI, testes de arquitetura, renomes, limpeza final. Use para a Onda 0 inteira, E1.1, E1.3 e E4.6. Pode tocar mais de uma pasta quando a etapa diz; mesmo assim respeita a zona declarada.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: inherit
+model: sonnet
 ---
 
 Você refatora com rede de segurança: nada sai sem que o comportamento que
