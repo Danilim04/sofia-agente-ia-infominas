@@ -69,37 +69,22 @@ LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
 LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
 LANGFUSE_HOST=${LANGFUSE_HOST}
 
-# --- Gateway: Chatwoot (por DENTRO da rede docker do servidor) ----------------
-CHATWOOT_BASE_URL=http://chatwoot-rails:3000
-CHATWOOT_ACCOUNT_ID=1
-# Preenchido pelo ESTADO da VM (.chatwoot-token → apply-server-state.sh) por
-# cima do que o CI renderizar; o secret é só bootstrap/override manual.
-CHATWOOT_API_TOKEN=${CHATWOOT_API_TOKEN}
+# --- Gateway: Infodesk (docs/infodesk/) -------------------------------------
+INFODESK_BASE_URL=https://infodesk.infominas.net/api/integration/v1
+INFODESK_API_KEY=${INFODESK_API_KEY}
+# HMAC do webhook (X-Infominas-Signature sobre o corpo cru): GitHub Secret.
+# Vazio = sem verificação — só aceitável enquanto o Infodesk não assinar.
+INFODESK_WEBHOOK_SECRET=${INFODESK_WEBHOOK_SECRET}
 WEBHOOK_TOKEN=${WEBHOOK_TOKEN}
-# HMAC do webhook (X-Chatwoot-Signature sobre "{timestamp}.{corpo}"): secret
-# OPCIONAL do GitHub. Vazio = sem verificação (comportamento atual: o Chatwoot
-# em uso não assina). Só preencher quando o lado do Chatwoot passar a assinar
-# com o MESMO segredo — senão todo webhook é recusado (401).
-WEBHOOK_SECRET=${WEBHOOK_SECRET}
-# Base interna que o Chatwoot alcança — vira a URL a cadastrar no webhook.
-PUBLIC_BASE_URL=http://azapfy-bot:8080
-
-# --- Gateway: etiquetas / gate ------------------------------------------------
-LABEL_BOT=fila-bot
-LABEL_HUMANO=fila-humano
-# Caixa de entrada do bot: conversas NOVAS dela ganham fila-bot no
-# conversation_created e SÓ mensagens dela são atendidas (ZD-2). O id é
-# ESPECÍFICO da instância do Chatwoot (na VM antiga era 5,
-# "whatsapp-daniel-teste"); vem da GitHub variable INBOX_ID — OBRIGATÓRIA e
-# > 0: o render-env.sh aborta o deploy sem ela (0 = todas as caixas, só dev).
-# A pipeline "Configurar Chatwoot" lista as caixas existentes ao final.
-INBOX_ID=${INBOX_ID}
-CONFIRM_FIELD=email
-MAX_TENTATIVAS=3
-IDENTITY_TTL=24h
-# F1: conversa em "falha" volta a ser atendida depois deste TTL (rede de
-# segurança — a conversa RESOLVIDA no Chatwoot zera o estado do gate na hora).
-GATE_FALHA_TTL=1h
+# Organização esperada nos webhooks (GitHub variable; vazia = não valida).
+INFODESK_ORGANIZATION_ID=${INFODESK_ORGANIZATION_ID}
+INFODESK_TIMEOUT=15s
+REFERENCIA_CACHE_TTL=10m
+# Departamento do Infodesk que recebe a conversa transferida pelo bot
+# (GitHub variable; id da instância). Vazio = avisa e registra, não move.
+DEPARTAMENTO_HUMANO_PADRAO=${DEPARTAMENTO_HUMANO_PADRAO}
+# URL pública do gateway — vira a URL a cadastrar no webhook do Infodesk.
+PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
 
 # --- Gateway: robustez de transporte (Bloco A) --------------------------------
 # Coalescência de rajadas (F11): silêncio que fecha o lote / teto acumulado.
@@ -109,24 +94,9 @@ DEBOUNCE_TETO=20s
 EVENTO_IDADE_MAX=10m
 # Divide respostas longas em mensagens de até N chars no WhatsApp (F12).
 REPLY_MAX_CHARS=900
-
-# --- Gateway: Mongo da Azapfy -------------------------------------------------
-MONGO_URI=${MONGO_URI}
-MONGO_DB=azapfy3
-MONGO_COLLECTION=users
-MONGO_TIMEOUT=8s
 BRAIN_TIMEOUT=60s
 
-# --- SAC / chamados -----------------------------------------------------------
-SAC_BASE_URL=https://api3.azapfy.com.br
-SAC_PORTAL_URL=https://atendimento.azapfy.com.br
-SAC_SERVICE_COD=${SAC_SERVICE_COD}
-# Equipe (desk) do SAC que atende os chamados do bot. A EMPRESA do chamado
-# (incidente.empresa) é sempre a do cliente, vinda do cadastro — não há valor fixo.
-SAC_GRUPO_EMP=AZAPERS
-SAC_TIMEZONE=America/Sao_Paulo
-SAC_API_TOKEN=${SAC_API_TOKEN}
-SAC_CONFIG_TTL=10m
+# --- Tools (/tools/infodesk/*): segredo compartilhado cérebro↔gateway --------
 # Segredo compartilhado cérebro↔gateway (X-Tools-Token) — mesmo valor nos dois:
 TOOLS_API_TOKEN=${TOOLS_API_TOKEN}
 SAC_TOOLS_TOKEN=${TOOLS_API_TOKEN}
@@ -142,29 +112,10 @@ LLM_MAX_TOKENS_CLASSIFICADOR=256
 # Prazo TOTAL do turno no cérebro (s): menor que TURNO_TETO (45s) e que
 # BRAIN_TIMEOUT (60s) — o cérebro desiste primeiro e devolve falha classificada.
 BRAIN_TURNO_PRAZO=40
-# Equipe do Chatwoot que recebe a conversa transferida pelo bot (ZC-3); id da
-# instância (GitHub variable TEAM_HUMANO_ID; vazia = 0 = só troca a etiqueta).
-TEAM_HUMANO_ID=${TEAM_HUMANO_ID}
 # Teto do turno desde a mensagem do cliente (coalescência + cérebro + novas
 # tentativas em falha transitória: 2 s e 5 s). Falha definitiva não repete.
 TURNO_TETO=45s
 # Alertas ao responsável (falha definitiva, >5% de turnos com falha em 15 min,
-# disjuntor aberto, etiqueta reportar-zapin): sempre no log `zapin_alerta`;
-# opcionalmente POST JSON {"text": ...} nesta URL (GitHub Secret; vazio = só log).
+# disjuntor aberto): sempre no log `sofia_alerta`; opcionalmente POST JSON
+# {"text": ...} nesta URL (GitHub Secret; vazio = só log).
 ALERTA_WEBHOOK_URL=${ALERTA_WEBHOOK_URL}
-# URL pública do Chatwoot (link da conversa nos alertas; CHATWOOT_BASE_URL é
-# interna à rede docker). GitHub variable; vazia = usa a interna.
-CHATWOOT_PUBLIC_URL=${CHATWOOT_PUBLIC_URL}
-# Etiqueta que o atendente aplica para reportar um problema do bot: o gateway
-# avisa o responsável com ID da ocorrência, causa e link (vazio = desligado).
-# A etiqueta/macro em si é criada à mão no Chatwoot.
-LABEL_REPORTAR=reportar-zapin
-
-# --- Gateway: quando o bot age (lote ZD) -------------------------------------
-# Id do usuário do Chatwoot que o gateway usa (o "Zapin"). Conversa cujo
-# responsável (assignee) é OUTRO usuário está com atendente humano: o bot não
-# responde nem adota. Vazio = o gateway descobre no boot pelo próprio token
-# (GET /api/v1/profile com o .chatwoot-token) — não precisa de variable;
-# preencha só para forçar um id (se a descoberta falhar, qualquer responsável
-# conta como humano).
-BOT_USER_ID=
