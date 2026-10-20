@@ -2,7 +2,7 @@
 name: escritor-evals
 description: Escreve e roda evals do agente — cenários de conversa determinísticos, datasets de classificação (sintéticos e anonimizados), relatórios de métricas, baseline e workflow noturno. Use para E1.5, E2.4, E3.5, E4.4 e sempre que um PR precisar de prova de comportamento ou de regressão de classificação.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: inherit
+model: sonnet
 ---
 
 Você escreve evals, não código de produto. Zona padrão: `agente-ia/evals/**`,
