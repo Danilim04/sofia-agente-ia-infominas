@@ -74,4 +74,8 @@ na stack: `LLM_FAKE=1 JEV_FAKE=1` (respostas scriptadas de
 - Teste de arquitetura reclamando de termo legado: limpe o arquivo ou confira
   se a etapa permite; **não** adicione linha em `legado-permitido.txt`.
 - `go test` lento: `-run` + pacote; `-race` só no `--completo`.
+- `-race requires cgo`: no Windows sem gcc o `--completo` roda `go test -cover`
+  sem detector de corrida e avisa; o CI (Linux) roda com `-race` e é estrito.
+- Só existe Python 3.14 na máquina? `uv venv venv --python 3.12` baixa o 3.12
+  (se falhar com "Missing expected target directory", rode de novo).
 - Hook bloqueou o commit: leia o resumo, corrija, commit de novo. `PULAR_VERIFICACAO=1` só para WIP em branch própria.
