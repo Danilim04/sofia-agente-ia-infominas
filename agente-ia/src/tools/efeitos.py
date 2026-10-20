@@ -15,7 +15,8 @@ no `informar_identificacao`.
 
 Invariantes para quem registrar um efeito:
 - recebe o estado como leitura e devolve um dict NOVO (nunca muta `state`);
-- nunca devolve a chave `messages` (os `ToolMessage` são do `tools_node`);
+- nunca devolve `messages` (os `ToolMessage` são do `tools_node`) nem a
+  identidade da sessão (`CHAVES_BLOQUEADAS`) — são descartadas com aviso;
 - decide pelo `resultado` da tool (ex.: `status: true`), nunca por texto do
   modelo — o efeito é parte da base confiável, o LLM não.
 """
@@ -33,6 +34,13 @@ Efeito = Callable[[str, Any, Mapping[str, Any]], Mapping[str, Any] | None]
 #: Registro de efeitos por nome de tool — preenchido em E2.3.
 EFEITOS: dict[str, Efeito] = {}
 
+#: Chaves que um efeito NUNCA pode escrever: `messages` é do `tools_node`; a
+#: identidade da sessão (telefone, conversa, contato) vem do gateway via
+#: Contrato A, nunca do resultado de uma tool.
+CHAVES_BLOQUEADAS: frozenset[str] = frozenset(
+    {"messages", "telefone", "conversation_id", "contato", "nome_contato"}
+)
+
 
 def efeito_pos_tool(nome: str, resultado: Any, state: Mapping[str, Any]) -> dict[str, Any]:
     """Delta de estado produzido pela execução de `nome` (vazio por default).
@@ -48,7 +56,9 @@ def efeito_pos_tool(nome: str, resultado: Any, state: Mapping[str, Any]) -> dict
     except Exception as exc:
         logger.warning("efeito_pos_tool_falhou nome=%s erro=%s", nome, exc)
         return {}
-    if "messages" in delta:
-        logger.warning("efeito_pos_tool_ignorou_messages nome=%s", nome)
-        delta.pop("messages")
+    bloqueadas = CHAVES_BLOQUEADAS & set(delta)
+    if bloqueadas:
+        logger.warning("efeito_pos_tool_ignorou_chaves nome=%s chaves=%s", nome, sorted(bloqueadas))
+        for chave in bloqueadas:
+            delta.pop(chave)
     return delta

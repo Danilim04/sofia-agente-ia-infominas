@@ -17,8 +17,12 @@ Campos que PERSISTEM entre turnos (checkpointer por `conversation_id`):
 - `classificacao`: resultado do JEV (ou do fallback LLM) fixado para a
   conversa — `{intencao, categoria, prioridade, confianca, origem}`.
   Pegajosa: uma vez decidida, vale até o fim do episódio (E2.2 a preenche).
-- `identificacao`: dado cadastral que o cliente informou NESTA conversa pela
-  tool de identificação (E2.3) e que a política injeta no preparo do chamado.
+- `identificacao`: registro de que o cliente se identificou NESTA conversa
+  pela tool de identificação (E2.3) — SÓ `{forma, valor_mascarado, hash?}`.
+  O CPF/contrato em claro vai ao gateway dentro da tool e morre ali: este
+  estado é persistido em disco pelo checkpointer, então nunca carrega o dado
+  cru (regra 5 do CLAUDE.md). A política injeta este registro no preparo do
+  chamado; o gateway resolve o dado real pelo cache por telefone.
 - `proposta_chamado`: proposta de abertura VALIDADA pelo dry-run do gateway.
   Persiste até ser consumida por uma abertura bem-sucedida, substituída por
   um novo preparo ou limpa no fim do episódio. Carrega o carimbo `criada_em`

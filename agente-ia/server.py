@@ -125,6 +125,9 @@ class EncerrarEpisodioRequest(BaseModel):
 
 
 #: Campos do estado zerados no fim do episódio (o histórico fica).
+#: `identificacao` entra por decisão desta etapa (ver PR da E1.3): o cache de
+#: identificação por telefone vive no gateway e volta em `contato` no próximo
+#: turno; aqui só o registro mascarado da conversa é descartado.
 CAMPOS_DO_EPISODIO = ("proposta_chamado", "classificacao", "identificacao")
 
 

@@ -290,6 +290,21 @@ def test_tools_node_injeta_args_de_sessao_sobrescrevendo_o_modelo(monkeypatch):
     assert props == {"x"}
 
 
+def test_tools_node_loga_so_nomes_dos_args_em_info(caplog):
+    """Os VALORES dos args propostos pelo LLM podem ser PII (CPF/contrato):
+    em INFO só os nomes; o conteúdo fica em DEBUG."""
+    import logging
+
+    tn = nodes.make_tools_node([_tool_simples])
+    with caplog.at_level(logging.DEBUG, logger="src.agent.nodes"):
+        tn(_estado_com_tool_call("_tool_simples", {"x": "123.456.789-09"}))
+    info = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    debug = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any(m.startswith("tool_exec ") and "['x']" in m for m in info)
+    assert not any("123.456.789-09" in m for m in info)
+    assert any("123.456.789-09" in m for m in debug)
+
+
 # ---------------------------------------------------------------------------
 # Gancho `efeito_pos_tool` — o tools_node não conhece tool pelo nome
 # ---------------------------------------------------------------------------
@@ -351,11 +366,18 @@ def test_efeito_que_explode_nao_derruba_o_turno(monkeypatch):
     assert set(out) == {"messages", "tentou_rag", "fontes_usadas"}
 
 
-def test_efeito_nao_pode_escrever_messages(monkeypatch):
+def test_efeito_nao_pode_escrever_messages_nem_identidade_da_sessao(monkeypatch):
     monkeypatch.setitem(
         efeitos.EFEITOS,
         "_tool_simples",
-        lambda n, r, s: {"messages": [AIMessage(content="injetada")], "x": 1},
+        lambda n, r, s: {
+            "messages": [AIMessage(content="injetada")],
+            "telefone": "5500000000000",
+            "conversation_id": "outra",
+            "contato": {"forma": "cpf"},
+            "nome_contato": "Impostor",
+            "x": 1,
+        },
     )
     assert efeitos.efeito_pos_tool("_tool_simples", "r", {}) == {"x": 1}
 

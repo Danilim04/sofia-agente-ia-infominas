@@ -552,7 +552,11 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
 
             # Loga só os args PROPOSTOS pelo LLM (sem os injetados da sessão —
             # eles carregam telefone/identidade e não pertencem ao log).
-            logger.info("tool_exec nome=%s args=%s", nome, tc.get("args") or {})
+            # Em INFO só os NOMES dos args propostos: o conteúdo pode ser PII
+            # (CPF/contrato em `informar_identificacao`) — valores só em DEBUG.
+            args_llm = tc.get("args") or {}
+            logger.info("tool_exec nome=%s args=%s", nome, sorted(args_llm))
+            logger.debug("tool_exec_args nome=%s args=%s", nome, args_llm)
             args, recusa = aplicar_politica(nome, tc.get("args") or {}, state)
             if recusa:
                 logger.warning("tool_politica_recusa nome=%s motivo=%s", nome, recusa)

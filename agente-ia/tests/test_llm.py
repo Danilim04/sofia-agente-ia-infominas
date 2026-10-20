@@ -135,7 +135,7 @@ def test_get_classifier_llm_usa_modelo_classifier_e_temp_zero():
 
 
 def test_get_classifier_llm_define_max_tokens_curto():
-    """Classificador e extrator de login (mesmo cliente) devolvem JSON curto."""
+    """O classificador devolve JSON curto — teto de saída pequeno."""
     client = llm_factory.get_classifier_llm()
     settings = get_settings()
     assert client.max_tokens == settings.llm_max_tokens_classificador
