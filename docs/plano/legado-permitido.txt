@@ -9,6 +9,3 @@ agente-ia/src/
 agente-ia/server.py
 agente-ia/app.py
 agente-ia/tests/
-mock-chatwoot/
-scripts/start-all.sh
-scripts/stop-all.sh
