@@ -16,7 +16,8 @@ Convenções (todas determinísticas, sem dependência de numpy/sklearn):
 - **cobertura@limiar**: fração dos casos com `confianca ≥ limiar` (o que o
   JEV decidiria sem fallback). **acurácia@limiar**: acurácia só nesses.
 - **calibração**: 10 bins de confiança [0,0.1), …, [0.9,1.0]; ECE =
-  Σ (n_b/N)·|acc_b − conf_b|.
+  Σ (n_b/N)·|acc_b − conf_b|. Só para perguntas exatas: numa ordinal com piso a
+  confiança é do score exato e o acerto é "≥ piso", então o ECE não significa nada.
 - **percentil**: método *nearest-rank* (posição ⌈p·n⌉ da lista ordenada).
 """
 
@@ -65,7 +66,7 @@ class MetricasPergunta:
     limiar: float
     cobertura_no_limiar: float
     acuracia_no_limiar: float | None
-    ece: float
+    ece: float | None  # None para perguntas ordinais (calibração não se aplica)
     calibracao: tuple[BinCalibracao, ...]
     classes: tuple[str, ...]
     confusao: Mapping[str, Mapping[str, int]]  # esperado -> previsto -> contagem
@@ -92,7 +93,8 @@ class Relatorio:
             planas[f"{p.pergunta}.cobertura_no_limiar"] = _pct(p.cobertura_no_limiar)
             if p.acuracia_no_limiar is not None:
                 planas[f"{p.pergunta}.acuracia_no_limiar"] = _pct(p.acuracia_no_limiar)
-            planas[f"{p.pergunta}.ece"] = _pct(p.ece)
+            if p.ece is not None:
+                planas[f"{p.pergunta}.ece"] = _pct(p.ece)
         planas["latencia.p50_ms"] = round(self.latencia_p50_ms, 1)
         planas["latencia.p95_ms"] = round(self.latencia_p95_ms, 1)
         return planas
@@ -121,7 +123,7 @@ class Relatorio:
             linhas.append(
                 f"| {p.pergunta} | {p.n} | {_fmt(p.acuracia)} | {_fmt(p.macro_f1)} | "
                 f"{p.limiar:.2f} | {_fmt(p.cobertura_no_limiar)} | {_fmt(p.acuracia_no_limiar)} | "
-                f"{_fmt(p.ece)} |"
+                f"{_ece(p.ece)} |"
             )
         linhas.append("")
         for p in self.perguntas:
@@ -135,6 +137,8 @@ class Relatorio:
                 for classe in p.classes:
                     linhas.append(f"| {classe} | {_fmt(p.f1_por_classe.get(classe))} |")
                 linhas.append("")
+            if not p.calibracao:
+                continue
             linhas.append("### Calibração (10 bins)")
             linhas.append("")
             linhas.append("| bin | n | confiança média | acurácia |")
@@ -169,6 +173,11 @@ def _pct(v: float) -> float:
 
 def _fmt(v: float | None) -> str:
     return "—" if v is None else f"{100.0 * v:.1f}%"
+
+
+def _ece(v: float | None) -> str:
+    """ECE é fração (critério do 02: ≤ 0.08), não percentual."""
+    return "—" if v is None else f"{v:.3f}"
 
 
 # -------------------------------------------------------------------- métricas
@@ -255,7 +264,7 @@ def metricas_pergunta(
     exata = all(p.exata for p in pares) if pares else False
     rotulos = [(p.esperado, p.previsto) for p in pares]
     cobertura, acc_limiar = cobertura_e_acuracia_no_limiar(conf_acerto, limiar)
-    bins, ece = calibracao(conf_acerto)
+    bins, ece = calibracao(conf_acerto) if exata else ([], None)
     f1s = f1_por_classe(rotulos) if exata else {}
     classes = tuple(sorted(f1s)) if exata else ()
     return MetricasPergunta(
@@ -305,6 +314,7 @@ def gerar_relatorio(
 
 # -------------------------------------------------------------------- baseline
 METRICAS_BLOQUEANTES: tuple[str, ...] = ("macro_f1", "acuracia_no_limiar")
+METRICAS_MENOR_MELHOR: tuple[str, ...] = ("ece",)
 
 
 def comparar_com_baseline(
@@ -312,16 +322,21 @@ def comparar_com_baseline(
 ) -> list[str]:
     """Regressões (> tolerância, em pontos) nas métricas bloqueantes presentes no baseline.
 
+    macro-F1 e acurácia@limiar: queda é regressão. ECE: aumento é regressão.
+
     Só compara chaves que existem nos dois lados: baseline vazio nunca falha.
     """
     regressoes: list[str] = []
     for chave, valor_base in sorted(baseline.items()):
-        if not any(chave.endswith("." + m) for m in METRICAS_BLOQUEANTES):
+        maior_melhor = any(chave.endswith("." + m) for m in METRICAS_BLOQUEANTES)
+        menor_melhor = any(chave.endswith("." + m) for m in METRICAS_MENOR_MELHOR)
+        if not (maior_melhor or menor_melhor):
             continue
         atual = atuais.get(chave)
         if atual is None:
             continue
-        queda = valor_base - atual
-        if queda > tolerancia_pontos:
-            regressoes.append(f"{chave}: {valor_base:.2f} → {atual:.2f} (−{queda:.2f} pts)")
+        piora = (valor_base - atual) if maior_melhor else (atual - valor_base)
+        if piora > tolerancia_pontos:
+            sinal = "−" if maior_melhor else "+"
+            regressoes.append(f"{chave}: {valor_base:.2f} → {atual:.2f} ({sinal}{piora:.2f} pts)")
     return regressoes

@@ -28,10 +28,13 @@ turnos:
     llm:
       - tool: abrir_chamado
         args: {}
-      - texto: "Pronto! Seu chamado é o 4821. A equipe de Suporte assume daqui. 😊"
+      - texto: |-
+          Pronto! Seu chamado é o 4821.
+          ---
+          A equipe de Suporte assume daqui. 😊
     espera:
       chama: [abrir_chamado]
       gateway_recebeu: {endpoint: /tools/infodesk/ticket/abrir, chave_idempotencia: "*"}
       contem: ["4821"]
       nao_contem: ["em até", "prazo", "horas"]
-      bolhas: 2
+      bolhas: 2   # uma linha só com "---" separa bolhas (DividirBolhas no gateway)

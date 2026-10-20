@@ -20,8 +20,9 @@ categoria são informativas.
 
 Hoje: os cenários de conversa carregam e validam (teste verde) e a execução
 está `xfail` ("runner entra em E3.5"); `--jev` e `--llm` caem no
-`classificador_nulo` (tudo `indefinida`, confiança 0), que serve para provar o
-encanamento e produzir um relatório — não para calibrar nada.
+`classificador_nulo` (sempre `outro`/`indefinida`/`media`, confiança 0; também
+acessível por `--nulo`), que serve para provar o encanamento e produzir um
+relatório — não para calibrar nada (`--atualizar-baseline` recusa nesse caso).
 
 ## Layout
 
@@ -74,12 +75,23 @@ Uma linha JSON em `classificacao/sintetico.jsonl` (ou `historico.jsonl`):
   pt-BR coloquial, com gíria, abreviação e erro de digitação.
 - `esperado.intencao` ∈ `INTENCOES` de `formatos.py` (as 7 do `02`);
   `categoria` ∈ `config/taxonomia.yaml`; `prioridade_min` é o **piso**
-  (acerto se o previsto for ≥); `frustracao_max` é o teto (ainda não avaliado
-  pelo runner; TODO(E2.4)).
+  (acerto se o previsto for ≥); `frustracao_min`/`frustracao_max` são piso e
+  teto do score de frustração (o piso ≥ 2 marca os casos irritados: é
+  `frustracao ≥ 3` que dispara transferência); `malicioso_min` e
+  `fora_de_escopo_min` são pisos dos Nouls (injeção, off-topic). Frustração e
+  Nouls ainda não são avaliados pelo runner (TODO(E2.4)).
+- Divergência registrada: o `02` escreve `prioridade` e `frustracao_min`; a
+  skill `evals-agente` escreve `prioridade_min` e `frustracao_max`. Este pacote
+  aceita `prioridade_min`, `frustracao_min` e `frustracao_max`; TODO(E2.4):
+  alinhar o texto do `02` (fora da zona de E1.5).
 - Hipótese de trabalho (TODO(E2.2)): pedidos de serviço sem reclamação
   ("manda o boleto", "quero cancelar") recebem intenção `outro`; perguntas
-  ("como cancelo?") recebem `duvida_informacao`. Se `perguntas.py` definir
-  diferente, ajuste o dataset no mesmo PR.
+  ("como cancelo?") recebem `duvida_informacao`. **Desempate**: se a mensagem
+  tem pedido e pergunta ("quero cancelar, como faço?"), a pergunta vence —
+  a resposta útil é informativa antes de qualquer ação. `status_chamado` só
+  para chamado já aberto (pedido de cancelamento sem retorno é
+  `reclamacao_problema`). Se `perguntas.py` definir diferente, ajuste o
+  dataset no mesmo PR.
 - ≥ 15 por categoria; anote casos de fronteira em `notas` com a palavra
   "fronteira" (o teste conta). `historico` exige `rotulador`.
 
@@ -107,7 +119,11 @@ venv/Scripts/python.exe -m evals.anonimizar evals/bruto/export.csv \
 Tokens: `<CPF>` `<CNPJ>` `<TEL>` `<EMAIL>` `<CEP>` `<PLACA>` `<NOME>`.
 Nomes só saem com a lista (`config/nomes.txt`, gitignored; exemplo em
 `exemplos/nomes.txt`): monte-a a partir da coluna de contato do próprio
-export. Regra de projeto: **sobre-mascarar é seguro, sub-mascarar não** —
+export. A busca não distingue caixa, então **não liste sozinhos nomes que
+também são palavras comuns** (Luz, Rosa, Flor, Sol, Neves): "a luz do modem"
+viraria "a <NOME> do modem" e destruiria o sinal de `sem_conexao`; use o nome
+completo ("Luz Silva"). **Endereço** (rua, número, bairro) não tem regex: é
+o principal alvo da revisão manual, junto com apelidos e nomes fora da lista. Regra de projeto: **sobre-mascarar é seguro, sub-mascarar não** —
 um protocolo de 8 dígitos virar `<CEP>` é aceitável; um CPF escapar, não.
 Teste rápido: `python -m evals.anonimizar evals/exemplos/export-exemplo.csv --saida /tmp/x.jsonl --nomes evals/exemplos/nomes.txt --amostra 3`.
 
@@ -123,12 +139,13 @@ com as métricas planas (0–100). Por pergunta (`intencao`, `categoria`,
 | macro-F1 | média do F1 por classe (classe rara pesa igual); só para perguntas exatas | categoria ≥ 0.85 no histórico |
 | cobertura@limiar | fração que o JEV decidiria sozinho (`confianca ≥ limiar`); limiares vêm dos argumentos `--limiar-*` (defaults do `02`) | quanto maior, menos fallback LLM |
 | acurácia@limiar | acurácia **só** nos decididos pelo JEV | ≥ 0.95 |
-| ECE | erro de calibração (10 bins): confiança 0.8 deveria acertar ~80 % | ≤ 0.08 |
+| ECE | erro de calibração (10 bins): confiança 0.8 deveria acertar ~80 %; só para perguntas exatas | ≤ 0.08 |
 | matriz de confusão | linha = esperado, coluna = previsto: onde o modelo troca categorias parecidas | guia para `nao_e`/`exemplos` da taxonomia |
 | latência p50/p95 | do classificador, por caso (*nearest-rank*) | p95 < 2 s (timeout do JEV) |
 
 `prioridade` é ordinal com piso (`previsto ≥ prioridade_min`): tem acurácia e
-cobertura, não F1 nem confusão. Leitura típica: cobertura baixa com
+cobertura, não F1, confusão nem calibração (a confiança é do score exato, o
+acerto é "≥ piso": o ECE não significaria nada). Leitura típica: cobertura baixa com
 acurácia@limiar alta → limiar conservador demais; cobertura alta com
 acurácia@limiar < 0.95 → subir o limiar ou melhorar `nao_e`.
 
@@ -140,8 +157,10 @@ acurácia@limiar < 0.95 → subir o limiar ou melhorar `nao_e`.
 ```
 
 - O runner compara `metricas["<fonte>/<modo>"]` com a rodada atual; queda
-  **> `tolerancia_pontos`** em qualquer `*.macro_f1` ou `*.acuracia_no_limiar`
-  devolve exit 1 (o CI falha). Chave ausente = nada a comparar.
+  **> `tolerancia_pontos`** em qualquer `*.macro_f1` ou `*.acuracia_no_limiar`,
+  ou **aumento** > tolerância em `*.ece` (menor é melhor; no JSON o ECE está
+  em pontos: 0.08 = 8.0), devolve exit 1 (o CI falha). Chave ausente = nada a
+  comparar.
 - Atualizar (só ao melhorar, ou com decisão registrada):
   `python -m evals.classificacao --fonte sintetico --jev --atualizar-baseline --justificativa "perguntas.py: exemplos de instabilidade"`
   e commitar o `baseline.json` **no mesmo PR**, com a justificativa no texto do PR.

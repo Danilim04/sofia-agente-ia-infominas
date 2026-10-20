@@ -105,6 +105,35 @@ def test_caso_invalido_aponta_campo(mutacao, campo, trecho):
     assert trecho in erro.motivo
 
 
+def test_caso_com_pisos_de_frustracao_e_nouls():
+    dado = copy.deepcopy(CASO_OK)
+    dado["esperado"].update({"frustracao_min": 1, "malicioso_min": 0.8, "fora_de_escopo_min": 0})
+    e = formatos.validar_caso(dado, categorias=CATEGORIAS).esperado
+    assert (e.frustracao_min, e.frustracao_max, e.malicioso_min, e.fora_de_escopo_min) == (
+        1,
+        1,
+        0.8,
+        0.0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("chave", "valor", "trecho"),
+    [
+        ("frustracao_min", 4, "entre 0 e 3"),
+        ("frustracao_min", 2, "maior que frustracao_max"),  # CASO_OK tem frustracao_max 1
+        ("malicioso_min", 1.5, "entre 0 e 1"),
+        ("fora_de_escopo_min", "alto", "entre 0 e 1"),
+    ],
+)
+def test_pisos_invalidos_apontam_campo(chave, valor, trecho):
+    dado = copy.deepcopy(CASO_OK)
+    dado["esperado"][chave] = valor
+    erro = _erro(formatos.validar_caso, dado, categorias=CATEGORIAS)
+    assert erro.campo == f"caso.esperado.{chave}"
+    assert trecho in erro.motivo
+
+
 def test_caso_historico_exige_rotulador_e_aceita():
     dado = {**copy.deepcopy(CASO_OK), "fonte": "historico", "rotulador": "infominas-ana"}
     assert formatos.validar_caso(dado).rotulador == "infominas-ana"

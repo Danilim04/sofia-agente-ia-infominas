@@ -126,8 +126,11 @@ def carregar_taxonomia(caminho: Path = CAMINHO_TAXONOMIA) -> Taxonomia:
 class Esperado:
     intencao: str
     categoria: str
-    prioridade_min: str | None = None
-    frustracao_max: int | None = None
+    prioridade_min: str | None = None  # piso: acerto se previsto ≥
+    frustracao_min: int | None = None  # piso (é o que dispara transferir ≥ 3)
+    frustracao_max: int | None = None  # teto (cliente calmo)
+    malicioso_min: float | None = None  # noul mínimo esperado (injeção)
+    fora_de_escopo_min: float | None = None  # noul mínimo esperado (off-topic)
 
 
 @dataclass(frozen=True)
@@ -174,8 +177,40 @@ _CHAVES_CASO: Final[frozenset[str]] = frozenset(
     {"id", "fonte", "estado", "esperado", "notas", "rotulador"}
 )
 _CHAVES_ESPERADO: Final[frozenset[str]] = frozenset(
-    {"intencao", "categoria", "prioridade_min", "frustracao_max"}
+    {
+        "intencao",
+        "categoria",
+        "prioridade_min",
+        "frustracao_min",
+        "frustracao_max",
+        "malicioso_min",
+        "fora_de_escopo_min",
+    }
 )
+
+
+def _nivel_opcional(valor: object, campo: str) -> int | None:
+    if valor is None:
+        return None
+    if (
+        isinstance(valor, bool)
+        or not isinstance(valor, int)
+        or not FRUSTRACAO_MIN <= valor <= FRUSTRACAO_MAX
+    ):
+        raise ErroFormato(campo, f"deve ser inteiro entre {FRUSTRACAO_MIN} e {FRUSTRACAO_MAX}")
+    return valor
+
+
+def _prob_opcional(valor: object, campo: str) -> float | None:
+    if valor is None:
+        return None
+    if (
+        isinstance(valor, bool)
+        or not isinstance(valor, int | float)
+        or not 0.0 <= float(valor) <= 1.0
+    ):
+        raise ErroFormato(campo, "deve ser número entre 0 e 1")
+    return float(valor)
 
 
 def validar_esperado(
@@ -196,21 +231,24 @@ def validar_esperado(
         raise ErroFormato(
             f"{campo}.prioridade_min", f"'{prioridade_min}' deve ser uma de {list(PRIORIDADES)}"
         )
-    frustracao_max = d.get("frustracao_max")
-    if frustracao_max is not None and (
-        isinstance(frustracao_max, bool)
-        or not isinstance(frustracao_max, int)
-        or not FRUSTRACAO_MIN <= frustracao_max <= FRUSTRACAO_MAX
+    frustracao_min = _nivel_opcional(d.get("frustracao_min"), f"{campo}.frustracao_min")
+    frustracao_max = _nivel_opcional(d.get("frustracao_max"), f"{campo}.frustracao_max")
+    if (
+        frustracao_min is not None
+        and frustracao_max is not None
+        and frustracao_min > frustracao_max
     ):
-        raise ErroFormato(
-            f"{campo}.frustracao_max",
-            f"deve ser inteiro entre {FRUSTRACAO_MIN} e {FRUSTRACAO_MAX}",
-        )
+        raise ErroFormato(f"{campo}.frustracao_min", "não pode ser maior que frustracao_max")
+    malicioso_min = _prob_opcional(d.get("malicioso_min"), f"{campo}.malicioso_min")
+    fora_de_escopo_min = _prob_opcional(d.get("fora_de_escopo_min"), f"{campo}.fora_de_escopo_min")
     return Esperado(
         intencao=intencao,
         categoria=categoria,
         prioridade_min=prioridade_min,
+        frustracao_min=frustracao_min,
         frustracao_max=frustracao_max,
+        malicioso_min=malicioso_min,
+        fora_de_escopo_min=fora_de_escopo_min,
     )
 
 

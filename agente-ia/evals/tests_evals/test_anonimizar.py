@@ -34,6 +34,9 @@ def test_cpf_valido_dv():
         ("cpf 52998224725", "cpf <CPF>"),
         ("cpf 529982247-25", "cpf <CPF>"),
         ("cpf:12345678909.", "cpf:<CPF>."),
+        ("cpf 529 982 247 25", "cpf <CPF>"),
+        ("cpf 529.982.247.25", "cpf <CPF>"),
+        ("cpf 529982247 25", "cpf <CPF>"),
         ("cnpj 12.345.678/0001-95", "cnpj <CNPJ>"),
         ("cnpj 12345678000195", "cnpj <CNPJ>"),
         ("cnpj 12345678/0001-95", "cnpj <CNPJ>"),
@@ -53,10 +56,14 @@ def test_cpf_valido_dv():
         ("mail JOAO_1@Exemplo.COM", "mail <EMAIL>"),
         ("cep 30130-010", "cep <CEP>"),
         ("cep 30130010", "cep <CEP>"),
+        ("cep 30.130-010", "cep <CEP>"),
         ("placa ABC-1234", "placa <PLACA>"),
         ("placa ABC1234", "placa <PLACA>"),
+        ("placa ABC 1234", "placa <PLACA>"),  # espaço só em maiúsculas
         ("placa ABC1D23", "placa <PLACA>"),
         ("placa abc1d23", "placa <PLACA>"),
+        ("placa ABC-1D23", "placa <PLACA>"),
+        ("placa ABC 1D23", "placa <PLACA>"),
         ("Maria e MARIA SOUZA e joão da silva", "<NOME> e <NOME> e <NOME>"),
     ],
 )
@@ -74,10 +81,17 @@ def test_substitui(anon: Anonimizador, texto: str, esperado: str):
         "Mariana e Marianinha",  # não são "Maria" inteira
         "contrato 100000000000",  # 12 dígitos: nem CPF nem telefone
         "senha wifi abcd1234",  # 4 letras: não é placa
+        "tem 1000 reais de multa",  # minúsculas + espaço + 4 dígitos: não é placa
+        "a luz do modem ta vermelha",  # "Luz" não está na lista de nomes do teste
     ],
 )
 def test_nao_toca_no_que_nao_e_pii(anon: Anonimizador, texto: str):
     assert anon.texto(texto) == texto
+
+
+def test_telefone_com_espacos_nao_vira_cpf(anon: Anonimizador):
+    assert anon.texto("liga 31 99999 0001 ou 99999 0001") == "liga <TEL> ou <TEL>"
+    assert anon.contagem["<CPF>"] == 0
 
 
 def test_idempotente_em_texto_ja_mascarado(anon: Anonimizador):

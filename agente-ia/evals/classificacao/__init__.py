@@ -3,8 +3,8 @@
 
 `Classificador` recebe o estado (lista de mensagens, como `estado_para_jev`
 montaria) e devolve `{"intencao", "categoria", "prioridade", "confiancas"}`.
-Hoje só existe o `classificador_nulo` (tudo `indefinida`, confiança 0): ele
-prova o encanamento. TODO(E2.2): `--jev` e `--llm` passam a usar
+Hoje só existe o `classificador_nulo` (`outro`/`indefinida`/`media`, confiança 0):
+ele prova o encanamento. TODO(E2.2): `--jev` e `--llm` passam a usar
 `src.classificacao.classificar` com `JEVTypeSafe` / `FakeJEV` + fallback.
 """
 
@@ -40,7 +40,7 @@ LIMIARES_PADRAO: Final[Mapping[str, float]] = {
 
 
 def classificador_nulo(estado: list[str]) -> dict[str, Any]:
-    """Baseline trivial: nunca decide nada. Útil para validar dataset e relatório."""
+    """Baseline trivial: sempre `outro`/`indefinida`/`media` com confiança 0 (prova o encanamento)."""
     return {
         "intencao": "outro",
         "categoria": "indefinida",

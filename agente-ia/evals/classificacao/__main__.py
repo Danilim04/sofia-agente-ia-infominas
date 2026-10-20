@@ -52,6 +52,13 @@ def _parser() -> argparse.ArgumentParser:
         dest="modo",
         help="fallback LLM/fakes, determinístico — TODO(E2.2)",
     )
+    modo.add_argument(
+        "--nulo",
+        action="store_const",
+        const="nulo",
+        dest="modo",
+        help="classificador nulo explícito (smoke do encanamento)",
+    )
     p.set_defaults(modo="llm")
     p.add_argument(
         "--relatorio", type=Path, default=None, help="caminho do .md (default evals/relatorios/...)"
@@ -76,6 +83,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--justificativa", default=None, help="por que o baseline muda (vai para o PR)")
     return p
+
+
+def _ece(valor: float | None) -> str:
+    return "—" if valor is None else f"{valor:.3f}"
 
 
 def carregar_baseline(caminho: Path) -> dict[str, Any]:
@@ -166,7 +177,7 @@ def main(argv: Sequence[str] | None = None, saida_texto: Callable[[str], None] =
         acc_lim = f"{p.acuracia_no_limiar * 100:.1f}%" if p.acuracia_no_limiar is not None else "—"
         saida_texto(
             f"{p.pergunta:<11} n={p.n:<4} acurácia={p.acuracia * 100:5.1f}%  macro-F1={f1:<6}  "
-            f"cobertura@{p.limiar:.2f}={p.cobertura_no_limiar * 100:5.1f}%  acurácia@limiar={acc_lim:<6}  ECE={p.ece:.3f}"
+            f"cobertura@{p.limiar:.2f}={p.cobertura_no_limiar * 100:5.1f}%  acurácia@limiar={acc_lim:<6}  ECE={_ece(p.ece)}"
         )
     saida_texto(
         f"latência    p50={relatorio.latencia_p50_ms:.1f} ms  p95={relatorio.latencia_p95_ms:.1f} ms"
@@ -190,6 +201,12 @@ def main(argv: Sequence[str] | None = None, saida_texto: Callable[[str], None] =
     )
 
     if args.atualizar_baseline:
+        if nome_modo != args.modo:
+            saida_texto(
+                f"erro: --atualizar-baseline recusado — modo '{args.modo}' caiu no classificador "
+                f"'{nome_modo}', que não é referência (TODO(E2.2))"
+            )
+            return 2
         baseline["metricas"][chave] = metricas
         baseline["atualizado_em"] = datetime.now(UTC).date().isoformat()
         baseline["justificativa"] = args.justificativa

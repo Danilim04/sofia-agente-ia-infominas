@@ -41,7 +41,9 @@ turnos:
         args: {titulo: "Sem conexão após reiniciar modem", descricao: "Cliente relata queda total"}
       - texto: "Poxa! Vou registrar assim: sem conexão após reiniciar o modem. Posso abrir o chamado?"
     # `espera` só com asserts observáveis (chaves permitidas em evals/formatos.py CHAVES_ESPERA):
-    #   chama / nao_chama: [nomes de tool]      transfere: true|false      bolhas: inteiro
+    #   chama / nao_chama: [nomes de tool]      transfere: true|false
+    #   bolhas: inteiro — conta as partes após DividirBolhas do gateway: só uma LINHA
+    #     contendo apenas "---" no texto separa bolhas (use `texto: |-` com a linha "---")
     #   contem / nao_contem: [trechos do texto]  proposta_no_estado: true  bloqueado: true (safe_response)
     #   gateway_recebeu: {endpoint: /tools/infodesk/..., chave_idempotencia: "*"}
     #   classificacao: {categoria: sem_conexao, origem: jev}

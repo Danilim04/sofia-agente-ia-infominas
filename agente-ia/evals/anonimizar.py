@@ -9,12 +9,13 @@ Substituições (regra do projeto: PII vira token, nunca texto real no git):
 | dado | token | detalhe |
 |---|---|---|
 | CNPJ (com/sem pontuação) | `<CNPJ>` | 14 dígitos, `00.000.000/0000-00` ou misto |
-| CPF (com/sem pontuação) | `<CPF>` | 11 dígitos; bare 11 dígitos com DV **inválido** e cara de celular (DDD + 9) vira `<TEL>` |
+| CPF (com/sem pontuação) | `<CPF>` | 11 dígitos, separados por `.`, `-` ou espaço ou colados; bare 11 dígitos com DV **inválido** e cara de celular (DDD + 9) vira `<TEL>` |
 | telefone BR | `<TEL>` | `+55`, DDD com/sem parênteses, 8/9 dígitos, com/sem máscara; 8 dígitos só com separador (`3333-4444`) |
 | e-mail | `<EMAIL>` | |
-| CEP | `<CEP>` | `00000-000` e 8 dígitos bare (sobre-mascarar é seguro: protocolo de 8 dígitos também vira `<CEP>`) |
-| placa | `<PLACA>` | antiga `AAA-0000`/`AAA0000` e Mercosul `AAA0A00`, qualquer caixa |
-| nome próprio | `<NOME>` | só os da lista `--nomes` (um por linha, `#` comenta), palavra inteira, sem distinção de caixa |
+| CEP | `<CEP>` | `00000-000`, `00.000-000` e 8 dígitos bare (sobre-mascarar é seguro: protocolo de 8 dígitos também vira `<CEP>`) |
+| placa | `<PLACA>` | antiga `AAA-0000`/`AAA0000` (e `AAA 0000` só em maiúsculas: `tem 1000` não é placa) e Mercosul `AAA0A00`/`AAA-0A00`/`AAA 0A00`, qualquer caixa |
+| nome próprio | `<NOME>` | só os da lista `--nomes` (um por linha, `#` comenta), palavra inteira, sem distinção de caixa — não liste nomes que são palavras comuns (Luz, Rosa, Sol) sozinhos |
+| endereço | — | **não** tem regex: fica para a revisão manual (`--amostra`) |
 
 Entrada: `.csv` (uma linha por registro; toda célula de texto é anonimizada),
 `.json` (lista de objetos, ou objeto com uma lista dentro) ou `.jsonl`. Saída:
@@ -46,7 +47,7 @@ TOKENS: tuple[str, ...] = ("<EMAIL>", "<CNPJ>", "<CPF>", "<TEL>", "<CEP>", "<PLA
 
 _RE_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", re.UNICODE)
 _RE_CNPJ = re.compile(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)")
-_RE_CPF = re.compile(r"(?<!\d)\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\d)")
+_RE_CPF = re.compile(r"(?<!\d)\d{3}[.\s]?\d{3}[.\s]?\d{3}[-.\s]?\d{2}(?!\d)")
 _RE_TEL = re.compile(
     r"(?<![\d.])"
     r"(?:"
@@ -56,9 +57,9 @@ _RE_TEL = re.compile(
     r")"
     r"(?![\d.])"
 )
-_RE_CEP = re.compile(r"(?<!\d)(?:\d{5}-\d{3}|\d{8})(?!\d)")
+_RE_CEP = re.compile(r"(?<!\d)(?:\d{2}\.?\d{3}-\d{3}|\d{8})(?!\d)")
 _RE_PLACA = re.compile(
-    r"(?<![A-Za-z0-9])(?:[A-Za-z]{3}-?\d{4}|[A-Za-z]{3}\d[A-Za-z]\d{2})(?![A-Za-z0-9])"
+    r"(?<![A-Za-z0-9])(?:[A-Za-z]{3}-?\d{4}|[A-Z]{3}\s\d{4}|[A-Za-z]{3}[-\s]?\d[A-Za-z]\d{2})(?![A-Za-z0-9])"
 )
 _RE_DDD_CELULAR = re.compile(r"^[1-9]\d9\d{8}$")
 

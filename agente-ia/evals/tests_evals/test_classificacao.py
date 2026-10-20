@@ -32,6 +32,11 @@ def test_dataset_sintetico_valido_e_cobre_taxonomia():
     assert sum(1 for c in casos if c.notas and "fronteira" in c.notas.lower()) >= 20, (
         "casos de fronteira anotados"
     )
+    assert sum(1 for c in casos if (c.esperado.frustracao_min or 0) >= 2) >= 5, (
+        "casos irritados com piso de frustração"
+    )
+    assert any(c.esperado.malicioso_min for c in casos)
+    assert any(c.esperado.fora_de_escopo_min for c in casos)
 
 
 def test_carregar_dataset_aponta_linha_em_json_invalido(tmp_path: Path):
@@ -220,6 +225,7 @@ def test_cli_atualiza_baseline_com_justificativa(tmp_path: Path):
                 str(base),
                 "--max",
                 "5",
+                "--nulo",
                 "--atualizar-baseline",
                 "--justificativa",
                 "teste",
@@ -230,8 +236,21 @@ def test_cli_atualiza_baseline_com_justificativa(tmp_path: Path):
     )
     dado = json.loads(base.read_text(encoding="utf-8"))
     assert dado["justificativa"] == "teste"
-    assert "categoria.acuracia" in dado["metricas"]["sintetico/llm"]
+    assert "categoria.acuracia" in dado["metricas"]["sintetico/nulo"]
     assert dado["atualizado_em"]
+
+
+def test_cli_recusa_baseline_quando_modo_cai_no_nulo(tmp_path: Path):
+    """`--llm` ainda cai no nulo (E2.2): gravar isso como referência seria mentira."""
+    linhas: list[str] = []
+    args = ["--fonte", "sintetico", "--llm", "--relatorio", str(tmp_path / "r.md")]
+    args += ["--baseline", str(tmp_path / "b.json"), "--max", "5"]
+    codigo = cli.main(
+        [*args, "--atualizar-baseline", "--justificativa", "x"], saida_texto=linhas.append
+    )
+    assert codigo == 2
+    assert "recusado" in linhas[-1]
+    assert not (tmp_path / "b.json").exists()
 
 
 def test_cli_dataset_ausente_ou_invalido(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

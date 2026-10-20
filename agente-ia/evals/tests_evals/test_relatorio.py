@@ -109,6 +109,8 @@ def test_gerar_relatorio_agrega_por_pergunta():
     pri = por_nome["prioridade"]
     assert pri.n == 3 and pri.acuracia == 1.0
     assert pri.macro_f1 is None and pri.confusao == {}  # ordinal: sem F1/confusão
+    assert pri.ece is None and pri.calibracao == ()  # ordinal: sem calibração
+    assert cat.ece is not None
     assert pri.limiar == 0.0  # sem limiar informado → padrão
     # latências 10..60: p50 = 30 (⌈3⌉), p95 = 60 (⌈5.7⌉=6)
     assert (r.latencia_p50_ms, r.latencia_p95_ms) == (30.0, 60.0)
@@ -122,6 +124,8 @@ def test_metricas_planas_em_pontos_percentuais():
     assert planas["categoria.cobertura_no_limiar"] == pytest.approx(66.67, abs=0.01)
     assert planas["categoria.acuracia_no_limiar"] == 100.0
     assert "prioridade.macro_f1" not in planas
+    assert "prioridade.ece" not in planas
+    assert "categoria.ece" in planas
     assert planas["latencia.p95_ms"] == 60.0
 
 
@@ -131,11 +135,20 @@ def test_markdown_tem_tabelas_e_avisos():
     ).para_markdown()
     assert md.startswith("# Teste")
     assert "> ⚠️ cuidado" in md
-    assert "| categoria | 6 | 66.7% | 72.2% | 0.70 | 66.7% | 100.0% |" in md
+    assert "| categoria | 6 | 66.7% | 72.2% | 0.70 | 66.7% | 100.0% | 0." in md  # ECE: fração
     assert "Matriz de confusão" in md
     assert "| A | 2 | 1 | 0 |" in md
-    assert "| prioridade | 3 | 100.0% | — |" in md
-    assert "### Calibração (10 bins)" in md
+    assert "| prioridade | 3 | 100.0% | — | 0.00 | 100.0% | 100.0% | — |" in md
+    assert md.count("### Calibração (10 bins)") == 1  # só a pergunta exata
+
+
+def test_comparar_com_baseline_ece_menor_e_melhor():
+    base = {"categoria.ece": 5.0}
+    assert rel.comparar_com_baseline({"categoria.ece": 7.5}, base, 2.0) == [
+        "categoria.ece: 5.00 → 7.50 (+2.50 pts)"
+    ]
+    assert rel.comparar_com_baseline({"categoria.ece": 3.0}, base, 2.0) == []  # melhorou
+    assert rel.comparar_com_baseline({"categoria.ece": 6.5}, base, 2.0) == []  # na tolerância
 
 
 def test_comparar_com_baseline():
