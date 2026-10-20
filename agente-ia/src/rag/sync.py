@@ -2,14 +2,14 @@
 
 Motor do ciclo diário: listagem da fonte → plano (o que processar/remover) →
 execução com transação por documento no índice. Decisões de projeto (acordadas
-no Contrato B e registradas aqui para não regredirem):
+no Contrato B herdado e registradas aqui para não regredirem):
 
 - **Sinal de mudança = hash dos METADADOS da listagem** (`titulo + categoria +
   updated_at + deleted`), calculado sem baixar conteúdo. `updated_at` fica
   DENTRO do hash por decisão explícita: preferimos reprocessar à toa (ms de
   CPU local) a arriscar perder uma mudança real. Não reintroduzir comparação
   de conteúdo no ciclo diário — se o `updated_at` mentir, a correção é na
-  origem (Contrato B §4.1), não heurística aqui.
+  origem, não heurística aqui.
 - **Deleção só por tombstone** (`deleted=true`). Documento AUSENTE da listagem
   é anomalia logada, nunca deleção — um filtro bugado na fonte não pode
   destruir o índice. Exceção explícita: `remover_ausentes=True` (fonte local,
@@ -21,10 +21,10 @@ no Contrato B e registradas aqui para não regredirem):
   e não interrompe os demais; a reexecução converge (o hash só é registrado
   junto com os chunks, na mesma transação).
 
-CLI: `python -m src.rag.sync [--fonte local|api] [--full] [--dry-run]
+CLI: `python -m src.rag.sync [--fonte local] [--full] [--dry-run]
 [--remover-ausentes] [--permitir-remocao-em-massa]` — exit 0 só com ciclo
-100% limpo (cron alerta em exit != 0). Com `--fonte api` o ciclo começa pelo
-preflight `GET /me` (chave/escopos/espaços) e só depois toca no índice.
+100% limpo (cron alerta em exit != 0). A fonte da Infominas (E3.2, pendência
+P6) entra como nova opção de `--fonte` sem mudar o motor.
 """
 
 from __future__ import annotations
@@ -233,7 +233,7 @@ def executar_sync(
     if plano.ausentes:
         logger.warning(
             "sync_anomalia %d doc(s) vivos ausentes da listagem SEM tombstone "
-            "(nada removido — Contrato B §5 cenário de anomalia): %s",
+            "(nada removido — cenário de anomalia do contrato): %s",
             len(plano.ausentes),
             plano.ausentes[:10],
         )
@@ -319,52 +319,7 @@ def _montar_fonte(nome: str, args: argparse.Namespace) -> FonteDocumentacao:
         from src.rag.fonte import FonteDocsLocais
 
         return FonteDocsLocais(args.docs_dir or settings.docs_dir)
-    if nome == "api":
-        from src.rag.fonte import FonteAPIDocumentacao
-
-        if not settings.docs_api_base_url:
-            raise SystemExit("DOCS_API_BASE_URL não configurada no .env (fonte=api).")
-        if not settings.docs_api_key:
-            raise SystemExit(
-                "DOCS_API_KEY não configurada no .env (fonte=api) — chave azk_... "
-                "gerada no AzapDocs, com os escopos DOCS_LIST e DOCS_READ."
-            )
-        return FonteAPIDocumentacao(
-            base_url=settings.docs_api_base_url,
-            api_key=settings.docs_api_key,
-            timeout=settings.docs_api_timeout,
-        )
     raise SystemExit(f"fonte desconhecida: {nome}")
-
-
-def _preflight_api(fonte: FonteDocumentacao) -> None:
-    """`GET /me` ANTES de tocar no índice: a API responde qual das três condições
-    caiu (chave, API do espaço, acesso do dono) — o erro fica legível no log do
-    cron em vez de um 401/listagem vazia no meio do ciclo."""
-    try:
-        diag = fonte.diagnosticar()  # type: ignore[attr-defined]
-    except ErroDeFonte as exc:
-        logger.error("sync_abortado motivo=diagnóstico da API falhou (%s)", exc)
-        raise SystemExit(1) from exc
-    for esp in diag.espacos:
-        logger.info(
-            "docs_api_espaco nome=%r utilizavel=%s%s",
-            esp.nome,
-            esp.utilizavel,
-            "" if esp.utilizavel else f" motivo={esp.motivo_bloqueio!r}",
-        )
-    if not diag.pronto:
-        logger.error(
-            "sync_abortado motivo=API sem espaço utilizável: %s", "; ".join(diag.problemas())
-        )
-        raise SystemExit(1)
-    logger.info(
-        "docs_api_ok usuario=%r espacos_utilizaveis=%d contrato=%s retencao_tombstone_dias=%s",
-        diag.usuario,
-        sum(1 for e in diag.espacos if e.utilizavel),
-        diag.contrato_versao,
-        diag.retencao_tombstone_dias,
-    )
 
 
 def _cli() -> None:
@@ -375,9 +330,9 @@ def _cli() -> None:
     settings = get_settings()
 
     parser = argparse.ArgumentParser(
-        description="Sincroniza a base de conhecimento no índice pgvector (Contrato B)."
+        description="Sincroniza a base de conhecimento no índice pgvector."
     )
-    parser.add_argument("--fonte", choices=["local", "api"], default="local")
+    parser.add_argument("--fonte", choices=["local"], default="local")
     from pathlib import Path as _Path
 
     parser.add_argument(
@@ -420,8 +375,6 @@ def _cli() -> None:
     from src.rag.indice_pg import PgIndice
 
     fonte = _montar_fonte(args.fonte, args)
-    if args.fonte == "api":
-        _preflight_api(fonte)
     indice = PgIndice.conectar(settings.pgvector_url)
     embeddings = get_embeddings()
     logger.info(

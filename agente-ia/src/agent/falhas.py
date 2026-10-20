@@ -1,4 +1,4 @@
-"""Classificação de falhas do cérebro e ID de ocorrência (lote ZC).
+"""Classificação de falhas do cérebro e ID de ocorrência.
 
 Quando o grafo explode (LLM fora, saldo do OpenRouter esgotado, bug), o
 `server.py` NÃO deixa a exceção virar um 500 mudo: classifica a falha e devolve
@@ -27,6 +27,10 @@ import socket
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
+
+#: Prefixo dos IDs de ocorrência — o mesmo nos dois processos (cérebro e
+#: gateway Go); mudar aqui exige mudar lá.
+PREFIXO_OCORRENCIA = "SOF"
 
 CLASSE_TRANSITORIA = "transitoria"
 CLASSE_DEFINITIVA = "definitiva"
@@ -65,19 +69,19 @@ _DESCRICAO_STATUS = {
 
 
 def gerar_id_ocorrencia(agora: datetime | None = None) -> str:
-    """ID curto e legível de ocorrência: ``ZPF-AAAAMMDD-HHMM-NN`` (Brasília).
+    """ID curto e legível de ocorrência: ``SOF-AAAAMMDD-HHMM-NN`` (Brasília).
 
     Legível por humanos (o atendente lê na nota privada e o responsável acha
     no log). O sufixo NN é aleatório — a data/hora já isola a ocorrência; o
     sufixo só separa falhas do mesmo minuto. O gateway Go gera no MESMO
-    formato quando a falha é dele (Mongo, disjuntor).
+    formato quando a falha é dele (Infodesk, disjuntor).
     """
     if agora is None:
         try:
             agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
         except Exception:
             agora = datetime.now(UTC).astimezone()
-    return f"ZPF-{agora:%Y%m%d}-{agora:%H%M}-{random.randint(0, 99):02d}"
+    return f"{PREFIXO_OCORRENCIA}-{agora:%Y%m%d}-{agora:%H%M}-{random.randint(0, 99):02d}"
 
 
 def _cadeia(exc: BaseException) -> Iterable[BaseException]:

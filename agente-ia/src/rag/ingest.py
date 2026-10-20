@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-COLLECTION_NAME = "azapfy_kb"
+COLLECTION_NAME = "infominas_kb"
 # Modelo FIXO do Chroma embutido na imagem (rollback offline). É gerado no
 # build e consultado com este mesmo modelo, sempre local — não segue
 # EMBEDDINGS_PROVIDER/EMBEDDINGS_MODEL (que valem para o pgvector).
@@ -171,7 +171,7 @@ def _cli() -> None:
     settings = get_settings()
 
     parser = argparse.ArgumentParser(
-        description="Ingere as docs Markdown da Azapfy no ChromaDB persistido "
+        description="Ingere as docs Markdown da base de conhecimento no ChromaDB persistido "
         f"(sempre com o modelo local {CHROMA_EMBEDDINGS_MODEL})."
     )
     parser.add_argument(

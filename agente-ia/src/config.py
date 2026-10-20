@@ -20,7 +20,7 @@ class Settings(BaseSettings):
         "google/gemini-2.5-flash-lite", alias="OPENROUTER_CLASSIFIER_MODEL"
     )
     app_referer: str = Field("http://localhost:8000", alias="APP_REFERER")
-    app_title: str = Field("Azapfy Suporte IA", alias="APP_TITLE")
+    app_title: str = Field("Sofia — Infominas", alias="APP_TITLE")
 
     chroma_persist_dir: Path = Field(Path("./chroma_db"), alias="CHROMA_PERSIST_DIR")
     docs_dir: Path = Field(Path("./docs"), alias="DOCS_DIR")
@@ -32,25 +32,18 @@ class Settings(BaseSettings):
     #                           (produção: openai/text-embedding-3-small).
     # Trocar provider/modelo exige reconstruir o índice (sync --full ou
     # --reconstruir-se-modelo-mudou) — espaços vetoriais não se misturam.
-    # O Chroma embutido na imagem (rollback) NÃO usa isto: ele é sempre local,
-    # com a constante CHROMA_EMBEDDINGS_MODEL de src/rag/ingest.py.
+    # O Chroma de dev NÃO usa isto: ele é sempre local, com a constante
+    # CHROMA_EMBEDDINGS_MODEL de src/rag/ingest.py.
     embeddings_provider: str = Field("local", alias="EMBEDDINGS_PROVIDER")
     embeddings_model: str = Field(
         "sentence-transformers/all-MiniLM-L6-v2", alias="EMBEDDINGS_MODEL"
     )
 
-    # Backend de leitura do RAG: "chroma" (legado, default) ou "pgvector".
-    # A migração é chaveável para permitir rollback instantâneo: o sync grava
-    # no pgvector independente deste valor; este valor só decide de onde o
-    # agente LÊ. Ver docs/zapin/plano-migracao-pgvector.md.
+    # Backend de leitura do RAG: "chroma" (só dev, default) ou "pgvector"
+    # (produção). O sync grava no pgvector independente deste valor; este
+    # valor só decide de onde o agente LÊ.
     vector_backend: str = Field("chroma", alias="VECTOR_BACKEND")
     pgvector_url: str = Field("", alias="PGVECTOR_URL")
-
-    # Fonte "api" do sync (Contrato B — API de documentação do cliente).
-    docs_api_base_url: str = Field("", alias="DOCS_API_BASE_URL")
-    # Chave gerada no AzapDocs (formato azk_...), enviada no header X-API-Key.
-    docs_api_key: str = Field("", alias="DOCS_API_KEY")
-    docs_api_timeout: float = Field(30.0, alias="DOCS_API_TIMEOUT")
 
     # Trava anti-remoção em massa do sync (fração da base viva por ciclo).
     sync_limiar_remocao: float = Field(0.2, alias="SYNC_LIMIAR_REMOCAO")
@@ -71,7 +64,7 @@ class Settings(BaseSettings):
     # do modelo (65.536 tokens) a cada chamada e recusa com 402 quando o saldo
     # não cobre a reserva — mesmo que a resposta real caiba em poucos tokens.
     # Agente: respostas WhatsApp-native (~400 chars) + tool calls cabem em 1.024.
-    # Classificador/extrator de login (mesmo cliente): JSON curto, 256 basta.
+    # Classificador de segurança: JSON curto, 256 basta.
     llm_max_tokens: int = Field(1024, alias="LLM_MAX_TOKENS")
     llm_max_tokens_classificador: int = Field(256, alias="LLM_MAX_TOKENS_CLASSIFICADOR")
     rag_top_k: int = Field(3, alias="RAG_TOP_K")
@@ -83,11 +76,13 @@ class Settings(BaseSettings):
     # vem da política de tools no system prompt; este é só o limite de guarda.
     agent_max_iteracoes: int = Field(5, alias="AGENT_MAX_ITERACOES")
 
-    # Tools de dados do SAC (abrir/listar chamados) ficam no gateway Go; o agente
-    # as chama via HTTP. `sac_tools_token` casa com TOOLS_API_TOKEN do Go.
-    sac_tools_base_url: str = Field("http://localhost:8080", alias="SAC_TOOLS_BASE_URL")
-    sac_tools_token: str = Field("", alias="SAC_TOOLS_TOKEN")
-    sac_tools_timeout: float = Field(30.0, alias="SAC_TOOLS_TIMEOUT")
+    # Tools do Infodesk (identificar, preparar/abrir/consultar chamado,
+    # transferir) moram no gateway Go em /tools/infodesk/*; o cérebro as chama
+    # por HTTP. `infodesk_tools_token` casa com TOOLS_API_TOKEN do Go
+    # (header X-Tools-Token). Usadas pelas tools de E2.3.
+    infodesk_tools_base_url: str = Field("http://localhost:8080", alias="INFODESK_TOOLS_BASE_URL")
+    infodesk_tools_token: str = Field("", alias="INFODESK_TOOLS_TOKEN")
+    infodesk_tools_timeout: float = Field(30.0, alias="INFODESK_TOOLS_TIMEOUT")
 
     # Checkpointer persistente do grafo (histórico das conversas por
     # conversation_id). Sem o pacote `langgraph-checkpoint-sqlite` (ou em erro),

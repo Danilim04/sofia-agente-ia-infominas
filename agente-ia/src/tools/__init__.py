@@ -1,17 +1,7 @@
-from src.tools.crm_mocks import (
-    CRM_TOOLS,
-    abrir_novo_chamado,
-    buscar_cliente_por_telefone,
-    rastrear_nota_fiscal,
-    verificar_chamados_abertos,
-)
-from src.tools.rag_tool import consultar_base_conhecimento
+"""Tools do agente.
 
-__all__ = [
-    "CRM_TOOLS",
-    "abrir_novo_chamado",
-    "buscar_cliente_por_telefone",
-    "consultar_base_conhecimento",
-    "rastrear_nota_fiscal",
-    "verificar_chamados_abertos",
-]
+Nenhum import no nível do pacote: `rag_tool` puxa o retriever (embeddings,
+índice) e as tools do Infodesk (E2.3) puxam `httpx`/config — quem precisa
+importa o módulo concreto tardiamente (`from src.tools.rag_tool import
+buscar_chunks`). Assim `import src.tools.efeitos` continua barato.
+"""

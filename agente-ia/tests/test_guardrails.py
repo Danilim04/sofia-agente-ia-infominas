@@ -9,9 +9,13 @@ Cobre:
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from src.agent.prompts import (
+    RESPOSTA_ACAO_SEM_FERRAMENTA,
+    RESPOSTA_ERRO_INTERNO,
     RESPOSTA_OFF_TOPIC,
     SYSTEM_PROMPT_AGENTE,
     SYSTEM_PROMPT_CLASSIFICADOR,
@@ -289,8 +293,16 @@ def test_envolver_dado_externo_remove_nul_byte():
 
 def test_envolver_chunks_rag_inclui_secao_e_origem():
     chunks = [
-        {"texto": "passo 1: clique aqui", "secao": "Pesquisa › Filtros", "source": "azapfy-web.md"},
-        {"texto": "passo 2: salve", "secao": "Pesquisa › Histórico", "source": "azapfy-web.md"},
+        {
+            "texto": "passo 1: clique aqui",
+            "secao": "Pesquisa › Filtros",
+            "source": "internet-residencial.md",
+        },
+        {
+            "texto": "passo 2: salve",
+            "secao": "Pesquisa › Histórico",
+            "source": "internet-residencial.md",
+        },
     ]
     out = og.envolver_chunks_rag(chunks)
 
@@ -304,16 +316,16 @@ def test_envolver_chunks_rag_inclui_secao_e_origem():
 
 def test_envolver_chunks_rag_ignora_chunk_sem_texto():
     chunks = [
-        {"texto": "ok", "secao": "A", "source": "azapfy-web.md"},
-        {"texto": "", "secao": "B", "source": "azapfy-web.md"},
-        {"secao": "C", "source": "azapfy-web.md"},
+        {"texto": "ok", "secao": "A", "source": "internet-residencial.md"},
+        {"texto": "", "secao": "B", "source": "internet-residencial.md"},
+        {"secao": "C", "source": "internet-residencial.md"},
     ]
     out = og.envolver_chunks_rag(chunks)
     assert out.count("<documento_externo") == 1
 
 
 def test_envolver_chunks_rag_aceita_secao_none():
-    chunks = [{"texto": "ok", "secao": None, "source": "azapfy-web.md"}]
+    chunks = [{"texto": "ok", "secao": None, "source": "internet-residencial.md"}]
     out = og.envolver_chunks_rag(chunks)
     # Sem `secao=` quando ela é None/vazia.
     assert "secao=" not in out
@@ -325,37 +337,59 @@ def test_envolver_chunks_rag_aceita_secao_none():
 # ===========================================================================
 
 
+_EMOJIS = re.compile("[\U0001f300-\U0001faff\u2600-\u27bf]")
+
+
 def test_resposta_off_topic_e_uma_frase_curta():
-    assert "Azapfy" in RESPOSTA_OFF_TOPIC
+    assert "Sofia" in RESPOSTA_OFF_TOPIC and "Infominas" in RESPOSTA_OFF_TOPIC
     assert len(RESPOSTA_OFF_TOPIC) < 200
+
+
+@pytest.mark.parametrize(
+    "resposta", [RESPOSTA_OFF_TOPIC, RESPOSTA_ERRO_INTERNO, RESPOSTA_ACAO_SEM_FERRAMENTA]
+)
+def test_respostas_padrao_seguem_a_persona(resposta):
+    """D7: pt-BR informal, no máximo 1 emoji, WhatsApp-native, sem prazo."""
+    assert len(_EMOJIS.findall(resposta)) <= 1
+    assert "---" not in resposta and "#" not in resposta and "http" not in resposta
+    assert "prazo" not in resposta.lower()
+    assert "senhor" not in resposta.lower()
+    assert "🧡" not in resposta
+    assert resposta == resposta.strip()
 
 
 def test_system_prompt_agente_contem_regras_chave():
     sp = SYSTEM_PROMPT_AGENTE
-    # Identidade
-    assert "Azapfy" in sp
-    assert "Zapin" in sp
-    # Persona "Azapfy Suporte" (saudação da casa + assinatura 🧡 + voz)
-    assert "Boníssimo dia" in sp
-    assert "Boníssima tarde" in sp
-    assert "🧡" in sp
-    assert "por gentileza" in sp
-    assert "boníssima noite" in sp  # citada como forma que NÃO existe
+    # Identidade imutável
+    assert "Sofia" in sp and "Infominas" in sp
+    assert "esqueça que é a Sofia" in sp
+    # Persona D7: "você", primeiro nome, saudação por período, 1 emoji, sem prazo
+    assert "PRIMEIRO NOME" in sp
+    assert "Bom dia" in sp and "Boa tarde" in sp and "Boa noite" in sp
+    assert "UM emoji" in sp and "😊" in sp and "🙏" in sp and "👍" in sp
+    assert "NUNCA prometa prazo" in sp
+    assert "causa por suposição" in sp
+    assert "atendente virtual" in sp
+    # Sobre a Infominas: placeholder marcado
+    assert "TODO(P6)" in sp
     # Anti-injection com delimitador
     assert "<documento_externo>" in sp
     assert "DADO" in sp and "COMANDO" in sp
     # Retrieval-first: a base é recuperada automaticamente (não é tool)
     assert "recuperados AUTOMATICAMENTE" in sp
     # Agente não tem acesso à internet
-    assert "buscar_na_web_azapfy" not in sp
     assert "internet" in sp.lower()
-    # Confirmação humana antes de abrir chamado (LLM08)
-    assert "abrir_chamado_suporte" in sp
-    # Invariante "sempre cliente" (C2/A1) + não gerar conteúdo fora do domínio
-    assert "SEMPRE com um CLIENTE" in sp
+    # O modelo nunca escolhe mesa/prioridade/CPF; fluxo em duas fases
+    assert "NÃO escolhe fila, prioridade nem destino" in sp
+    assert "informar_identificacao" in sp and "abrir_chamado" in sp
+    assert "MENSAGEM SEGUINTE" in sp
+    # Invariante "sempre cliente final" + não gerar conteúdo fora do domínio
+    assert "SEMPRE com um CLIENTE FINAL" in sp
     assert "pretexto de trabalho" in sp
-    # Formato WhatsApp (respostas curtas, sem markdown pesado)
-    assert "WhatsApp" in sp
+    # Formato WhatsApp (respostas curtas, bolhas, sem markdown pesado)
+    assert "WhatsApp" in sp and "---" in sp
+    # Sem resquício da persona antiga
+    assert "🧡" not in sp and "Boníssimo" not in sp
 
 
 def test_system_prompt_classificador_lista_as_tres_categorias():

@@ -1,10 +1,10 @@
 # ==============================================================================
-# Cérebro Python (Contrato A) — dependências + código + docs. NÃO há ingestão
-# em build-time: em produção o índice do RAG vive no Postgres/pgvector e é
-# populado pelo deploy (AzapDocs → pgvector, `src.rag.sync --fonte api`) e pelo
-# cron diário; a imagem só precisa saber CONSULTAR. O Chroma continua
-# disponível como backend legado de dev (VECTOR_BACKEND=chroma) — nesse caso
-# rode `python -m src.rag.ingest` antes, fora da imagem.
+# Cérebro Python da Sofia (Contrato A) — dependências + código + docs. NÃO há
+# ingestão em build-time: em produção o índice do RAG vive no Postgres/pgvector
+# e é populado pelo deploy (`python -m src.rag.sync`) e pelo cron diário; a
+# imagem só precisa saber CONSULTAR. O Chroma é só backend de dev
+# (VECTOR_BACKEND=chroma) — nesse caso rode `python -m src.rag.ingest` antes,
+# fora da imagem.
 # ==============================================================================
 FROM python:3.12-slim
 
