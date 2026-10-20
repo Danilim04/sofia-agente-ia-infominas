@@ -1,0 +1,14 @@
+{
+  "status": true,
+  "total": 1,
+  "chamados": [
+    {
+      "numero": "48213",
+      "titulo": "Internet sem conexão desde ontem à noite",
+      "categoria": "sem_conexao",
+      "status_ticket": null,
+      "aberto_em": "2026-10-20T14:33:10-03:00"
+    }
+  ],
+  "observacao": "lista inclui só chamados abertos por aqui"
+}

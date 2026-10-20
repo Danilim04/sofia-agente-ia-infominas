@@ -1,0 +1,6 @@
+{
+  "status": false,
+  "erro": "a categoria não tem mesa configurada; ofereça um atendente",
+  "motivo": "categoria_sem_mapa",
+  "categoria": "instalacao_nova"
+}

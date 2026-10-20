@@ -1,0 +1,22 @@
+{
+  "status": true,
+  "proposta": {
+    "titulo": "Internet sem conexão desde ontem à noite",
+    "descricao": "Cliente relata que a internet está totalmente sem conexão desde a noite de 19/10. Já reiniciou o roteador duas vezes e as luzes seguem vermelhas. Endereço não informado.",
+    "categoria": "sem_conexao",
+    "mesa": {
+      "id": "9c1f4e2a-7b3d-4a8e-9f10-2d5c6b7a8e01",
+      "nome": "Suporte Técnico"
+    },
+    "departamento": {
+      "id": "4d7e2b9f-1a6c-4f3b-8e57-0c9a1b2d3e02",
+      "nome": "Suporte"
+    },
+    "prioridade": {
+      "nome": "alta",
+      "id": null
+    },
+    "identificacao_mascarada": "***.***.789-**",
+    "rodape": "[Aberto pela Sofia · conversa 6f1c2a3e-9b4d-4e7a-8c21-5d3f0a9b7e10 · CPF ***.***.789-**]"
+  }
+}

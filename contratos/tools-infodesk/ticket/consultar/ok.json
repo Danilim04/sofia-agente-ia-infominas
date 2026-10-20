@@ -1,0 +1,12 @@
+{
+  "status": true,
+  "numero": "48213",
+  "status_ticket": null,
+  "titulo": "Internet sem conexão desde ontem à noite",
+  "aberto_em": "2026-10-20T14:33:10-03:00",
+  "atualizado_em": null,
+  "mesa": {
+    "id": "9c1f4e2a-7b3d-4a8e-9f10-2d5c6b7a8e01",
+    "nome": "Suporte Técnico"
+  }
+}

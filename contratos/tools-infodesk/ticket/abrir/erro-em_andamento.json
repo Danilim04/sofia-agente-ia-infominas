@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "este chamado já está sendo aberto; peça ao cliente para aguardar um instante",
+  "motivo": "em_andamento"
+}
