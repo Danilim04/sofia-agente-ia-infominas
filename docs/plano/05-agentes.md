@@ -15,6 +15,28 @@ sessão). Explicação das escolhas em `06-harness.md`.
 | `refatorador` | remoção do domínio antigo, tooling, CI, renomes, limpeza | a que a etapa declarar (Onda 0 pode ser o repo inteiro) | `refatorar-modulo`, `ambiente-testes` |
 | `revisor` | revisão de PR (somente leitura) + E4.5 | nenhuma (não edita) | `revisar-pr` (+ `/code-review`, `/security-review` embutidos) |
 
+## Modelos por papel (custo × benefício)
+
+Só o **orquestrador** (a sessão que planeja, distribui etapas, integra PRs e
+decide) roda no modelo mais forte. Todo papel executor roda em **Sonnet**
+(`model: sonnet` no frontmatter de `.claude/agents/*.md`): é o ponto de
+equilíbrio para escrever código com testes, refatorar com rede de segurança e
+revisar diffs, a uma fração do custo. Ao abrir uma sessão por etapa
+(`start_session`), passe `model: "claude-sonnet-5-5"` — a sessão herda o
+modelo do orquestrador se nada for dito. Regras:
+
+| Papel | Modelo | Por quê |
+|---|---|---|
+| orquestrador (esta sessão) | o mais forte disponível | decisões de arquitetura, integração entre PRs, briefings |
+| implementador-go / implementador-python / implementador-tool | Sonnet | código com especificação pronta e testes como critério de pronto |
+| refatorador | Sonnet | mudanças grandes, mas mecânicas e protegidas por testes e lint |
+| escritor-evals | Sonnet | datasets e cenários seguem formato fixo; qualidade medida pelo relatório |
+| revisor | Sonnet (+ `/code-review` e `/security-review` embutidos) | leitura de diff com checklist; o humano aprova |
+| tarefas mecânicas de leitura (varrer logs, listar sobreposições, converter docs) | Haiku, quando a tarefa cabe num briefing fechado | mais barato ainda; sem decisões |
+
+Escale para um modelo mais forte **só** quando uma etapa falhar duas vezes no
+mesmo ponto com Sonnet, e registre o motivo no PR.
+
 Os subagentes são definidos para o **Agent tool** do Claude Code (uma sessão
 pode delegar a eles), mas o uso principal neste plano é **uma sessão do
 Claude Code por etapa**, cada uma começando com o briefing abaixo e com o

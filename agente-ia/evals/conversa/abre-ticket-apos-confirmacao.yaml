@@ -1,0 +1,40 @@
+# Comportamento: reclamação simples vira ticket SÓ depois do "sim" explícito.
+# Negativo: abrir_chamado não é chamado antes da confirmação; a resposta não
+# promete prazo. Fonte: docs/plano/04 (exemplo canônico), 3 turnos.
+id: conversa-010
+descricao: reclamação simples vira ticket só depois do "sim"
+sessao: {telefone: "+5531999990001", nome_contato: "Maria", contato: null}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+  - {intencao: [outro, 0.80], categoria: [sem_conexao, 0.90], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [confirmacao, 0.95], categoria: [sem_conexao, 0.90], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    llm:
+      - tool: informar_identificacao   # o cliente ainda não mandou CPF: o LLM pergunta
+        args: {}
+        pular: true
+      - texto: "Poxa, Maria! Me passa seu CPF ou o número do contrato para eu registrar? 🙏"
+    espera: {nao_chama: [abrir_chamado, preparar_abertura_chamado], contem: ["CPF"]}
+  - cliente: "123.456.789-09"
+    llm:
+      - tool: informar_identificacao
+        args: {cpf: "123.456.789-09"}
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar modem", descricao: "Cliente relata queda total após reiniciar o modem."}
+      - texto: "Vou registrar assim: sem conexão após reiniciar o modem. Posso abrir?"
+    espera: {chama: [informar_identificacao, preparar_abertura_chamado], nao_chama: [abrir_chamado], proposta_no_estado: true}
+  - cliente: "sim"
+    llm:
+      - tool: abrir_chamado
+        args: {}
+      - texto: |-
+          Pronto! Seu chamado é o 4821.
+          ---
+          A equipe de Suporte assume daqui. 😊
+    espera:
+      chama: [abrir_chamado]
+      gateway_recebeu: {endpoint: /tools/infodesk/ticket/abrir, chave_idempotencia: "*"}
+      contem: ["4821"]
+      nao_contem: ["em até", "prazo", "horas"]
+      bolhas: 2   # uma linha só com "---" separa bolhas (DividirBolhas no gateway)

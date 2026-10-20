@@ -11,13 +11,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# CHATWOOT_API_TOKEN é OPCIONAL aqui: a fonte primária é o estado da VM
-# (.chatwoot-token, gravado pela pipeline configure-chatwoot e aplicado por
-# apply-server-state.sh POR CIMA do valor renderizado). O secret, se existir,
-# serve só de bootstrap/override manual.
-# PGVECTOR_PASSWORD é exigida: sem ela o Postgres não sobe e o gateway (que
-# guarda seu estado lá) não inicia.
-required=(IMAGE_TAG OPENROUTER_API_KEY MONGO_URI WEBHOOK_TOKEN TOOLS_API_TOKEN PGVECTOR_PASSWORD)
+# INFODESK_API_KEY é o Bearer da API de integração (obrigatória: sem ela o
+# gateway não sobe). PGVECTOR_PASSWORD é exigida: sem ela o Postgres não sobe
+# e o gateway (que guarda seu estado lá) não inicia.
+required=(IMAGE_TAG OPENROUTER_API_KEY INFODESK_API_KEY WEBHOOK_TOKEN TOOLS_API_TOKEN PGVECTOR_PASSWORD)
 
 faltando=()
 for var in "${required[@]}"; do
@@ -28,21 +25,17 @@ if [ "${#faltando[@]}" -gt 0 ]; then
   exit 1
 fi
 
-# INBOX_ID: caixa do Chatwoot que o bot atende (GitHub *variable*, não secret).
-# OBRIGATÓRIA e > 0 em produção (ZD-2): com 0 o gateway atende TODAS as caixas
-# da conta — foi assim que o bot respondeu numa caixa que não era dele. Os ids
-# mudam de instância para instância — a pipeline "Configurar Chatwoot" lista as
-# caixas ao final; grave o id na variable INBOX_ID e rode o Deploy de novo.
-case "${INBOX_ID:-}" in
-  ''|*[!0-9]*|0)
-    echo "ERRO: INBOX_ID='${INBOX_ID:-}' — em produção a caixa do bot é obrigatória (inteiro > 0)." >&2
-    echo "      Rode a pipeline 'Configurar Chatwoot' para listar as caixas e grave o id na variable INBOX_ID." >&2
-    exit 1 ;;
-esac
-export INBOX_ID
+# DEPARTAMENTO_HUMANO_PADRAO (GitHub *variable*): departamento do Infodesk que
+# recebe as conversas transferidas pelo bot. Opcional no render — vazio, o
+# gateway avisa no boot e as transferências só avisam o cliente e registram.
+export DEPARTAMENTO_HUMANO_PADRAO="${DEPARTAMENTO_HUMANO_PADRAO:-}"
+export INFODESK_ORGANIZATION_ID="${INFODESK_ORGANIZATION_ID:-}"
+export INFODESK_WEBHOOK_SECRET="${INFODESK_WEBHOOK_SECRET:-}"
+export PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}"
+export ALERTA_WEBHOOK_URL="${ALERTA_WEBHOOK_URL:-}"
 
 # Lista EXPLÍCITA de substituições — o envsubst não toca em mais nada.
-# Vars OPCIONAIS (fora da lista required, ex.: SAC_*) podem vir vazias: a
-# chave entra vazia e o gateway trata como não configurada.
-vars='$IMAGE_TAG $OPENROUTER_API_KEY $MONGO_URI $CHATWOOT_API_TOKEN $WEBHOOK_TOKEN $WEBHOOK_SECRET $TOOLS_API_TOKEN $PGVECTOR_PASSWORD $DOCS_API_KEY $SYNC_ALERTA_WEBHOOK $SAC_API_TOKEN $SAC_SERVICE_COD $LANGFUSE_PUBLIC_KEY $LANGFUSE_SECRET_KEY $LANGFUSE_HOST $INBOX_ID'
+# Vars OPCIONAIS (fora da lista required) podem vir vazias: a chave entra
+# vazia e o gateway trata como não configurada.
+vars='$IMAGE_TAG $OPENROUTER_API_KEY $INFODESK_API_KEY $INFODESK_WEBHOOK_SECRET $INFODESK_ORGANIZATION_ID $DEPARTAMENTO_HUMANO_PADRAO $PUBLIC_BASE_URL $WEBHOOK_TOKEN $TOOLS_API_TOKEN $PGVECTOR_PASSWORD $DOCS_API_KEY $SYNC_ALERTA_WEBHOOK $ALERTA_WEBHOOK_URL $LANGFUSE_PUBLIC_KEY $LANGFUSE_SECRET_KEY $LANGFUSE_HOST'
 envsubst "$vars" < prod.env.tpl

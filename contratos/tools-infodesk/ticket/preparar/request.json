@@ -1,0 +1,12 @@
+{
+  "telefone": "+5531999990001",
+  "conversation_id": "6f1c2a3e-9b4d-4e7a-8c21-5d3f0a9b7e10",
+  "titulo": "Internet sem conexão desde ontem à noite",
+  "descricao": "Cliente relata que a internet está totalmente sem conexão desde a noite de 19/10. Já reiniciou o roteador duas vezes e as luzes seguem vermelhas. Endereço não informado.",
+  "categoria": "sem_conexao",
+  "prioridade": "alta",
+  "identificacao": {
+    "forma": "cpf",
+    "valor_mascarado": "***.***.789-**"
+  }
+}

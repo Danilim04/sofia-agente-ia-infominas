@@ -1,0 +1,7 @@
+{
+  "versao": 1,
+  "atualizado_em": null,
+  "justificativa": "baseline vazio: ainda não há classificador real (E2.2); o classificador nulo não é referência",
+  "tolerancia_pontos": 2.0,
+  "metricas": {}
+}

@@ -53,3 +53,9 @@ infra/terraform/*.tfplan
 
 # Estado local do gateway (sqlite)
 *.db
+
+# Evals: export bruto do histórico (PII) e relatórios gerados nunca entram no git
+agente-ia/evals/bruto/
+agente-ia/evals/relatorios/
+# lista real de nomes próprios usada pelo anonimizador
+agente-ia/config/nomes.txt

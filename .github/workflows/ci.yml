@@ -30,8 +30,11 @@ jobs:
       - uses: actions/setup-python@v6
         with: { python-version: "3.12", cache: pip, cache-dependency-path: agente-ia/requirements-dev.txt }
       - run: pip install -r requirements-dev.txt
-      - run: python -m ruff format --check src tests
-      - run: python -m ruff check src tests
+      # evals/ entra quando existir (E1.5) — mesmo critério do scripts/verificar.sh
+      - run: |
+          ALVOS="src tests"; [ -d evals ] && ALVOS="$ALVOS evals"
+          python -m ruff format --check $ALVOS
+          python -m ruff check $ALVOS
 
   test-python:
     runs-on: ubuntu-latest
@@ -45,6 +48,8 @@ jobs:
       - run: pip install --index-url https://download.pytorch.org/whl/cpu torch
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: python -m mypy
+      - name: mypy evals (quando existir)
+        run: if [ -d evals ]; then python -m mypy evals; fi
       - name: pytest (unit, sem rede)
         run: python -m pytest --cov=src --cov-report=term-missing:skip-covered
         env:
@@ -140,14 +145,21 @@ jobs:
   evals-pr:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    defaults: { run: { working-directory: agente-ia } }
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*.txt" }
       - name: evals determinísticos de conversa
         run: |
-          if [ -d agente-ia/evals/conversa ]; then
-            echo "TODO(E3.5): cd agente-ia && pytest -m evals_pr evals/"; exit 0
+          if [ ! -d evals ]; then
+            echo "agente-ia/evals ainda não existe (entra em E1.5)"; exit 0
           fi
-          echo "agente-ia/evals/conversa ainda não existe (entra em E1.5/E3.5)"
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -r requirements.txt -r requirements-dev.txt
+          python -m pytest -q -m evals_pr evals/
+        env:
+          OPENROUTER_API_KEY: test-openrouter-key
 
   # --------------------------------------------------------------- Segredos
   gitleaks:
@@ -160,4 +172,12 @@ jobs:
         run: |
           v=8.30.0
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" | tar xz gitleaks
-          ./gitleaks detect --source . --redact --no-banner --config .gitleaks.toml
+          # Sem --log-opts o gitleaks faz `git log --all`: varre TODAS as branches do
+          # remoto, e um achado em qualquer branch quebra todos os PRs. Em PR varre só
+          # os commits do PR (base..HEAD); no push da main, o histórico inteiro.
+          # -v: sem ele o log só diz "leaks found: N", sem arquivo nem linha.
+          opts=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            opts="--log-opts=origin/${{ github.base_ref }}..HEAD"
+          fi
+          ./gitleaks detect --source . -v --redact=50 --no-banner --config .gitleaks.toml $opts

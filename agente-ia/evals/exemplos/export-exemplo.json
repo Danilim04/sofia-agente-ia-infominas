@@ -1,0 +1,18 @@
+{
+  "exportado_em": "2026-09-03",
+  "conversas": [
+    {
+      "id": "c-001",
+      "contato": {"nome": "Maria Souza", "telefone": "+55 31 99999-0001", "email": "maria.souza@exemplo.com"},
+      "mensagens": [
+        "bom dia, aqui é a Maria Souza, meu cpf é 529.982.247-25 e a internet caiu desde ontem",
+        "já reiniciei o modem duas vezes"
+      ]
+    },
+    {
+      "id": "c-004",
+      "contato": {"nome": "Ana Costa", "telefone": "31988887777", "email": null},
+      "mensagens": ["o tecnico veio com o carro placa ABC1D23 e nao resolveu nada"]
+    }
+  ]
+}

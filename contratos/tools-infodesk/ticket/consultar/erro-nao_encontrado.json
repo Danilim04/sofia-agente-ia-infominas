@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "não encontrei um chamado com esse número; peça para o cliente conferir",
+  "motivo": "nao_encontrado"
+}

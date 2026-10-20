@@ -11,8 +11,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"bot-infominas/internal/mongo"
 )
 
 // Classes de falha do cérebro (mesmos valores de agente-ia/src/agent/falhas.py).
@@ -29,7 +27,7 @@ const (
 type Erro struct {
 	Classe       string
 	IDOcorrencia string
-	Causa        string // linguagem simples, p/ nota privada e alerta (sem PII)
+	Causa        string // linguagem simples, p/ registro e alerta (sem PII)
 	Status       int    // status HTTP, 0 = falha de transporte
 	Err          error  // erro de transporte subjacente, se houver
 }
@@ -87,23 +85,26 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 	return &Client{baseURL: baseURL, http: &http.Client{Timeout: timeout}}
 }
 
-// ChatRequest é o corpo do Contrato A. Identidade é o perfil mínimo resolvido
-// pelo gate — DADO de contexto para o agente (injetado no system prompt).
+// ChatRequest é o corpo do Contrato A (contratos/contrato-a/). Não há mais
+// identidade resolvida pelo gateway: a identificação acontece na conversa.
+//
+// TODO(E2.1): `nome_contato`, `contato` e `estado_conversa`
+// (docs/plano/01-ferramentas.md, "Contrato A — mudanças").
 type ChatRequest struct {
-	ConversationID string        `json:"conversation_id"`
-	Canal          string        `json:"canal"`
-	Mensagem       string        `json:"mensagem"`
-	Identidade     *mongo.Perfil `json:"identidade,omitempty"`
-	Telefone       string        `json:"telefone,omitempty"`
-	SessionToken   string        `json:"session_token,omitempty"`
+	ConversationID string `json:"conversation_id"`
+	Canal          string `json:"canal"`
+	Mensagem       string `json:"mensagem"`
+	Telefone       string `json:"telefone,omitempty"`
 }
 
-// ChatResponse é a resposta do Contrato A.
+// ChatResponse é a resposta do Contrato A. `acoes` e `classificacao` chegam
+// como DADO (o gateway decide por código o que fazer com eles, E2.1).
 type ChatResponse struct {
-	Reply  string           `json:"reply"`
-	Acoes  []map[string]any `json:"acoes"`
-	Fontes []string         `json:"fontes"`
-	Erro   *ErroChat        `json:"erro,omitempty"`
+	Reply         string           `json:"reply"`
+	Acoes         []map[string]any `json:"acoes"`
+	Classificacao map[string]any   `json:"classificacao,omitempty"`
+	Fontes        []string         `json:"fontes"`
+	Erro          *ErroChat        `json:"erro,omitempty"`
 }
 
 // ErroChat é o envelope `erro` do Contrato A (falha classificada do turno).
@@ -154,7 +155,7 @@ func erroDeStatus(status int, body []byte) *Erro {
 // *Erro classificado (ver ComoErro): o orquestrador decide repetir
 // (transitória) ou transferir ao atendente (definitiva).
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	payload, err := json.Marshal(req) //nolint:gosec // G117: session_token é campo do Contrato A (sai em E1.1), não um segredo
+	payload, err := json.Marshal(req)
 	if err != nil {
 		return nil, &Erro{Classe: ClasseDefinitiva, Causa: "requisição ao cérebro inválida", Err: err}
 	}
@@ -193,11 +194,10 @@ type EncerrarEpisodioRequest struct {
 	ConversationID string `json:"conversation_id"`
 }
 
-// EncerrarEpisodio avisa o cérebro que a conversa foi RESOLVIDA no Chatwoot:
-// ele limpa a proposta de chamado pendente daquela conversa (ZB-1). O Chatwoot
-// reutiliza a conversa quando o contato volta a escrever, e uma proposta de
-// um episódio anterior não pode ser "confirmada" por uma mensagem qualquer do
-// seguinte. O histórico da conversa no cérebro fica intacto. Qualquer status
+// EncerrarEpisodio avisa o cérebro que a conversa foi ENCERRADA no canal
+// (`conversation.finished`): ele limpa a proposta de chamado pendente daquela
+// conversa (ZB-1) — uma proposta de um episódio anterior não pode ser
+// "confirmada" por uma mensagem qualquer do seguinte. O histórico da conversa no cérebro fica intacto. Qualquer status
 // >= 400 (ou falha de transporte) é erro — quem chama só loga: a validade da
 // proposta no cérebro é a rede de segurança.
 func (c *Client) EncerrarEpisodio(ctx context.Context, conversationID string) error {
@@ -221,45 +221,4 @@ func (c *Client) EncerrarEpisodio(ctx context.Context, conversationID string) er
 		return fmt.Errorf("brain /encerrar-episodio: status %d", resp.StatusCode)
 	}
 	return nil
-}
-
-// ExtractLoginRequest é o corpo de POST /extract-login.
-type ExtractLoginRequest struct {
-	Mensagem string `json:"mensagem"`
-}
-
-// ExtractLoginResponse é a resposta de POST /extract-login. Login vazio/null =
-// a IA não achou um identificador na frase.
-type ExtractLoginResponse struct {
-	Login string `json:"login"`
-}
-
-// ExtrairLogin pede ao cérebro o identificador (login) embutido na mensagem.
-// Fallback do gate quando a normalização determinística não resolve. Satisfaz
-// identity.LoginExtractor. O valor é só um candidato a validar no Mongo.
-func (c *Client) ExtrairLogin(ctx context.Context, mensagem string) (string, error) {
-	payload, err := json.Marshal(ExtractLoginRequest{Mensagem: mensagem})
-	if err != nil {
-		return "", err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/extract-login", bytes.NewReader(payload))
-	if err != nil {
-		return "", err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("brain /extract-login: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("brain /extract-login: status %d", resp.StatusCode)
-	}
-	var out ExtractLoginResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("brain decode: %w", err)
-	}
-	return strings.TrimSpace(out.Login), nil
 }

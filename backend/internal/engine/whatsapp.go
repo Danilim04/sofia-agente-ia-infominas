@@ -1,19 +1,19 @@
-// Formatação WhatsApp-native e higiene de envelope (F2/F3/F12 do laudo).
+// Formatação WhatsApp-native (F3/F12 do laudo).
 //
-// Entrada: StripAssinatura remove a assinatura que relays (ex.: Evolution)
-// grudam no texto ("**Fulano:**\n...") — o gate e o cérebro devem ver a FALA
-// do cliente, nunca o envelope do transporte.
+// FormatWhatsApp converte o que o LLM emite para o DIALETO DO RELAY que
+// entrega ao WhatsApp. O relay usado até a Onda 0 (Evolution v2.3.6,
+// `receiveWebhook`) só passa quatro regex antes de entregar — `*x*`→`_x_`,
+// `**x**`→`*x*`, `~~x~~`→`~x~` e crase simples→crase tripla — sem interpretar
+// markdown nem escape. Logo: negrito sai daqui como `**x**` (chega `*x*`); um
+// `*x*` simples viraria itálico lá, então vira `**x**` aqui; link markdown,
+// `mailto:` e autolink `<url>` viram texto/URL nua; marcadores ficam
+// balanceados em cada bolha e em cada parte de QuebrarMensagem (um `**` sem
+// par chegaria literal ao cliente). A simulação das regex está em
+// whatsapp_test.go (simularEntrega).
 //
-// Saída: FormatWhatsApp converte o que o LLM emite para o DIALETO DO CHATWOOT,
-// porque quem fala com o WhatsApp não somos nós: a mensagem vai ao Chatwoot e a
-// Evolution (v2.3.6, `chatwoot.service.ts`, `receiveWebhook`) só passa quatro
-// regex antes de entregar — `*x*`→`_x_`, `**x**`→`*x*`, `~~x~~`→`~x~` e
-// crase simples→crase tripla — sem interpretar markdown nem escape. Logo:
-// negrito sai daqui como `**x**` (chega `*x*`); um `*x*` simples viraria
-// itálico lá, então vira `**x**` aqui; link markdown, `mailto:` e autolink
-// `<url>` viram texto/URL nua; marcadores ficam balanceados em cada bolha e em
-// cada parte de QuebrarMensagem (um `**` sem par chegaria literal ao cliente).
-// A simulação das regex está em whatsapp_test.go (simularEntrega).
+// TODO(E2.1): confirmar o dialeto que o Infodesk entrega ao WhatsApp
+// (docs/infodesk/07-pontos-ambiguos.md, C7): se ele repassa o texto cru,
+// o negrito tem de sair daqui como `*x*`.
 package engine
 
 import (
@@ -21,16 +21,6 @@ import (
 	"strings"
 	"unicode"
 )
-
-// reAssinatura casa a assinatura de relay no INÍCIO do texto: "*Nome:*\n" ou
-// "**Nome:**\n" (até 64 chars de nome, sem quebra de linha dentro).
-var reAssinatura = regexp.MustCompile(`^\*{1,2}[^\n*]{1,64}:\*{1,2}[ \t]*\n`)
-
-// StripAssinatura remove a assinatura de relay do começo da mensagem, se
-// houver. Aplicado a TODA mensagem de entrada antes do gate/cérebro.
-func StripAssinatura(s string) string {
-	return strings.TrimSpace(reAssinatura.ReplaceAllString(strings.TrimSpace(s), ""))
-}
 
 var (
 	// Definição de link de referência numa linha própria: `[ref]: url "título"`.
@@ -48,13 +38,13 @@ var (
 	reEscape = regexp.MustCompile(`\\([!-/:-@\[-` + "`" + `{-~])`)
 	// Título markdown vira linha em negrito (com `#` de fechamento opcionais).
 	reHeading = regexp.MustCompile(`(?m)^[ \t]*#{1,6}[ \t]+(.*?)[ \t#]*$`)
-	// Sequência de 3+ asteriscos (`***x***`) é negrito: a Evolution deixaria um
+	// Sequência de 3+ asteriscos (`***x***`) é negrito: o relay deixaria um
 	// `**` sobrando.
 	reAsteriscos = regexp.MustCompile(`\*{3,}`)
 )
 
 // FormatWhatsApp converte o texto do LLM (markdown comum ou sintaxe de
-// WhatsApp) para o dialeto do Chatwoot que a Evolution entrega limpo:
+// WhatsApp) para o dialeto que o relay entrega limpo ao WhatsApp:
 //   - `**x**` fica `**x**` e `*x*` simples vira `**x**` (chegam `*x*`, negrito);
 //     `*x*` dentro de um negrito vira `_x_` (itálico no WhatsApp)
 //   - `# Título` → `**Título**`

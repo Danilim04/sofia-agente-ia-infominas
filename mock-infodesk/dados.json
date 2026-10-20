@@ -1,0 +1,17 @@
+{
+  "_comentario": "Dados de referência do mock-infodesk (docs/infodesk/02). UUIDs fixos para os testes e para a tabela de roteamento do agente. Edite à vontade; o servidor lê este arquivo no boot (MOCK_DADOS aponta para outro).",
+  "desks": [
+    { "id": "11111111-1111-4111-8111-111111111101", "name": "Suporte Técnico" },
+    { "id": "11111111-1111-4111-8111-111111111102", "name": "Financeiro" },
+    { "id": "11111111-1111-4111-8111-111111111103", "name": "Triagem" }
+  ],
+  "departments": [
+    { "id": "22222222-2222-4222-8222-222222222201", "name": "Suporte" },
+    { "id": "22222222-2222-4222-8222-222222222202", "name": "Financeiro" },
+    { "id": "22222222-2222-4222-8222-222222222203", "name": "Atendimento" }
+  ],
+  "users": [
+    { "id": "33333333-3333-4333-8333-333333333301", "username": "ana.suporte", "email": "ana.suporte@infominas.example" },
+    { "id": "33333333-3333-4333-8333-333333333302", "username": "bruno.financeiro", "email": "bruno.financeiro@infominas.example" }
+  ]
+}

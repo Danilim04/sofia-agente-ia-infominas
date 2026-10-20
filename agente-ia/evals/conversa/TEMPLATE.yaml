@@ -1,0 +1,64 @@
+# TEMPLATE de cenário de conversa (docs/plano/04 "Como escrever um eval").
+# Copie para evals/conversa/<comportamento>.yaml — o nome do arquivo É o
+# comportamento provado (ex.: nao-abre-sem-confirmacao.yaml). Um cenário prova
+# UM comportamento e sempre inclui o negativo (o que NÃO pode acontecer).
+# Este arquivo é válido e carregado pelos testes: mantenha-o assim.
+
+id: conversa-000                      # único entre os YAMLs; prefixo "conversa-"
+descricao: >-                         # uma frase: qual comportamento este cenário prova
+  TEMPLATE — reclamação simples vira proposta e só abre o chamado depois do "sim"
+
+# Sessão que o gateway mandaria no Contrato A. Telefone fictício (faixa 9999-xxxx).
+sessao:
+  telefone: "+5531999990000"
+  nome_contato: "Cliente Exemplo"
+  contato: null                       # id do contato no Infodesk quando já identificado
+
+# Respostas do FakeJEV, UMA POR TURNO (mesmo tamanho de `turnos`).
+# Choice = [opcao, confianca]; Score = [nivel, confianca]; Noul = probabilidade.
+# prioridade: 0 baixa, 1 media, 2 alta, 3 urgente · frustracao: 0 calmo … 3 muito irritado.
+jev:
+  - intencao: [reclamacao_problema, 0.93]
+    categoria: [sem_conexao, 0.88]
+    prioridade: [2, 0.70]
+    frustracao: [1, 0.80]
+    malicioso: 0.02
+    fora_de_escopo: 0.01
+  - intencao: [confirmacao, 0.95]
+    categoria: [sem_conexao, 0.90]
+    prioridade: [2, 0.70]
+    frustracao: [1, 0.80]
+    malicioso: 0.01
+    fora_de_escopo: 0.01
+
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    # `llm` é o script exato do LLM falso neste turno: zero ou mais chamadas de
+    # tool (`tool` + `args`; `pular: true` = o fake nem emite a chamada, só documenta
+    # que o LLM real poderia) e, por último, SEMPRE um `texto` (a resposta ao cliente).
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar modem", descricao: "Cliente relata queda total"}
+      - texto: "Poxa! Vou registrar assim: sem conexão após reiniciar o modem. Posso abrir o chamado?"
+    # `espera` só com asserts observáveis (chaves permitidas em evals/formatos.py CHAVES_ESPERA):
+    #   chama / nao_chama: [nomes de tool]      transfere: true|false
+    #   bolhas: inteiro — conta as partes após DividirBolhas do gateway: só uma LINHA
+    #     contendo apenas "---" no texto separa bolhas (use `texto: |-` com a linha "---")
+    #   contem / nao_contem: [trechos do texto]  proposta_no_estado: true  bloqueado: true (safe_response)
+    #   gateway_recebeu: {endpoint: /tools/infodesk/..., chave_idempotencia: "*"}
+    #   classificacao: {categoria: sem_conexao, origem: jev}
+    espera:
+      chama: [preparar_abertura_chamado]
+      nao_chama: [abrir_chamado]          # o negativo: nunca abre sem confirmação
+      proposta_no_estado: true
+      contem: ["Posso abrir"]
+  - cliente: "sim"
+    llm:
+      - tool: abrir_chamado
+        args: {}                          # execução sem args do LLM (duas fases, CLAUDE.md regra 3)
+      - texto: "Pronto! Seu chamado é o 4821. A equipe de Suporte assume daqui. 😊"
+    espera:
+      chama: [abrir_chamado]
+      gateway_recebeu: {endpoint: /tools/infodesk/ticket/abrir, chave_idempotencia: "*"}
+      contem: ["4821"]
+      nao_contem: ["em até", "prazo"]     # persona: não promete prazo

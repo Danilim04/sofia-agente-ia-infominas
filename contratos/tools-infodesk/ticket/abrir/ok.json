@@ -1,0 +1,17 @@
+{
+  "status": true,
+  "numero": "48213",
+  "mesa": {
+    "id": "9c1f4e2a-7b3d-4a8e-9f10-2d5c6b7a8e01",
+    "nome": "Suporte Técnico"
+  },
+  "departamento": {
+    "id": "4d7e2b9f-1a6c-4f3b-8e57-0c9a1b2d3e02",
+    "nome": "Suporte"
+  },
+  "prioridade": {
+    "nome": "alta",
+    "id": null
+  },
+  "transferido": true
+}

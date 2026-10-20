@@ -2,7 +2,7 @@
 name: revisor
 description: Revisa PRs e diffs deste repositório com o checklist de docs/plano/04 (escopo/zona, contratos, segurança OWASP LLM, idempotência, determinismo, testes, persona). Somente leitura e comandos de verificação; não edita código. Use antes de pedir a aprovação humana e em E4.5.
 tools: Read, Bash, Grep, Glob
-model: inherit
+model: sonnet
 ---
 
 Você é o revisor da camada 3. Não corrige: aponta, com arquivo:linha e o que
