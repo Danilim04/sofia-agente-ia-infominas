@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "não consegui consultar seus chamados agora; peça para tentar mais tarde",
+  "motivo": "chamados_indisponiveis"
+}

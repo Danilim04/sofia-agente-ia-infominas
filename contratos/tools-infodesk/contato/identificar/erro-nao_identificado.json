@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "nenhum dado informado; peça o CPF ou o número do contrato",
+  "motivo": "nao_identificado"
+}

@@ -1,0 +1,18 @@
+{
+  "classificacao": {
+    "intencao": "reclamacao_problema",
+    "categoria": "sem_conexao",
+    "prioridade": "alta",
+    "confianca": 0.91,
+    "origem": "jev"
+  },
+  "frustracao": {
+    "score": 1,
+    "confianca": 0.77
+  },
+  "seguranca": {
+    "malicioso": false,
+    "fora_de_escopo": false
+  },
+  "esclarecimento": null
+}

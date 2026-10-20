@@ -58,8 +58,10 @@ oficial para a API em si. Não havia skill de Go/Python/pytest no catálogo do
 usuário.
 
 **Subagentes por papel.** Cada `.claude/agents/*.md` fixa: o que lê (e o que
-não precisa ler), a zona, as regras inegociáveis do papel e o formato da
-entrega. Assim dois `implementador-go` em sessões diferentes produzem código
+não precisa ler), a zona, as regras inegociáveis do papel, o formato da
+entrega e o **modelo** (`model: sonnet` para todos os executores — só o
+orquestrador usa o modelo mais forte; tabela e critério de escalada em
+`05-agentes.md`, "Modelos por papel"). Assim dois `implementador-go` em sessões diferentes produzem código
 do mesmo jeito. O `revisor` só tem ferramentas de leitura: não "conserta de
 passagem".
 

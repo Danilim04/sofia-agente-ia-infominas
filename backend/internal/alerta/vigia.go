@@ -19,7 +19,7 @@ const (
 // store.Falha, sem importar o store).
 type Falha struct {
 	ID             string
-	ConversationID int64
+	ConversationID string
 	Origem         string
 	Classe         string
 	Causa          string
@@ -88,26 +88,26 @@ func (v *Vigia) Turno(ok bool) {
 	if dispara {
 		v.notificar(Alerta{
 			Tipo:   TipoTaxaDeFalhas,
-			Titulo: "Taxa de falhas alta no Zapin",
-			Texto: fmt.Sprintf("%d de %d turnos falharam nos últimos %s (%.0f%%). Veja os IDs ZPF-* no log zapin_falha.",
+			Titulo: "Taxa de falhas alta na Sofia",
+			Texto: fmt.Sprintf("%d de %d turnos falharam nos últimos %s (%.0f%%). Veja os IDs SOF-* no log sofia_falha.",
 				falhas, turnos, JanelaTaxa, 100*float64(falhas)/float64(turnos)),
 		})
 	}
 }
 
 // FalhaRegistrada avalia uma ocorrência registrada na transferência: falha
-// definitiva (ou técnica, origem mongo) alerta na hora.
+// definitiva alerta na hora.
 func (v *Vigia) FalhaRegistrada(f Falha) {
 	if v == nil {
 		return
 	}
-	if f.Classe != "definitiva" && f.Origem != "mongo" {
+	if f.Classe != "definitiva" {
 		return
 	}
 	v.notificar(Alerta{
 		Tipo:   TipoFalhaDefinitiva,
-		Titulo: "Falha definitiva no Zapin — cliente transferido ao atendente",
-		Texto: fmt.Sprintf("Ocorrência %s (conversa %d, origem %s): %s. Repetir não resolve; precisa de ação.",
+		Titulo: "Falha definitiva na Sofia — cliente transferido ao atendente",
+		Texto: fmt.Sprintf("Ocorrência %s (conversa %s, origem %s): %s. Repetir não resolve; precisa de ação.",
 			f.ID, f.ConversationID, f.Origem, f.Causa),
 		IDOcorrencia: f.ID, ConversationID: f.ConversationID, Link: f.Link,
 	})
@@ -120,35 +120,10 @@ func (v *Vigia) DisjuntorAberto(chave, causa string, ate time.Time) {
 	}
 	v.notificar(Alerta{
 		Tipo:   TipoDisjuntorAberto,
-		Titulo: "Disjuntor do Zapin ABERTO — clientes indo direto ao atendente",
+		Titulo: "Disjuntor da Sofia ABERTO — clientes indo direto ao atendente",
 		Texto: fmt.Sprintf("3 falhas definitivas iguais em 5 min (%s). O cérebro não será chamado até %s; uma chamada de teste decide reabrir. Chave: %s",
 			causa, ate.Format("15:04"), chave),
 	})
-}
-
-// Reportado: um atendente marcou a conversa com a etiqueta de reporte (ZC-8).
-func (v *Vigia) Reportado(f Falha) {
-	if v == nil {
-		return
-	}
-	causa := f.Causa
-	if f.ID == "" {
-		causa = "sem ocorrência registrada pelo bot nesta conversa — ver a conversa"
-	}
-	v.notificar(Alerta{
-		Tipo:   TipoReportado,
-		Titulo: "Atendente reportou um problema do Zapin",
-		Texto: fmt.Sprintf("Conversa %d marcada para revisão. Ocorrência: %s. Causa: %s. Link: %s",
-			f.ConversationID, valorOu(f.ID, "—"), causa, valorOu(f.Link, "—")),
-		IDOcorrencia: f.ID, ConversationID: f.ConversationID, Link: f.Link,
-	})
-}
-
-func valorOu(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
 }
 
 // podar descarta instantes anteriores ao corte (slice ordenado no tempo).

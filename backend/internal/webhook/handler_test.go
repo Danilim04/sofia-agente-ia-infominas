@@ -10,24 +10,20 @@ import (
 	"strings"
 	"testing"
 
-	"bot-infominas/internal/chatwoot"
+	"bot-infominas/internal/engine"
 	"bot-infominas/internal/store"
 )
 
 // engineNoop satisfaz Engine sem processar nada: os testes olham só a borda
-// HTTP (autenticação e enfileiramento); os workers não são iniciados.
+// HTTP (autenticação, dedup e enfileiramento); os workers não são iniciados.
 type engineNoop struct{}
 
-func (engineNoop) HandleMessageCreated(context.Context, *chatwoot.MessageCreated)           {}
-func (engineNoop) HandleConversationUpdated(context.Context, *chatwoot.ConversationUpdated) {}
-func (engineNoop) HandleConversationCreated(context.Context, *chatwoot.ConversationCreated) {}
-func (engineNoop) HandleConversationStatusChanged(context.Context, *chatwoot.ConversationStatusChanged) {
-}
+func (engineNoop) HandleMensagem(context.Context, engine.Inbound) {}
+func (engineNoop) EncerrarEpisodio(context.Context, string)       {}
 
 const (
 	segredoTeste = "segredo-hmac-de-teste"
-	corpoTeste   = `{"event":"message_created","id":1,"content":"oi"}`
-	tsTeste      = "1759700000"
+	corpoTeste   = `{"id":"ent-1","event":"message.received","data":{"conversationId":"c1"}}`
 )
 
 func newServer(t *testing.T, secret, token string) *Server {
@@ -41,8 +37,7 @@ func newServer(t *testing.T, secret, token string) *Server {
 	return NewServer(secret, token, st, engineNoop{}, log, 1, 8)
 }
 
-// post envia o corpo ao handler com os headers dados (sem X-Chatwoot-Delivery:
-// a dedup fica fora do caminho e cada chamada conta como evento novo).
+// post envia o corpo ao handler com os headers dados.
 func post(s *Server, url, body string, headers map[string]string) *httptest.ResponseRecorder {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, url, strings.NewReader(body))
 	for k, v := range headers {
@@ -53,19 +48,22 @@ func post(s *Server, url, body string, headers map[string]string) *httptest.Resp
 	return rec
 }
 
-func assinado(secret, ts, body string) map[string]string {
-	return map[string]string{
-		"X-Chatwoot-Timestamp": ts,
-		"X-Chatwoot-Signature": chatwoot.ComputeSignature(secret, ts, []byte(body)),
-	}
+func assinado(secret, body string) map[string]string {
+	return map[string]string{HeaderAssinatura: ComputeSignature(secret, []byte(body))}
 }
 
-// ZG-3: com WEBHOOK_SECRET preenchido, só entra requisição com assinatura
-// HMAC válida (X-Chatwoot-Signature sobre "{timestamp}.{corpo}").
+// corpoUnico gera um corpo com id de entrega próprio (a dedup por id fica
+// fora do caminho dos testes de autenticação).
+func corpoUnico(id string) string {
+	return `{"id":"` + id + `","event":"message.received","data":{}}`
+}
+
+// Com INFODESK_WEBHOOK_SECRET preenchido, só entra requisição com HMAC válido
+// sobre o corpo cru (sha256=hex em X-Infominas-Signature).
 func TestWebhookComSegredoExigeAssinaturaValida(t *testing.T) {
 	s := newServer(t, segredoTeste, "")
 
-	rec := post(s, "/webhook", corpoTeste, assinado(segredoTeste, tsTeste, corpoTeste))
+	rec := post(s, "/webhook", corpoTeste, assinado(segredoTeste, corpoTeste))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("assinatura válida: esperava 200, veio %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -73,16 +71,16 @@ func TestWebhookComSegredoExigeAssinaturaValida(t *testing.T) {
 		t.Fatalf("assinatura válida: esperava 1 evento enfileirado, veio %d", n)
 	}
 
+	outro := corpoUnico("ent-2")
 	casos := map[string]map[string]string{
-		"sem assinatura":                {},
-		"só timestamp":                  {"X-Chatwoot-Timestamp": tsTeste},
-		"assinatura com outro segredo":  assinado("outro-segredo", tsTeste, corpoTeste),
-		"assinatura de outro timestamp": {"X-Chatwoot-Timestamp": tsTeste, "X-Chatwoot-Signature": chatwoot.ComputeSignature(segredoTeste, "1759700999", []byte(corpoTeste))},
-		"assinatura de outro corpo":     assinado(segredoTeste, tsTeste, `{"event":"message_created","id":2}`),
-		"lixo no header":                {"X-Chatwoot-Timestamp": tsTeste, "X-Chatwoot-Signature": "sha256=deadbeef"},
+		"sem assinatura":               {},
+		"assinatura com outro segredo": assinado("outro-segredo", outro),
+		"assinatura de outro corpo":    assinado(segredoTeste, corpoTeste),
+		"lixo no header":               {HeaderAssinatura: "sha256=deadbeef"},
+		"hex sem prefixo":              {HeaderAssinatura: strings.TrimPrefix(ComputeSignature(segredoTeste, []byte(outro)), "sha256=")},
 	}
 	for nome, headers := range casos {
-		rec := post(s, "/webhook", corpoTeste, headers)
+		rec := post(s, "/webhook", outro, headers)
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s: esperava 401, veio %d (%s)", nome, rec.Code, rec.Body.String())
 		}
@@ -92,16 +90,14 @@ func TestWebhookComSegredoExigeAssinaturaValida(t *testing.T) {
 	}
 }
 
-// ZG-3 (compatibilidade): com WEBHOOK_SECRET vazio o comportamento atual
-// continua — a assinatura não é exigida nem verificada (o Chatwoot em uso não
-// assina). Sem isto o deploy derrubaria o bot até alguém configurar o segredo.
-func TestWebhookSemSegredoMantemComportamentoAtual(t *testing.T) {
+// Sem segredo a assinatura não é exigida nem verificada (dev).
+func TestWebhookSemSegredoNaoVerifica(t *testing.T) {
 	s := newServer(t, "", "")
 
-	if rec := post(s, "/webhook", corpoTeste, nil); rec.Code != http.StatusOK {
+	if rec := post(s, "/webhook", corpoUnico("a"), nil); rec.Code != http.StatusOK {
 		t.Fatalf("sem segredo e sem headers: esperava 200, veio %d", rec.Code)
 	}
-	if rec := post(s, "/webhook", corpoTeste, map[string]string{"X-Chatwoot-Signature": "sha256=lixo"}); rec.Code != http.StatusOK {
+	if rec := post(s, "/webhook", corpoUnico("b"), map[string]string{HeaderAssinatura: "sha256=lixo"}); rec.Code != http.StatusOK {
 		t.Fatalf("sem segredo, assinatura inválida ignorada: esperava 200, veio %d", rec.Code)
 	}
 	if n := len(s.jobs); n != 2 {
@@ -109,17 +105,17 @@ func TestWebhookSemSegredoMantemComportamentoAtual(t *testing.T) {
 	}
 }
 
-// Token na URL continua valendo, sozinho ou junto com o HMAC (a checagem do
-// token vem antes de ler o corpo).
+// Token na URL vale sozinho ou junto com o HMAC (a checagem do token vem
+// antes de ler o corpo).
 func TestWebhookTokenNaURL(t *testing.T) {
 	s := newServer(t, "", "tok-teste")
-	if rec := post(s, "/webhook", corpoTeste, nil); rec.Code != http.StatusUnauthorized {
+	if rec := post(s, "/webhook", corpoUnico("a"), nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("sem token: esperava 401, veio %d", rec.Code)
 	}
-	if rec := post(s, "/webhook?token=errado", corpoTeste, nil); rec.Code != http.StatusUnauthorized {
+	if rec := post(s, "/webhook?token=errado", corpoUnico("b"), nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("token errado: esperava 401, veio %d", rec.Code)
 	}
-	if rec := post(s, "/webhook?token=tok-teste", corpoTeste, nil); rec.Code != http.StatusOK {
+	if rec := post(s, "/webhook?token=tok-teste", corpoUnico("c"), nil); rec.Code != http.StatusOK {
 		t.Fatalf("token certo: esperava 200, veio %d", rec.Code)
 	}
 
@@ -127,10 +123,55 @@ func TestWebhookTokenNaURL(t *testing.T) {
 	if rec := post(ambos, "/webhook?token=tok-teste", corpoTeste, nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("token certo sem assinatura (segredo definido): esperava 401, veio %d", rec.Code)
 	}
-	if rec := post(ambos, "/webhook?token=tok-teste", corpoTeste, assinado(segredoTeste, tsTeste, corpoTeste)); rec.Code != http.StatusOK {
+	if rec := post(ambos, "/webhook?token=tok-teste", corpoTeste, assinado(segredoTeste, corpoTeste)); rec.Code != http.StatusOK {
 		t.Fatalf("token certo + assinatura válida: esperava 200, veio %d", rec.Code)
 	}
 	if n := len(ambos.jobs); n != 1 {
 		t.Fatalf("esperava 1 evento enfileirado, veio %d", n)
+	}
+}
+
+// Dedup por id de entrega: a mesma entrega duas vezes responde 200 mas só
+// enfileira uma; evento sem id passa sempre; evento sem `event` no corpo usa
+// o header.
+func TestWebhookDeduplicaPorIdDeEntrega(t *testing.T) {
+	s := newServer(t, "", "")
+	post(s, "/webhook", corpoTeste, nil)
+	if rec := post(s, "/webhook", corpoTeste, nil); rec.Code != http.StatusOK {
+		t.Fatalf("duplicata responde 200, veio %d", rec.Code)
+	}
+	if n := len(s.jobs); n != 1 {
+		t.Fatalf("duplicata não enfileira: esperava 1, veio %d", n)
+	}
+	post(s, "/webhook", `{"event":"x"}`, nil)
+	post(s, "/webhook", `{"event":"x"}`, nil)
+	if n := len(s.jobs); n != 3 {
+		t.Fatalf("sem id não há dedup: esperava 3, veio %d", n)
+	}
+	post(s, "/webhook", `{"id":"h1"}`, map[string]string{HeaderEvento: "conversation.started"})
+	var ultimo job
+	for i := 0; i < 4; i++ {
+		ultimo = <-s.jobs
+	}
+	if ultimo.event != "conversation.started" {
+		t.Fatalf("evento devia vir do header: %+v", ultimo.event)
+	}
+	if rec := post(s, "/webhook", `não é json`, nil); rec.Code != http.StatusBadRequest {
+		t.Fatalf("json inválido: esperava 400, veio %d", rec.Code)
+	}
+	grande := `{"id":"g","event":"x","pad":"` + strings.Repeat("x", maxBodyBytes) + `"}`
+	if rec := post(s, "/webhook", grande, nil); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("corpo acima do teto: esperava 413, veio %d", rec.Code)
+	}
+}
+
+func TestComputeSignatureVetorConhecido(t *testing.T) {
+	// HMAC-SHA256("segredo", "corpo") — vetor calculado fora deste código.
+	got := ComputeSignature("segredo", []byte("corpo"))
+	if !strings.HasPrefix(got, "sha256=") || len(got) != len("sha256=")+64 {
+		t.Fatalf("formato inesperado: %q", got)
+	}
+	if !VerifySignature("segredo", []byte("corpo"), got) || VerifySignature("segredo", []byte("corpo2"), got) {
+		t.Fatal("verificação deveria casar só com o mesmo corpo")
 	}
 }

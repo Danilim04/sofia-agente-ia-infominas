@@ -17,33 +17,23 @@ package engine
 import (
 	"context"
 	"time"
-
-	"bot-infominas/internal/chatwoot"
 )
-
-// inbound é uma mensagem de cliente já filtrada/higienizada, aguardando lote.
-type inbound struct {
-	conv       chatwoot.Conversation
-	phone      string
-	content    string
-	recebidoEm time.Time // quando o cliente mandou (created_at do Chatwoot; senão a chegada) — base do teto do turno
-	anexo      string    // file_type do anexo ("audio", "image", "file"...); vazio = só texto (ZD-2)
-}
 
 // filaOciosaTTL: worker sem mensagens por esse tempo encerra e libera o slot.
 const filaOciosaTTL = 15 * time.Minute
 
-// loteTimeout limita o processamento de um lote (gate + cérebro + envio).
+// loteTimeout limita o processamento de um lote (cérebro + envio).
 const loteTimeout = 90 * time.Second
 
 // enfileirar entrega a mensagem à fila da conversa, criando o worker na
 // primeira vez. Fila cheia descarta com log (backpressure explícito).
-func (e *Engine) enfileirar(convID int64, msg inbound) {
+func (e *Engine) enfileirar(msg Inbound) {
+	convID := msg.ConversationID
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	ch, ok := e.filas[convID]
 	if !ok {
-		ch = make(chan inbound, 64)
+		ch = make(chan Inbound, 64)
 		e.filas[convID] = ch
 		go e.trabalhadorConversa(convID, ch)
 	}
@@ -57,7 +47,7 @@ func (e *Engine) enfileirar(convID int64, msg inbound) {
 
 // trabalhadorConversa consome a fila de UMA conversa: coleta a rajada, processa
 // o lote, repete. Encerra (e se remove do mapa) após ociosidade prolongada.
-func (e *Engine) trabalhadorConversa(convID int64, ch chan inbound) {
+func (e *Engine) trabalhadorConversa(convID string, ch chan Inbound) {
 	for {
 		select {
 		case <-e.baseCtx.Done():
@@ -83,8 +73,8 @@ func (e *Engine) trabalhadorConversa(convID int64, ch chan inbound) {
 
 // coletarRajada junta as mensagens da rajada: renova a janela de silêncio a
 // cada chegada, respeitando o teto acumulado.
-func (e *Engine) coletarRajada(ch chan inbound, primeiro inbound) []inbound {
-	lote := []inbound{primeiro}
+func (e *Engine) coletarRajada(ch chan Inbound, primeiro Inbound) []Inbound {
+	lote := []Inbound{primeiro}
 	if e.debounce <= 0 {
 		return lote
 	}
