@@ -1,0 +1,22 @@
+# Fim de linha LF em todo texto, em qualquer SO (vence core.autocrlf).
+# Motivo: hooks/scripts são bash (CRLF quebra o shebang) e gofmt -l reprova
+# arquivos .go com CRLF — ver docs/plano/06-harness.md, "Windows".
+* text=auto eol=lf
+
+*.sh      text eol=lf
+*.go      text eol=lf
+*.py      text eol=lf
+*.md      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.json    text eol=lf
+*.toml    text eol=lf
+*.txt     text eol=lf
+.githooks/* text eol=lf
+.claude/hooks/* text eol=lf
+
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.db    binary
+*.tfstate binary

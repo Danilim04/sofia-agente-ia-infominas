@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# pre-commit para humanos: a mesma esteira rápida que o hook do Claude Code roda.
+# Ative uma vez com: scripts/instalar-hooks-git.sh
+RAIZ="$(git rev-parse --show-toplevel)"
+if [ "${PULAR_VERIFICACAO:-}" = "1" ]; then echo "pre-commit: PULAR_VERIFICACAO=1"; exit 0; fi
+bash "$RAIZ/scripts/verificar.sh" --rapido || { echo "pre-commit: esteira falhou — commit abortado"; exit 1; }

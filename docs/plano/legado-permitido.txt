@@ -1,0 +1,14 @@
+# Caminhos (prefixos, relativos à raiz) onde termos do domínio antigo
+# (azapfy|zapin|chatwoot|mongo|sac_|azapers|zprs|zpf-) ainda são tolerados
+# pelo teste de arquitetura (tests/test_arquitetura.py, E0.4).
+# REGRA: esta lista só ENCOLHE. Cada etapa que limpa um diretório remove a
+# linha. A Onda 4 (E4.6) termina com o arquivo vazio (só comentários).
+# Linhas começando com # são ignoradas.
+backend/
+agente-ia/src/
+agente-ia/server.py
+agente-ia/app.py
+agente-ia/tests/
+mock-chatwoot/
+scripts/start-all.sh
+scripts/stop-all.sh

@@ -1,3 +1,11 @@
+> **Em refatoração (2026-10):** este repositório está sendo convertido do Zapin
+> (Azapfy) para a **Sofia**, agente de atendimento WhatsApp da **Infominas**
+> sobre a API do **Infodesk**. O plano, a arquitetura alvo e as etapas estão em
+> [`docs/plano/`](docs/plano/00-visao-geral.md); a API do Infodesk em
+> [`docs/infodesk/`](docs/infodesk/README.md); o harness para agentes em
+> [`CLAUDE.md`](CLAUDE.md). O texto abaixo descreve o **estado legado** e será
+> reescrito na etapa E0.5.
+
 # Suporte Técnico Azapfy — Agente IA + Gateway Chatwoot
 
 Monorepo com **dois projetos** que se integram pelo **Contrato A** (`POST /chat`):

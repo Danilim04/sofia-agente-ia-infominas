@@ -1,0 +1,58 @@
+{
+  "$comment": "Harness do Claude Code para este repositório. Explicação de cada escolha em docs/plano/06-harness.md. Hooks exigem bash (Git Bash no Windows).",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/verificar-zona.sh\"", "timeout": 10 }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guardar-commit.sh\"", "timeout": 300 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/formatar.sh\"", "timeout": 60 }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(scripts/verificar.sh*)",
+      "Bash(bash scripts/verificar.sh*)",
+      "Bash(go build*)",
+      "Bash(go vet*)",
+      "Bash(go test*)",
+      "Bash(gofmt*)",
+      "Bash(golangci-lint*)",
+      "Bash(pytest*)",
+      "Bash(python -m pytest*)",
+      "Bash(ruff*)",
+      "Bash(python -m ruff*)",
+      "Bash(mypy*)",
+      "Bash(python -m mypy*)",
+      "Bash(lint-imports*)",
+      "Bash(python -m evals.*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git branch*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./agente-ia/.env)",
+      "Read(./backend/.env)",
+      "Read(./agente-ia/evals/bruto/**)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)"
+    ]
+  }
+}
