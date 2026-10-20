@@ -651,6 +651,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        if self.close_connection:  # corpo não drenado: avisa o cliente que vai fechar
+            self.send_header("Connection", "close")
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -676,8 +678,11 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             length = -1
         if length < 0 or length > CORPO_MAX_BYTES:
+            # Corpo não lido: fecha a conexão depois da resposta para os bytes
+            # que sobraram não virarem a "próxima requisição" do keep-alive.
             self._corpo_bruto = b""
             self._corpo_invalido = True
+            self.close_connection = True
             return
         self._corpo_invalido = False
         self._corpo_bruto = self.rfile.read(length) if length > 0 else b""
@@ -701,11 +706,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Uma linha por requisição no stdout. Só o caminho, SEM query string
-        # (/mock/estado?telefone=... tem PII — CLAUDE.md regra 5), e qualquer
-        # sequência longa de dígitos no caminho é mascarada por garantia.
-        caminho = re.sub(
-            r"\d{5,}", lambda m: mascarar_telefone(m.group(0)), urlparse(self.path).path
-        )
+        # (/mock/estado?telefone=... tem PII — CLAUDE.md regra 5). Em /mock/*
+        # sequências longas de dígitos são mascaradas por garantia; na API os
+        # caminhos só têm UUIDs e numbers de ticket, que ficam legíveis no log.
+        caminho = urlparse(self.path).path
+        if caminho.startswith("/mock/"):
+            caminho = re.sub(r"\d{5,}", lambda m: mascarar_telefone(m.group(0)), caminho)
         self.server.mock.log(
             f"[mock] {self.command} {caminho} → {args[1] if len(args) > 1 else '?'}"
         )

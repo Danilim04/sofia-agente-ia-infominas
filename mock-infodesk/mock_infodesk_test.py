@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import socket
 import sys
 import threading
 import unittest
@@ -560,6 +561,34 @@ class TestMockInfodesk(unittest.TestCase):
         self.assertNotIn("telefone=", texto)
         self.assertNotRegex(texto, r"\d{8,}")
         self.assertIn("***7665", texto)
+
+    def test_content_length_acima_do_teto_fecha_a_conexao_keep_alive(self) -> None:
+        # Socket cru, mesma conexão: POST com Content-Length acima do teto (corpo pequeno)
+        # seguido de um GET. O mock responde 400 UMA vez, com Connection: close, e fecha:
+        # os bytes do corpo não viram a "próxima requisição" (nada de 501 do http.server).
+        pedido = (
+            "POST /api/integration/v1/tickets HTTP/1.1\r\nHost: x\r\n"
+            f"Authorization: Bearer {CHAVE}\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {mock_infodesk.CORPO_MAX_BYTES + 1}\r\n\r\n"
+            '{"deskId":"x","title":"y"}'
+            f"GET /api/integration/v1/desks HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {CHAVE}\r\n\r\n"
+        ).encode()
+        with socket.create_connection(
+            ("127.0.0.1", self.servidor.server_address[1]), timeout=5
+        ) as sock:
+            sock.sendall(pedido)
+            recebido = b""
+            while True:
+                parte = sock.recv(65536)
+                if not parte:
+                    break
+                recebido += parte
+        texto = recebido.decode("utf-8")
+        self.assertTrue(texto.startswith("HTTP/1.1 400 "), texto[:80])
+        self.assertEqual(texto.count("HTTP/1.1 "), 1, texto)
+        self.assertIn("Connection: close", texto)
+        self.assertNotIn("501", texto)
+        self.assertEqual(json.loads(texto.split("\r\n\r\n", 1)[1])["statusCode"], 400)
 
     def test_405_metodo_errado_em_rota_conhecida(self) -> None:
         self.assert_erro(chamar(self.api, "GET", "/tickets"), 405)
