@@ -44,7 +44,7 @@ WhatsApp → Evolution → Chatwoot ──webhook──► gateway (Go)  ──P
   (`30 6 * * *` e `0 7 * * 0`). **Atenção ao fuso**: a VM atual está em
   `Europe/Berlin` (a antiga era UTC), então hoje isso dá 01:30/02:30 em
   Brasília — inofensivo, mas ajuste os horários na role se quiser 03:30 BRT.
-  Log: `journalctl -t azapfy-sync`. Runbook: `plano-migracao-pgvector.md`.
+  Log: `journalctl -t azapfy-sync`. Runbook: `docs/zapin/plano-migracao-pgvector.md`.
 - Fonte única do IP: `infra/ansible/inventories/prod/hosts.yml` (a pipeline lê
   de lá). A VM anterior (Hetzner `62.238.63.240`, x86_64/Ubuntu) foi desativada;
   o root `infra/terraform` descreve **aquela** VM (import do id Hetzner) e não

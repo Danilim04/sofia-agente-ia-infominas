@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # Backend de leitura do RAG: "chroma" (legado, default) ou "pgvector".
     # A migração é chaveável para permitir rollback instantâneo: o sync grava
     # no pgvector independente deste valor; este valor só decide de onde o
-    # agente LÊ. Ver plano-migracao-pgvector.md na raiz do repo.
+    # agente LÊ. Ver docs/zapin/plano-migracao-pgvector.md.
     vector_backend: str = Field("chroma", alias="VECTOR_BACKEND")
     pgvector_url: str = Field("", alias="PGVECTOR_URL")
 

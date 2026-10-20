@@ -36,7 +36,7 @@
     group: '{{ deploy_user }}'
     mode: '0755'
 
-# --- Rotina do RAG (Fase 4 do plano-migracao-pgvector.md) ---------------------
+# --- Rotina do RAG (Fase 4 do docs/zapin/plano-migracao-pgvector.md) ---------------------
 # Sync diário da base de conhecimento (AzapDocs → pgvector) via compose, como o
 # usuário deploy (grupo docker). Horários em UTC (a VM roda em UTC):
 # 06:30 UTC = 03:30 em Brasília. Log: journalctl -t azapfy-sync.

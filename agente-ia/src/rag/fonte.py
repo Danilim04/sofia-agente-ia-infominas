@@ -1,7 +1,7 @@
 """Fontes de documentação para o pipeline de sincronização (Contrato B).
 
 Uma "fonte" é quem fornece a documentação a indexar. O contrato de dados é o
-do `contrato-b-api-documentacao-v1.md` (raiz do repo): listagem barata
+do `docs/zapin/contrato-b-api-documentacao-v1.md`: listagem barata
 (metadados, sem conteúdo) + busca de documento completo por id. Duas
 implementações:
 
