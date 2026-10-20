@@ -82,8 +82,7 @@ services:
       BRAIN_BASE_URL: http://brain:8001
       # Estado do gateway no Postgres (schema `gateway`, criado no boot).
       PG_URL: postgresql://rag:${PGVECTOR_PASSWORD:-}@pgvector:5432/rag
-      # Legado: SQLite só é usado quando PG_URL está vazio. O volume fica
-      # montado para consulta/migração manual do gateway.db antigo.
+      # SQLite só é usado quando PG_URL está vazio (dev sem Postgres).
       DB_PATH: /data/gateway.db
     volumes:
       - gateway-data:/data

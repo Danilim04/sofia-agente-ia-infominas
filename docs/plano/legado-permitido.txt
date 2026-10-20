@@ -4,7 +4,6 @@
 # REGRA: esta lista só ENCOLHE. Cada etapa que limpa um diretório remove a
 # linha. A Onda 4 (E4.6) termina com o arquivo vazio (só comentários).
 # Linhas começando com # são ignoradas.
-backend/
 agente-ia/src/
 agente-ia/server.py
 agente-ia/app.py

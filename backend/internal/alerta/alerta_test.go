@@ -43,21 +43,21 @@ func vigiaDeTeste() (*Vigia, *fakeNotificador, *time.Time) {
 // Regra 1: falha definitiva alerta na hora; transitória não.
 func TestFalhaDefinitivaAlertaNaHora(t *testing.T) {
 	v, n, _ := vigiaDeTeste()
-	v.FalhaRegistrada(Falha{ID: "ZPF-1", ConversationID: 7, Origem: "cerebro", Classe: "transitoria", Causa: "timeout"})
+	v.FalhaRegistrada(Falha{ID: "SOF-1", ConversationID: "conv-7", Origem: "cerebro", Classe: "transitoria", Causa: "timeout"})
 	if len(n.alertas) != 0 {
 		t.Fatalf("transitória não alerta: %+v", n.alertas)
 	}
-	v.FalhaRegistrada(Falha{ID: "ZPF-2", ConversationID: 7, Origem: "cerebro", Classe: "definitiva", Causa: "saldo (402)", Link: "http://cw/7"})
-	if len(n.alertas) != 1 || n.alertas[0].Tipo != TipoFalhaDefinitiva || n.alertas[0].IDOcorrencia != "ZPF-2" {
+	v.FalhaRegistrada(Falha{ID: "SOF-2", ConversationID: "conv-7", Origem: "cerebro", Classe: "definitiva", Causa: "saldo (402)", Link: "http://cw/7"})
+	if len(n.alertas) != 1 || n.alertas[0].Tipo != TipoFalhaDefinitiva || n.alertas[0].IDOcorrencia != "SOF-2" {
 		t.Fatalf("definitiva devia alertar uma vez com o ID: %+v", n.alertas)
 	}
 	if !strings.Contains(n.alertas[0].Texto, "saldo (402)") || n.alertas[0].Link != "http://cw/7" {
 		t.Fatalf("alerta sem causa/link: %+v", n.alertas[0])
 	}
-	// Falha técnica do Mongo também é "precisa de ação".
-	v.FalhaRegistrada(Falha{ID: "ZPF-3", ConversationID: 8, Origem: "mongo", Causa: "cadastro ilegível"})
-	if len(n.alertas) != 2 {
-		t.Fatalf("falha técnica do Mongo devia alertar: %+v", n.alertas)
+	// Sem classe (origem cliente/anexo) não é falha: não alerta.
+	v.FalhaRegistrada(Falha{ID: "SOF-3", ConversationID: "conv-8", Origem: "cliente", Causa: "pediu atendente"})
+	if len(n.alertas) != 1 {
+		t.Fatalf("transferência sem classe não alerta: %+v", n.alertas)
 	}
 }
 
@@ -130,8 +130,8 @@ func TestWebhookEnviaJSONComTexto(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	n := Padrao(srv.URL, nil)
-	n.Notificar(context.Background(), Alerta{Tipo: TipoFalhaDefinitiva, Titulo: "T", Texto: "X", IDOcorrencia: "ZPF-9", ConversationID: 5})
-	if recebido == nil || !strings.Contains(recebido["text"].(string), "T") || recebido["id_ocorrencia"] != "ZPF-9" {
+	n.Notificar(context.Background(), Alerta{Tipo: TipoFalhaDefinitiva, Titulo: "T", Texto: "X", IDOcorrencia: "SOF-9", ConversationID: "conv-5"})
+	if recebido == nil || !strings.Contains(recebido["text"].(string), "T") || recebido["id_ocorrencia"] != "SOF-9" {
 		t.Fatalf("webhook recebeu %+v", recebido)
 	}
 	// Sem URL, só o log — nada a enviar, nada a quebrar.
