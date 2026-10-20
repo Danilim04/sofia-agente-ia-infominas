@@ -1,10 +1,10 @@
 # Notas — `ticket/listar`
 
-- `chamados[].status_ticket: null`: mesmo motivo de `ticket/consultar`
-  (schema de `GET /tickets/:number` pendente — `docs/infodesk/07`, T1). A
-  lista vem da tabela local `tickets`; a atualização de status pelo Infodesk
-  é opcional (≤ 5 por chamada) e, quando falha, a lista é devolvida assim
-  mesmo com `null`.
+- `chamados[].status_ticket`: string, `"desconhecido"` quando o status não
+  foi lido (schema de `GET /tickets/:number` pendente — `docs/infodesk/07`,
+  T1). A lista vem da tabela local `tickets`; a atualização de status pelo
+  Infodesk é opcional (≤ 5 por chamada) e, quando falha, a lista é devolvida
+  assim mesmo.
 - `erro-chamados_indisponiveis.json`: o 01 **não** lista erro para esta tool.
   O motivo `chamados_indisponiveis` é herdado do `toolsapi.go` anterior para
   "não consegui ler a lista local agora" e entra aqui como **hipótese de

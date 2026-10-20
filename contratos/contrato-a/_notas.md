@@ -14,7 +14,9 @@
   é `null`; o gateway decide repetir ou transferir.
 - `encerrar-episodio-*`: `conversation.finished` → o cérebro limpa
   `proposta_chamado` e `classificacao` (a identificação é por telefone, no
-  gateway). `proposta_limpa` diz se havia proposta pendente.
+  gateway). `proposta_limpa` diz se havia proposta pendente. `status: "ok"`
+  (string, não booleano) é a forma que os dois lados já têm
+  (`backend/internal/brain`, `agente-ia/server.py`) e fica assim.
 - `classificar-*` (**só evals/ops**, mesmo `X-Tools-Token`): o 01 não fixa
   o JSON; o formato aqui (`mensagem` + `historico[{autor, texto}]` →
   `classificacao` + `frustracao` + `seguranca` + `esclarecimento`) é

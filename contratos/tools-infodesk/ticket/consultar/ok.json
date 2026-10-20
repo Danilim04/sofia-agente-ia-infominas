@@ -1,7 +1,7 @@
 {
   "status": true,
   "numero": "48213",
-  "status_ticket": null,
+  "status_ticket": "desconhecido",
   "titulo": "Internet sem conexão desde ontem à noite",
   "aberto_em": "2026-10-20T14:33:10-03:00",
   "atualizado_em": null,

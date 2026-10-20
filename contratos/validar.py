@@ -124,9 +124,17 @@ ANINHADO: dict[str, dict[str, set[str]]] = {
 
 # Extras que um erro específico carrega além de status/erro/motivo.
 EXTRAS_ERRO: dict[str, dict[str, set[str]]] = {
+    "ticket/preparar": {"chamado_aberto": {"chamados_abertos"}},
+}
+
+# Listas de objetos que os dois lados leem item a item: trilha até a lista →
+# chaves de cada item (lista vazia é aceita).
+ANINHADO_LISTA: dict[str, dict[str, set[str]]] = {
     "ticket/preparar": {
-        "chamado_aberto": {"chamados_abertos"},
-        "categoria_sem_mapa": {"categoria"},
+        "erro-chamado_aberto.chamados_abertos": {"numero", "titulo", "categoria", "aberto_em"},
+    },
+    "ticket/listar": {
+        "ok.chamados": {"numero", "titulo", "categoria", "status_ticket", "aberto_em"},
     },
 }
 
@@ -242,6 +250,21 @@ def validar_endpoint(endpoint: str, rel: Relatorio) -> None:
         else:
             checar_chaves(f"{endpoint}/{arquivo}.json:{resto}", obj, chaves, rel)
 
+    for trilha, chaves in ANINHADO_LISTA.get(endpoint, {}).items():
+        arquivo, _, resto = trilha.partition(".")
+        base = dados.get(f"{arquivo}.json")
+        if base is None:
+            continue
+        lista = base.get(resto)
+        if not isinstance(lista, list):
+            rel.falha(f"{endpoint}/{arquivo}.json: `{resto}` ausente ou não é lista")
+            continue
+        for i, item in enumerate(lista):
+            if not isinstance(item, dict):
+                rel.falha(f"{endpoint}/{arquivo}.json: `{resto}[{i}]` não é objeto")
+            else:
+                checar_chaves(f"{endpoint}/{arquivo}.json:{resto}[{i}]", item, chaves, rel)
+
     motivos_vistos: set[str] = set()
     for nome in erros:
         dado = dados.get(nome)
@@ -301,7 +324,7 @@ def validar_contrato_a(rel: Relatorio) -> None:
             continue
         checar_chaves(f"contrato-a/{nome}", dado, chaves, rel)
         if nome.startswith("chat-response"):
-            if dado["erro"] is None and not isinstance(dado.get("classificacao"), dict):
+            if dado.get("erro") is None and not isinstance(dado.get("classificacao"), dict):
                 rel.falha(f"contrato-a/{nome}: resposta sem erro precisa de `classificacao`")
             if isinstance(dado.get("classificacao"), dict):
                 checar_chaves(
@@ -320,9 +343,15 @@ def validar_contrato_a(rel: Relatorio) -> None:
                 if not isinstance(acao, dict) or {"tipo", "origem", "motivo"} - set(acao):
                     rel.falha(f"contrato-a/{nome}: cada ação precisa de tipo, origem e motivo")
         if nome == "classificar-response.json":
-            checar_chaves(
-                f"contrato-a/{nome}:classificacao", dado["classificacao"], CLASSIFICACAO_CHAVES, rel
-            )
+            if isinstance(dado.get("classificacao"), dict):
+                checar_chaves(
+                    f"contrato-a/{nome}:classificacao",
+                    dado["classificacao"],
+                    CLASSIFICACAO_CHAVES,
+                    rel,
+                )
+            else:
+                rel.falha(f"contrato-a/{nome}: `classificacao` ausente ou não é objeto")
     if len(rel.problemas) == antes:
         rel.passou(f"contrato-a: {len(CONTRATO_A_ESQUEMA)} arquivos com as chaves do 01")
 

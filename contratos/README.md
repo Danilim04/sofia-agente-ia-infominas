@@ -57,8 +57,7 @@ envelope:
 
 `erro` é frase curta em pt-BR na voz da Sofia (sem jargão, sem texto cru do
 Infodesk); `motivo` é o código que a docstring da tool ensina o LLM a tratar.
-Alguns motivos carregam campos extras (`chamado_aberto` → `chamados_abertos`;
-`categoria_sem_mapa` → `categoria`). HTTP 400/401/405 ficam só para erro de
+Alguns motivos carregam campos extras (`chamado_aberto` → `chamados_abertos`). HTTP 400/401/405 ficam só para erro de
 protocolo (JSON inválido, token, método) e nunca chegam ao LLM como texto.
 
 ## Valores de exemplo (consistentes entre arquivos)
@@ -86,7 +85,9 @@ iguais ao esquema mínimo (`ESQUEMA`); objetos aninhados que os dois lados
 leem (`proposta`); e os arquivos do Contrato A com as chaves do 01. Compara
 **chaves**, não valores: `null` é aceito onde a pendência manda.
 
-O job `contratos` do CI roda este validador e, a partir da E2.3/E3.1, os
+Hoje o validador roda **só manualmente** (e nesta documentação). O job
+`contratos` do CI ainda é um placeholder (`TODO(E1.6)` em `.github/`, fora da
+zona desta etapa): a E2.3/E3.1 liga nele `python -I contratos/validar.py` e os
 testes de contrato dos dois lados (`go test -run Contrato`, `pytest -m contrato`).
 
 ## Como adicionar ou alterar um contrato
@@ -95,7 +96,7 @@ testes de contrato dos dois lados (`go test -run Contrato`, `pytest -m contrato`
    bloco do Contrato A). Sem linha no 01, não há contrato.
 2. Crie/edite os JSON aqui (`request.json`, `ok.json`, um `erro-<motivo>.json`
    por motivo) e a `_notas.md` se algum campo precisar de explicação.
-3. Atualize `validar.py` (`MOTIVOS`, `ESQUEMA`, `ANINHADO`, `EXTRAS_ERRO` ou
+3. Atualize `validar.py` (`MOTIVOS`, `ESQUEMA`, `ANINHADO`, `ANINHADO_LISTA`, `EXTRAS_ERRO` ou
    `CONTRATO_A_ESQUEMA`) e rode-o.
 4. No **mesmo PR**, ajuste o handler Go (`backend/internal/toolsapi` ou
    `internal/brain`) e a tool Python (`src/tools`, `tool_policy.py`) com seus
@@ -112,10 +113,11 @@ configurável.
 
 | Campo | Arquivos | Pendência |
 |---|---|---|
-| `status_ticket`, `atualizado_em` | `ticket/consultar/ok.json`, `ticket/listar/ok.json` | **T1** — schema de `GET /tickets/:number` não documentado (o 01 prevê `"desconhecido"` como texto; o Go decide na E3.1) |
+| `atualizado_em` (`null`) e `status_ticket` (`"desconhecido"`) | `ticket/consultar/ok.json`, `ticket/listar/ok.json` | **T1** — schema de `GET /tickets/:number` não documentado; o 01 fixa `status_ticket` como string com fallback `"desconhecido"` e `null` para o resto |
 | `prioridade.id` | `ticket/preparar/ok.json`, `ticket/abrir/*.json` | **T3** — sem rota de prioridades; `priorityId` omitido no POST |
 | `cliente_id`, `nome_cadastro` | `contato/identificar/ok.json`, `contrato-a/chat-request.json` | **T4 / P2** — sem rota de busca de cliente |
 | posse (`erro-posse_nao_verificada`) | `ticket/consultar` | **P3 / T5** — sem `contactPhone` na consulta nem listagem; posse só pela tabela local |
+| `identificacao` = `{forma, valor_mascarado}` | `ticket/preparar/request.json`, `ticket/consultar/request.json` | o 01 escreve o injetado como `{cpf\|contrato}`; o contrato manda a visão **mascarada** (regra 5 do CLAUDE.md) e o gateway resolve pela tabela `contatos` via `telefone` — hipótese, `TODO(E2.3)` confirmar e atualizar as linhas A2/A4 do 01 |
 | `erro-chamados_indisponiveis` | `ticket/listar` | o 01 não lista erro para `listar`; motivo herdado do `toolsapi.go` anterior como hipótese — `TODO(E3.1)` confirmar e registrar no 01 |
 | `classificar-*` | `contrato-a/` | o 01 não fixa o JSON de `POST /classificar`; formato é hipótese para a E2.2 (`TODO(E2.2)`) |
 | `esclarecimento` | `contrato-a/classificar-response.json` | pergunta de esclarecimento gerada quando a categoria fica entre os limiares (02); `null` quando não há |
