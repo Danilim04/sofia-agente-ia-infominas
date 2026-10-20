@@ -34,28 +34,61 @@ class _FakeGraph:
 def test_processar_chat_extrai_reply_e_fontes_e_isola_por_conversa():
     valores = {
         "messages": [HumanMessage(content="oi"), AIMessage(content="resposta do agente")],
-        "fontes_usadas": ["azapfy-web.md — Módulo: Pesquisa"],
+        "fontes_usadas": ["internet-residencial.md — Reiniciar o roteador"],
     }
     g = _FakeGraph(valores)
+    contato = {"forma": "cpf", "valor_mascarado": "***.***.789-**", "cliente_id": None}
     req = ChatRequest(
         conversation_id="conv-123",
-        mensagem="como funciona a Pesquisa?",
-        identidade={"encontrado": True, "login": "10596693664"},
+        mensagem="como reinicio o roteador?",
+        telefone="5531999990001",
+        nome_contato="Maria",
+        contato=contato,
     )
 
     resp = asyncio.run(processar_chat(g, req))
 
     assert resp.reply == "resposta do agente"
-    assert resp.fontes == ["azapfy-web.md — Módulo: Pesquisa"]
+    assert resp.fontes == ["internet-residencial.md — Reiniciar o roteador"]
     assert resp.acoes == []
+    assert resp.classificacao is None  # E2.2 preenche
     # thread_id = conversation_id (isolamento por conversa)
     assert g.last_config["configurable"]["thread_id"] == "conv-123"
-    # identidade repassada ao estado; mensagem vira HumanMessage
-    assert g.last_inputs["identidade"] == {"encontrado": True, "login": "10596693664"}
-    # conversation_id entra no estado (as tools do SAC o repassam ao gateway)
+    # contato/nome/telefone repassados ao estado; mensagem vira HumanMessage
+    assert g.last_inputs["nome_contato"] == "Maria"
+    assert g.last_inputs["contato"] == contato
+    assert g.last_inputs["telefone"] == "5531999990001"
+    # conversation_id entra no estado (as tools o repassam ao gateway)
     assert g.last_inputs["conversation_id"] == "conv-123"
     assert isinstance(g.last_inputs["messages"][0], HumanMessage)
-    assert g.last_inputs["messages"][0].content == "como funciona a Pesquisa?"
+    assert g.last_inputs["messages"][0].content == "como reinicio o roteador?"
+
+
+def test_chat_request_e_compativel_com_campos_antigos_e_novos():
+    """Contrato A só cresce: campos desconhecidos são ignorados e os novos são
+    opcionais — um gateway antigo ou novo fala com este cérebro."""
+    req = ChatRequest.model_validate(
+        {"conversation_id": "c", "mensagem": "oi", "identidade": {"x": 1}, "session_token": "t"}
+    )
+    assert req.contato is None and req.nome_contato is None and req.estado_conversa == "bot"
+
+
+def test_processar_chat_devolve_classificacao_do_estado():
+    classificacao = {"intencao": "reclamacao", "categoria": "sem_conexao", "confianca": 0.9}
+    g = _FakeGraph({"messages": [AIMessage(content="ok")], "classificacao": classificacao})
+    resp = asyncio.run(processar_chat(g, ChatRequest(conversation_id="c", mensagem="oi")))
+    assert resp.classificacao == classificacao
+
+
+def test_processar_chat_mascara_telefone_no_log(caplog):
+    g = _FakeGraph({"messages": [AIMessage(content="ok")]})
+    req = ChatRequest(conversation_id="c", mensagem="oi", telefone="5531999990001")
+    with caplog.at_level(logging.INFO, logger="server"):
+        asyncio.run(processar_chat(g, req))
+    linha = next(
+        r.getMessage() for r in caplog.records if r.getMessage().startswith("chat_request")
+    )
+    assert "5531999990001" not in linha and "telefone=**********001" in linha
 
 
 def test_processar_chat_reply_vazio_quando_sem_aimessage():
@@ -82,7 +115,7 @@ def test_processar_chat_tolera_content_em_blocos():
 
 
 # ---------------------------------------------------------------------------
-# ZC-2: falha do grafo é CLASSIFICADA e devolvida ao gateway (classe + ID) —
+# Falha do grafo é CLASSIFICADA e devolvida ao gateway (classe + ID) —
 # nunca uma exceção solta virando 500 mudo no uvicorn.
 # ---------------------------------------------------------------------------
 
@@ -103,7 +136,7 @@ class _ErroProvedor(Exception):
         self.status_code = status_code
 
 
-_RE_ID = re.compile(r"^ZPF-\d{8}-\d{4}-\d{2}$")
+_RE_ID = re.compile(r"^SOF-\d{8}-\d{4}-\d{2}$")
 
 
 def test_processar_chat_402_nao_explode_e_devolve_definitiva(caplog):
@@ -186,7 +219,7 @@ def test_endpoint_chat_devolve_status_por_classe_com_corpo(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# ZC-6: prazo do turno no cérebro — o grafo que não termina a tempo vira falha
+# Prazo do turno no cérebro — o grafo que não termina a tempo vira falha
 # TRANSITÓRIA classificada (o gateway repete ou transfere), não um turno que
 # conclui depois de o cliente já ter recebido erro.
 # ---------------------------------------------------------------------------
@@ -221,16 +254,16 @@ def test_processar_chat_respeita_prazo_do_turno(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# ZB-1: conversa RESOLVIDA no Chatwoot = fim do episódio também no cérebro —
-# `POST /encerrar-episodio` limpa a proposta de chamado pendente da conversa
-# (o Chatwoot reutiliza a conversa; uma proposta antiga não pode ser
-# "confirmada" por uma mensagem qualquer do episódio seguinte).
+# Conversa ENCERRADA no Infodesk = fim do episódio também no cérebro —
+# `POST /encerrar-episodio` limpa proposta pendente, classificação e
+# identificação da conversa (uma proposta antiga não pode ser "confirmada"
+# por uma mensagem qualquer do episódio seguinte).
 # ---------------------------------------------------------------------------
 
 
-def _grafo_real_com_proposta(monkeypatch, thread_id: str, proposta):
+def _grafo_real_com_proposta(monkeypatch, thread_id: str, proposta, **extra):
     """Grafo real (LLM falso, MemorySaver) com um turno rodado e a proposta
-    no estado persistido do `thread_id`."""
+    (e campos extras) no estado persistido do `thread_id`."""
     from unittest.mock import MagicMock
 
     from src.agent import nodes
@@ -249,7 +282,12 @@ def _grafo_real_com_proposta(monkeypatch, thread_id: str, proposta):
     )
     cfg = {"configurable": {"thread_id": thread_id}}
     g.invoke(
-        {"telefone": "1", "proposta_chamado": proposta, "messages": [HumanMessage(content="oi")]},
+        {
+            "telefone": "1",
+            "proposta_chamado": proposta,
+            "messages": [HumanMessage(content="oi")],
+            **extra,
+        },
         config=cfg,
     )
     return g, cfg, fake
@@ -263,6 +301,7 @@ def test_encerrar_episodio_limpa_proposta_pendente_e_preserva_historico(monkeypa
     resp = asyncio.run(server.encerrar_episodio(g, "conv-45"))
 
     assert resp.status == "ok" and resp.proposta_limpa is True
+    assert resp.campos_limpos == ["proposta_chamado"]
     estado = g.get_state(cfg)
     assert estado.values["proposta_chamado"] is None
     assert estado.next == ()  # nada pendente para o próximo turno
@@ -273,6 +312,24 @@ def test_encerrar_episodio_limpa_proposta_pendente_e_preserva_historico(monkeypa
     assert fake.invoke.call_count == 2
     assert out["proposta_chamado"] is None
     assert len(out["messages"]) == 4
+
+
+def test_encerrar_episodio_limpa_classificacao_e_identificacao(monkeypatch):
+    g, cfg, _ = _grafo_real_com_proposta(
+        monkeypatch,
+        "conv-45b",
+        None,
+        classificacao={"categoria": "sem_conexao"},
+        identificacao={"forma": "cpf", "valor_mascarado": "***.***.789-**"},
+        contato={"forma": "cpf", "valor_mascarado": "***.***.789-**"},
+    )
+    resp = asyncio.run(server.encerrar_episodio(g, "conv-45b"))
+    assert resp.proposta_limpa is False
+    assert resp.campos_limpos == ["classificacao", "identificacao"]
+    valores = g.get_state(cfg).values
+    assert valores["classificacao"] is None and valores["identificacao"] is None
+    # O cache do gateway (`contato`) NÃO é do episódio: fica.
+    assert valores["contato"] == {"forma": "cpf", "valor_mascarado": "***.***.789-**"}
 
 
 def test_encerrar_episodio_sem_proposta_nao_mexe_no_estado(monkeypatch):
@@ -302,7 +359,11 @@ def test_endpoint_encerrar_episodio(monkeypatch):
 
     r = client.post("/encerrar-episodio", json={"conversation_id": "48"})
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "proposta_limpa": True}
+    assert r.json() == {
+        "status": "ok",
+        "proposta_limpa": True,
+        "campos_limpos": ["proposta_chamado"],
+    }
     assert g.get_state(cfg).values["proposta_chamado"] is None
 
     # Segunda vez: nada a limpar, continua 200.
@@ -322,5 +383,5 @@ def test_endpoint_encerrar_episodio_falha_vira_500_com_corpo(monkeypatch, caplog
     with caplog.at_level(logging.ERROR):
         r = client.post("/encerrar-episodio", json={"conversation_id": "49"})
     assert r.status_code == 500
-    assert r.json() == {"status": "erro", "proposta_limpa": False}
+    assert r.json() == {"status": "erro", "proposta_limpa": False, "campos_limpos": []}
     assert any("episodio_erro conversation_id=49" in m for m in caplog.messages)

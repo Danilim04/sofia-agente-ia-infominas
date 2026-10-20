@@ -3,18 +3,14 @@
 Carrega o `.env` real (se existir) para que testes de integração possam
 exercitar serviços externos com chaves reais. Em ambientes sem `.env`
 (CI, dev fresco), usa env vars dummy para `src.config.get_settings()`
-ainda validar — esses casos resultam em testes de integração pulados via
-`pytest.mark.skipif`.
+ainda validar — esses casos resultam em testes de integração pulados.
 
-Também isola o estado mutável dos mocks de CRM entre testes — sem isso,
-um teste que chama `abrir_novo_chamado` deixaria tickets pendurados no
-dicionário global e quebraria asserções de outros testes ("CLI-1001 sem
-chamados").
+Também zera o registro de execuções das tools de teste (`tests/fakes.py`)
+entre testes, para uma abertura contada num teste não vazar para outro.
 """
 
 from __future__ import annotations
 
-import copy
 import os
 
 import pytest
@@ -26,13 +22,11 @@ os.environ.setdefault("OPENROUTER_API_KEY", "test-openrouter-key")
 
 
 @pytest.fixture(autouse=True)
-def _isolar_estado_crm_mocks():
-    """Snapshot/restore do `_CHAMADOS` mutável entre testes."""
-    from src.tools import crm_mocks
+def _zerar_registro_das_tools_de_teste():
+    from tests import fakes
 
-    snapshot = copy.deepcopy(crm_mocks._CHAMADOS)
+    fakes.CHAMADAS.clear()
     try:
         yield
     finally:
-        crm_mocks._CHAMADOS.clear()
-        crm_mocks._CHAMADOS.update(snapshot)
+        fakes.CHAMADAS.clear()

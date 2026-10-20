@@ -1,11 +1,12 @@
-"""Testes de prevenção da lista canônica de tools (`get_default_tools`) — ZE-1.
+"""Testes de prevenção da lista canônica de tools (`get_default_tools`).
 
-Incidente (rodada 1): a tool de TESTE `rastrear_nota_fiscal` (mock em
-`src/tools/crm_mocks.py`) estava na lista oficial do agente e respondeu "nota
-não encontrada" a cliente real — 14 chamadas com números de nota verdadeiros
-contra um dicionário fictício. Daqui em diante NENHUMA tool do módulo
-`src.tools.crm_mocks` pode entrar na lista canônica: mock é só para
-testes/harness, até existir integração real.
+Lição herdada: uma tool de TESTE (mock) entrou na lista oficial do agente e
+respondeu dados fictícios a cliente real. Daqui em diante nenhuma tool de
+módulo de mock/harness/teste pode entrar na lista canônica, e o system prompt
+não pode anunciar capacidade que o agente não tem.
+
+Nesta etapa (E1.3) a lista está VAZIA: as tools do domínio antigo saíram e as
+do Infodesk entram em E2.3 — os testes abaixo já valem para elas.
 """
 
 from __future__ import annotations
@@ -14,13 +15,20 @@ from langchain_core.tools import BaseTool
 
 from src.agent.graph import get_default_tools
 from src.agent.prompts import SYSTEM_PROMPT_AGENTE
-from src.tools import crm_mocks
-from src.tools.sac_tools import SAC_TOOLS
+from src.agent.tool_policy import POLITICAS
 
-MODULO_MOCKS = crm_mocks.__name__  # "src.tools.crm_mocks"
+#: Tools que o plano prevê expor ao modelo (docs/plano/01-ferramentas.md, A1–A6).
+TOOLS_DO_PLANO = {
+    "informar_identificacao",
+    "preparar_abertura_chamado",
+    "abrir_chamado",
+    "consultar_status_chamado",
+    "listar_meus_chamados",
+    "transferir_para_atendente",
+}
 
 
-def _modulo_de_origem(tool: BaseTool) -> str | None:
+def _modulo_de_origem(tool: BaseTool) -> str:
     """Módulo da função embrulhada pelo `@tool` (`StructuredTool.func`/`coroutine`).
 
     Fallback: módulo da classe (tools definidas como subclasse de `BaseTool`).
@@ -28,61 +36,48 @@ def _modulo_de_origem(tool: BaseTool) -> str | None:
     for attr in ("func", "coroutine"):
         fn = getattr(tool, attr, None)
         if fn is not None:
-            return getattr(fn, "__module__", None)
+            return getattr(fn, "__module__", "") or ""
     return type(tool).__module__
 
 
-def _tools_definidas_em_crm_mocks() -> dict[int, str]:
-    """Toda instância de `BaseTool` presente no namespace do módulo mock."""
-    return {id(obj): nome for nome, obj in vars(crm_mocks).items() if isinstance(obj, BaseTool)}
-
-
-def test_nenhuma_tool_da_lista_oficial_vem_de_crm_mocks():
-    """Falha se QUALQUER tool de `get_default_tools()` vier de `src.tools.crm_mocks`.
-
-    Três detectores independentes (módulo da função, identidade do objeto e
-    nome), para pegar também re-exports e aliases.
-    """
-    tools = get_default_tools()
-    assert tools, "lista canônica vazia"
-
-    por_identidade = _tools_definidas_em_crm_mocks()
-    nomes_mock = {t.name for t in crm_mocks.CRM_TOOLS} | set(por_identidade.values())
-
-    infratoras = sorted(
-        t.name
-        for t in tools
-        if _modulo_de_origem(t) == MODULO_MOCKS or id(t) in por_identidade or t.name in nomes_mock
-    )
-    assert infratoras == [], (
-        f"tool(s) de TESTE ({MODULO_MOCKS}) na lista oficial do agente: "
-        f"{infratoras} — mock não pode atender cliente real (ZE-1)"
-    )
-
-
-def test_lista_oficial_e_exatamente_as_sac_tools():
-    """Hoje a lista canônica são só os chamados reais (SAC via gateway Go)."""
-    assert [t.name for t in get_default_tools()] == [t.name for t in SAC_TOOLS]
-
-
-def test_rastrear_nota_fiscal_fora_da_lista_oficial():
-    assert "rastrear_nota_fiscal" not in {t.name for t in get_default_tools()}
+def test_lista_canonica_vazia_ate_e23():
+    assert get_default_tools() == []
+    assert POLITICAS == {}
 
 
 def test_toda_tool_oficial_vem_de_modulo_de_producao():
-    """Nenhuma tool canônica pode vir de módulo de mock/harness."""
+    """Nenhuma tool canônica pode vir de módulo de mock/harness/teste."""
     for t in get_default_tools():
-        modulo = _modulo_de_origem(t) or ""
-        assert "mock" not in modulo, f"{t.name} vem de módulo de mock: {modulo}"
+        modulo = _modulo_de_origem(t)
+        assert modulo.startswith("src.tools."), f"{t.name} vem de fora de src.tools: {modulo}"
+        assert not any(p in modulo for p in ("mock", "fake", "tests")), (
+            f"{t.name} vem de módulo de teste: {modulo}"
+        )
 
 
-def test_prompt_nao_anuncia_rastreio_de_nota_fiscal_ao_modelo():
-    """O system prompt não pode prometer uma capacidade que o agente não tem."""
+def test_toda_tool_oficial_esta_no_plano():
+    fora = {t.name for t in get_default_tools()} - TOOLS_DO_PLANO
+    assert not fora, f"tools fora do catálogo de docs/plano/01-ferramentas.md: {fora}"
+
+
+def test_prompt_nao_anuncia_capacidade_que_o_agente_nao_tem():
     sp = SYSTEM_PROMPT_AGENTE
-    assert "rastrear_nota_fiscal" not in sp
-    assert "rastrear ela aqui" not in sp
-    assert "rastreei aqui" not in sp
-    # Diz explicitamente que não há ferramenta de consulta operacional e para
-    # onde orientar (plataforma / chamado).
-    assert "não tem ferramenta" in sp.lower()
-    assert "Histórico/Tracking" in sp
+    for proibido in ("rastrear_nota_fiscal", "buscar_na_web", "pesquisar na web", "rastreei aqui"):
+        assert proibido not in sp
+    # Diz explicitamente que não acessa a internet e que ferramenta ausente
+    # não pode ser fingida.
+    assert "NÃO tem acesso à internet" in sp
+    assert "não finja tê-la usado" in sp
+
+
+def test_prompt_so_cita_tools_do_plano():
+    """Toda tool mencionada em crase no prompt pertence ao catálogo.
+
+    Nome de tool = verbo_objeto (tem `_`); `titulo`/`descricao`/`proposta` em
+    crase são argumentos/campos, não tools.
+    """
+    import re
+
+    citadas = set(re.findall(r"`([a-z]+_[a-z_]+)`", SYSTEM_PROMPT_AGENTE))
+    assert citadas, "o prompt precisa descrever o fluxo pelas tools do plano"
+    assert citadas <= TOOLS_DO_PLANO, citadas - TOOLS_DO_PLANO

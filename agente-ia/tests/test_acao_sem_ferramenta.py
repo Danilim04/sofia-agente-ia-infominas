@@ -1,6 +1,6 @@
 """Testes de prevenção — resposta que AFIRMA ação sem ferramenta no turno (ZE-2).
 
-Incidente (rodada 1, conversa #12, msgs 749/753/755): o agente respondeu "já
+Incidente herdado: o agente respondeu "já
 deixei o recado registrado" sem ter chamado ferramenta nenhuma. Fora de um
 chamado aberto por ferramenta não existe recado, anotação nem aviso ao time.
 
@@ -27,8 +27,7 @@ from src.agent import nodes
 from src.agent.graph import build_graph
 from src.agent.prompts import RESPOSTA_ACAO_SEM_FERRAMENTA, RESPOSTA_ERRO_INTERNO
 from src.security.output_guardrails import afirmacoes_de_acao
-from src.tools import sac_tools
-from src.tools.sac_tools import abrir_chamado_suporte
+from tests.fakes import registrar_duas_fases_de_teste, tool_abrir_de_teste
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -36,18 +35,16 @@ from src.tools.sac_tools import abrir_chamado_suporte
 
 _SUCESSO_ABERTURA = {
     "status": True,
-    "protocolo": "2026-000123",
-    "link": "https://sac.exemplo/chat/123",
-    "prioridade": "MEDIA",
+    "numero": "4821",
+    "mesa": "Suporte",
+    "transferido": True,
 }
 
-_IDENTIDADE = {
-    "encontrado": True,
-    "login": "10596693664",
-    "nome": "Daniel",
-    "empresas": [
-        {"grupo_empresa": "AZAPERS", "grupo_user": "COLABORADOR", "area": "SAC", "bases": []}
-    ],
+_CONTATO = {
+    "forma": "cpf",
+    "valor_mascarado": "***.***.789-**",
+    "cliente_id": None,
+    "nome_cadastro": None,
 }
 
 
@@ -113,7 +110,7 @@ def _sem_rag(pergunta: str) -> dict:
 )
 def test_afirmacao_de_acao_sem_ferramenta_e_barrada(resposta):
     ultima = AIMessage(content=resposta)
-    out = _guardrail([HumanMessage(content="meu app travou, resolve pra mim"), ultima])
+    out = _guardrail([HumanMessage(content="minha internet caiu, resolve pra mim"), ultima])
 
     novo = out["messages"][0]
     assert novo.content == RESPOSTA_ACAO_SEM_FERRAMENTA
@@ -145,15 +142,14 @@ def test_barrar_emite_log_de_aviso_sem_expor_a_resposta_no_info(caplog):
 def test_turno_com_tool_de_chamado_bem_sucedida_passa():
     ultima = AIMessage(
         content=(
-            "Pronto! Abri o chamado 2026-000123 para você. Acompanhe e fale com o "
-            "atendente pelo chat: https://sac.exemplo/chat/123"
+            "Pronto! Abri o chamado 4821 para você. A equipe de Suporte assume a partir daqui."
         )
     )
     out = _guardrail(
         [
             HumanMessage(content="pode abrir"),
-            _ai_tool_call("abrir_chamado_suporte"),
-            _tool_msg("abrir_chamado_suporte", _SUCESSO_ABERTURA),
+            _ai_tool_call("abrir_chamado"),
+            _tool_msg("abrir_chamado", _SUCESSO_ABERTURA),
             ultima,
         ]
     )
@@ -165,8 +161,8 @@ def test_turno_com_consulta_bem_sucedida_tambem_passa():
     out = _guardrail(
         [
             HumanMessage(content="tenho chamados abertos?"),
-            _ai_tool_call("listar_chamados_abertos"),
-            _tool_msg("listar_chamados_abertos", {"status": True, "total": 0, "chamados": []}),
+            _ai_tool_call("listar_meus_chamados"),
+            _tool_msg("listar_meus_chamados", {"status": True, "total": 0, "chamados": []}),
             AIMessage(content="Verifiquei aqui e já registrei: você não tem chamados abertos."),
         ]
     )
@@ -181,17 +177,17 @@ def test_turno_com_consulta_bem_sucedida_tambem_passa():
 @pytest.mark.parametrize(
     "resposta",
     [
-        "Para sincronizar, arraste a tela para baixo no app do motorista. Se não aparecer, me avisa.",
+        "Para reiniciar, desligue o roteador da tomada por 30 segundos e ligue de novo. Se não voltar, me avisa.",
         "Quer que eu abra um chamado para o time verificar?",
-        "Vou registrar 'painel fora'. Posso abrir?",
+        "Vou registrar 'sem conexão desde cedo'. Posso abrir?",
         "Verifiquei aqui e não encontrei isso na base. Posso abrir um chamado para o time confirmar?",
-        "Você pode registrar a ocorrência pelo app, na aba Pendentes.",
-        "Eu que agradeço! Qualquer outra dúvida, estamos à disposição! 🧡",
-        "Posso preparar o chamado com esse resumo: app trava ao bipar. Pode abrir?",
+        "Você pode registrar a reclamação pelo app da Infominas também, se preferir.",
+        "Eu que agradeço! Qualquer coisa, é só chamar. 😊",
+        "Posso preparar o chamado com esse resumo: sem conexão desde cedo. Pode abrir?",
         "Você tem algum chamado aberto sobre isso? Posso listar para você.",
-        "Depois de aberto, o chamado fica registrado no SAC e você acompanha pelo link.",
-        "Como te informei acima, o romaneio aparece como 4-XXXXXX na Pesquisa.",
-        "Boníssima tarde, Maria! Tudo bem por aí? 🧡",
+        "Depois de aberto, o chamado fica registrado no sistema e você acompanha pelo número.",
+        "Como te informei acima, o número do chamado vem na mensagem de confirmação.",
+        "Boa tarde, Maria! Sou a Sofia, da Infominas. Como posso te ajudar? 😊",
     ],
 )
 def test_resposta_comum_sem_afirmacao_passa(resposta):
@@ -206,8 +202,8 @@ def test_resposta_comum_sem_afirmacao_passa(resposta):
 
 def test_frase_no_passado_dita_pelo_cliente_e_citada_nao_barra():
     resposta = (
-        'Entendi, você comentou "já registrei a ocorrência no app" e ela não aparece. '
-        "Consegue me dizer em qual aba você olhou, por gentileza?"
+        'Entendi, você comentou "já registrei a reclamação no app" e ela não aparece. '
+        "Consegue me dizer em qual tela você olhou?"
     )
     assert (
         _guardrail([HumanMessage(content="já registrei e sumiu"), AIMessage(content=resposta)])
@@ -217,11 +213,11 @@ def test_frase_no_passado_dita_pelo_cliente_e_citada_nao_barra():
 
 def test_acao_do_cliente_em_terceira_pessoa_nao_barra():
     resposta = (
-        "Certinho: você registrou a ocorrência e o motorista anotou o canhoto. "
-        "Vamos ver por que não sincronizou — arrasta a tela para baixo no app, por gentileza."
+        "Certinho: você registrou a reclamação e o técnico anotou a visita. "
+        "Vamos ver por que não consta — me passa o número do chamado?"
     )
     assert (
-        _guardrail([HumanMessage(content="registrei a ocorrência"), AIMessage(content=resposta)])
+        _guardrail([HumanMessage(content="registrei a reclamação"), AIMessage(content=resposta)])
         == {}
     )
 
@@ -243,11 +239,11 @@ def test_tool_de_turno_anterior_nao_conta():
     ultima = AIMessage(content="Já registrei esse também, pode deixar.")
     out = _guardrail(
         [
-            HumanMessage(content="abre um chamado: app travando"),
-            _ai_tool_call("abrir_chamado_suporte"),
-            _tool_msg("abrir_chamado_suporte", _SUCESSO_ABERTURA),
-            AIMessage(content="Pronto! Abri o chamado 2026-000123."),
-            HumanMessage(content="e o relatório que não gera?"),
+            HumanMessage(content="abre um chamado: sem conexão"),
+            _ai_tool_call("abrir_chamado"),
+            _tool_msg("abrir_chamado", _SUCESSO_ABERTURA),
+            AIMessage(content="Pronto! Abri o chamado 4821."),
+            HumanMessage(content="e a fatura que não chegou?"),
             ultima,
         ]
     )
@@ -258,9 +254,9 @@ def test_tool_recusada_pela_politica_nao_conta_como_acao():
     out = _guardrail(
         [
             HumanMessage(content="pode abrir"),
-            _ai_tool_call("abrir_chamado_suporte"),
+            _ai_tool_call("abrir_chamado"),
             _tool_msg(
-                "abrir_chamado_suporte",
+                "abrir_chamado",
                 {"erro": "não há proposta de chamado preparada", "recusado_pela_politica": True},
             ),
             AIMessage(content="Pronto! Abri o chamado para você."),
@@ -273,10 +269,10 @@ def test_tool_que_falhou_nao_conta_como_acao():
     out = _guardrail(
         [
             HumanMessage(content="pode abrir"),
-            _ai_tool_call("abrir_chamado_suporte"),
+            _ai_tool_call("abrir_chamado"),
             _tool_msg(
-                "abrir_chamado_suporte",
-                {"status": False, "erro": "o sistema de chamados está indisponível agora"},
+                "abrir_chamado",
+                {"status": False, "erro": "o Infodesk está indisponível agora"},
             ),
             AIMessage(content="Registrei aqui e abro assim que o sistema voltar, ok?"),
         ]
@@ -305,9 +301,9 @@ def test_afirmacoes_de_acao_devolve_trechos_e_ignora_acento_e_caixa():
 
 
 def test_turno_executou_ferramenta_distingue_sucesso_falha_e_turno():
-    sucesso = _tool_msg("listar_chamados_abertos", {"status": True, "total": 0, "chamados": []})
-    falha = _tool_msg("listar_chamados_abertos", {"status": False, "erro": "indisponível"})
-    recusa = _tool_msg("abrir_chamado_suporte", {"erro": "x", "recusado_pela_politica": True})
+    sucesso = _tool_msg("listar_meus_chamados", {"status": True, "total": 0, "chamados": []})
+    falha = _tool_msg("listar_meus_chamados", {"status": False, "erro": "indisponível"})
+    recusa = _tool_msg("abrir_chamado", {"erro": "x", "recusado_pela_politica": True})
     desconhecida = _tool_msg("xpto", {"erro": "tool desconhecida: xpto"})
     excecao = _tool_msg("xpto", {"erro": "a ferramenta falhou agora; tente de novo"})
     h, tc = HumanMessage(content="a"), _ai_tool_call("x")
@@ -336,7 +332,7 @@ def test_turno_executou_ferramenta_distingue_sucesso_falha_e_turno():
     )
     assert nodes._turno_executou_ferramenta([h, tc, rag]) is True
     # consulta que não achou nada (sem erro) ainda é execução
-    vazio = _tool_msg("rastrear_nota_fiscal", {"numero_nota": "NF-1", "encontrado": False})
+    vazio = _tool_msg("consultar_status_chamado", {"numero": "4821", "encontrado": False})
     assert nodes._turno_executou_ferramenta([h, tc, vazio]) is True
 
 
@@ -374,8 +370,8 @@ def test_e2e_grafo_troca_afirmacao_sem_ferramenta_pela_resposta_segura(monkeypat
     out = g.invoke(
         {
             "telefone": "11999990001",
-            "identidade": _IDENTIDADE,
-            "messages": [HumanMessage(content="meu app travou")],
+            "contato": _CONTATO,
+            "messages": [HumanMessage(content="minha internet caiu")],
         },
         config={"configurable": {"thread_id": "ze2-sem-tool"}},
     )
@@ -388,35 +384,24 @@ def test_e2e_grafo_troca_afirmacao_sem_ferramenta_pela_resposta_segura(monkeypat
 
 
 def test_e2e_grafo_abertura_real_de_chamado_mantem_resposta(monkeypatch):
-    """Fluxo real: proposta no estado → `abrir_chamado_suporte` (gateway stubado,
-    sem rede) → resposta que narra a abertura passa intacta."""
+    """Fluxo real: proposta carimbada no estado → tool de abertura (política e
+    efeito de teste, sem rede) → resposta que narra a abertura passa intacta."""
     _passa_seguranca(monkeypatch)
+    registrar_duas_fases_de_teste(monkeypatch)
 
-    class _FakeResp:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return dict(_SUCESSO_ABERTURA)
-
-    monkeypatch.setattr(sac_tools.httpx, "post", lambda *a, **k: _FakeResp())
-
-    final = (
-        "Pronto! Abri o chamado 2026-000123. A partir daqui, continue pelo chat "
-        "do chamado: https://sac.exemplo/chat/123"
-    )
-    fake = _fake_llm([_ai_tool_call("abrir_chamado_suporte"), AIMessage(content=final)])
-    g = build_graph(llm=fake, tools=[abrir_chamado_suporte], buscar_chunks=_sem_rag)
+    final = "Pronto! Abri o chamado 4821. A equipe de Suporte assume a partir daqui."
+    fake = _fake_llm([_ai_tool_call("tool_abrir_de_teste"), AIMessage(content=final)])
+    g = build_graph(llm=fake, tools=[tool_abrir_de_teste], buscar_chunks=_sem_rag)
 
     out = g.invoke(
         {
             "telefone": "5531999990000",
-            "identidade": _IDENTIDADE,
-            # Proposta carimbada (ZB-1): preparada no turno anterior, dentro
-            # da validade — "pode abrir" neste turno é a confirmação explícita.
+            "contato": _CONTATO,
+            # Proposta carimbada: preparada no turno anterior, dentro da
+            # validade — "pode abrir" neste turno é a confirmação explícita.
             "proposta_chamado": {
-                "resumo": "APP TRAVANDO",
-                "categoria": "APLICATIVO",
+                "titulo": "SEM CONEXÃO",
+                "categoria": "sem_conexao",
                 "criada_em": datetime.now(UTC).isoformat(),
                 "turno": 0,
             },

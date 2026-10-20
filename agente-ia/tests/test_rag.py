@@ -40,20 +40,20 @@ def _build_documents() -> list[Document]:
     return [
         Document(
             page_content=(
-                "Para configurar a integração Bling com a Azapfy, acesse "
+                "Para configurar a integração Bling da Infominas, acesse "
                 "Configurações > Integrações > Bling. Insira o token da API "
                 "e clique em Salvar. A sincronização ocorre a cada 15 minutos."
             ),
-            metadata={"source": "azapfy-web.md", "secao": "Integrações › Bling"},
+            metadata={"source": "internet-residencial.md", "secao": "Integrações › Bling"},
         ),
         Document(
             page_content=(
-                "O horário de atendimento do suporte Azapfy é de segunda a "
+                "O horário de atendimento do suporte da Infominas é de segunda a "
                 "sexta, das 8h às 18h. Fora desse horário, abra um chamado "
                 "via painel para que a equipe de suporte responda no próximo "
                 "dia útil."
             ),
-            metadata={"source": "azapfy-web.md", "secao": "Suporte › Atendimento"},
+            metadata={"source": "internet-residencial.md", "secao": "Suporte › Atendimento"},
         ),
         Document(
             page_content=(
@@ -61,7 +61,7 @@ def _build_documents() -> list[Document]:
                 "vários > Gerar etiquetas. O sistema suporta até 500 pedidos "
                 "por vez. Filtre por transportadora antes de imprimir."
             ),
-            metadata={"source": "azapfy-web.md", "secao": "Pedidos › Etiquetas"},
+            metadata={"source": "internet-residencial.md", "secao": "Pedidos › Etiquetas"},
         ),
     ]
 
@@ -74,7 +74,7 @@ def _build_documents() -> list[Document]:
 def test_load_markdown_dir_extrai_secao_e_source_e_ignora_vazios(tmp_path):
     from src.rag.ingest import load_markdown_dir
 
-    (tmp_path / "azapfy-web.md").write_text(
+    (tmp_path / "internet-residencial.md").write_text(
         "# Plataforma Web\n\nIntro.\n\n## Módulo: Pesquisa\n\n"
         "O coração do backoffice.\n\n### 4.3 Histórico\n\nTracking da nota.\n",
         encoding="utf-8",
@@ -83,9 +83,9 @@ def test_load_markdown_dir_extrai_secao_e_source_e_ignora_vazios(tmp_path):
 
     docs = load_markdown_dir(tmp_path)
 
-    # Arquivo vazio é ignorado; só o azapfy-web.md vira seções.
+    # Arquivo vazio é ignorado; só o internet-residencial.md vira seções.
     assert docs, "deveria carregar ao menos uma seção"
-    assert all(d.metadata["source"] == "azapfy-web.md" for d in docs)
+    assert all(d.metadata["source"] == "internet-residencial.md" for d in docs)
     secoes = {d.metadata["secao"] for d in docs}
     assert any("Módulo: Pesquisa" in s for s in secoes)
     assert any("Histórico" in s for s in secoes)
@@ -112,7 +112,7 @@ def test_split_documents_gera_chunks_e_preserva_metadata():
     # chunk_size pequeno → pelo menos 1 chunk por doc, frequentemente mais.
     assert len(chunks) >= len(docs)
     assert all("secao" in c.metadata for c in chunks)
-    assert all(c.metadata.get("source") == "azapfy-web.md" for c in chunks)
+    assert all(c.metadata.get("source") == "internet-residencial.md" for c in chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +192,7 @@ def test_consultar_base_conhecimento_retorna_secao_e_source(monkeypatch, chroma_
     assert out["encontrado"] is True
     assert out["total"] >= 1
     primeiro = out["chunks"][0]
-    assert primeiro["source"] == "azapfy-web.md"
+    assert primeiro["source"] == "internet-residencial.md"
     assert isinstance(primeiro["secao"], str) and primeiro["secao"]
     assert isinstance(primeiro["texto"], str) and primeiro["texto"]
 

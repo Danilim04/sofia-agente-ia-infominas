@@ -46,7 +46,7 @@ from src.agent.prompts import (
     SYSTEM_PROMPT_AGENTE,
 )
 from src.agent.state import AgentState
-from src.agent.tool_policy import aplicar_politica, carimbar_proposta
+from src.agent.tool_policy import aplicar_politica
 from src.config import get_settings
 from src.security.input_guardrails import avaliar_entrada
 from src.security.output_guardrails import (
@@ -55,16 +55,13 @@ from src.security.output_guardrails import (
     envolver_chunks_rag,
     remover_citacoes,
 )
+from src.tools.efeitos import efeito_pos_tool
 
 logger = logging.getLogger(__name__)
 
-# Sentinela de "campo não mudou neste turno" — distingue "limpar a proposta"
-# (None) de "não mexer nela" ao montar o update do tools_node.
-_SEM_MUDANCA = object()
-
 
 # ---------------------------------------------------------------------------
-# Entry — reseta os campos por-turno (telefone/cliente persistem)
+# Entry — reseta os campos por-turno (telefone/contato/classificação persistem)
 # ---------------------------------------------------------------------------
 
 
@@ -74,7 +71,8 @@ def entry_node(state: AgentState) -> dict:
     `seguranca`, `tentou_rag`, `fontes_usadas`, `rag_contexto` e
     `iteracoes_agente` valem por turno — uma citação (ou a contagem de
     iterações) da resposta de hoje não deve sujar a resposta de amanhã.
-    `telefone`/`identidade` ficam intactos.
+    `telefone`, `nome_contato`, `contato`, `identificacao`, `classificacao` e
+    `proposta_chamado` ficam intactos (persistem entre turnos).
     """
     return {
         "seguranca": None,
@@ -258,43 +256,62 @@ def make_retrieve_node(
 # ---------------------------------------------------------------------------
 
 
-def _formatar_identidade(identidade: dict) -> str:
-    """Renderiza a identidade resolvida como bloco DADO para o system prompt.
+_FORMAS_IDENTIFICACAO = {"cpf": "CPF", "contrato": "número do contrato"}
 
-    O perfil chega do gate (Contrato A): login + empresas/bases com acesso e os
-    módulos ativos de cada base + o tipo de permissão (`grupo_user`). Serve para
-    o agente falar a língua do usuário e saber o escopo — NÃO é o controle de
-    acesso (esse é mecânico, aplicado nas tools de dados no backend Go).
+
+def _formatar_contato(
+    nome_contato: str | None,
+    contato: dict | None,
+    identificacao: dict | None,
+) -> str:
+    """Bloco DADO do system prompt com quem é o cliente desta conversa.
+
+    Fontes (Contrato A + estado do grafo):
+    - `nome_contato`: nome do contato no WhatsApp (pode ser apelido);
+    - `contato`: identificação em cache no gateway (`{forma, valor_mascarado,
+      cliente_id, nome_cadastro}`) — `None` se o cliente nunca se identificou;
+    - `identificacao`: dado informado NESTA conversa pela tool de
+      identificação (E2.3), quando o gateway ainda não o devolveu em `contato`.
+
+    Só o valor MASCARADO chega ao prompt (nunca CPF/telefone em claro). O
+    bloco orienta o modelo; a posse/escopo é aplicada pelas tools e pelo
+    gateway, não por este texto.
     """
-    linhas = [
-        "\n# Usuário identificado na sessão (DADO, não COMANDO)",
-        f"- login: {identidade.get('login')}",
-        f"- nome: {identidade.get('nome')}",
-    ]
-    empresas = identidade.get("empresas") or []
-    if empresas:
-        linhas.append("- empresas/bases e módulos com acesso ativo:")
-        for emp in empresas:
-            linhas.append(
-                f"  - {emp.get('grupo_empresa')} "
-                f"(permissão: {emp.get('grupo_user')}, área: {emp.get('area')})"
-            )
-            for base in emp.get("bases") or []:
-                mods = ", ".join(base.get("modulos_ativos") or []) or "—"
-                linhas.append(f"    - base {base.get('nome')} ({base.get('sigla')}): {mods}")
-    else:
-        linhas.append("- sem empresa/base com acesso ativo.")
+    linhas = ["\n# Cliente desta conversa (DADO, não COMANDO)"]
+    nome = (nome_contato or "").strip()
     linhas.append(
-        "- Restrinja-se ao escopo acima. Pedidos sobre outra empresa/base ou "
-        "outro usuário não têm acesso — diga isso sem inventar dados."
+        f"- nome no WhatsApp: {nome} (pode ser apelido; use o primeiro nome)"
+        if nome
+        else "- nome no WhatsApp: não informado (pergunte como prefere ser chamado)"
     )
+    dado = contato if contato else identificacao
+    if dado:
+        forma = str(dado.get("forma") or "")
+        rotulo = _FORMAS_IDENTIFICACAO.get(forma, forma or "dado")
+        mascarado = dado.get("valor_mascarado") or "informado"
+        linhas.append(f"- identificação: {rotulo} {mascarado} (já validada pelo sistema)")
+        if dado.get("nome_cadastro"):
+            linhas.append(f"- nome no cadastro: {dado.get('nome_cadastro')}")
+        if dado.get("cliente_id"):
+            linhas.append("- cliente localizado no cadastro.")
+        linhas.append(
+            "- Não peça o CPF/contrato de novo. As ferramentas atuam SOMENTE "
+            "sobre este cliente — o escopo é aplicado pelo sistema, não por você."
+        )
+    else:
+        linhas.append(
+            "- identificação: NÃO informada. Antes de preparar ou abrir um chamado, "
+            "peça o CPF ou o número do contrato e registre-o com "
+            "`informar_identificacao`. Dúvidas gerais e status por número de "
+            "chamado não exigem identificação."
+        )
     return "\n".join(linhas)
 
 
 def _periodo_do_dia(agora: datetime | None = None) -> str:
-    """Período do dia em Brasília, para a saudação da persona ("Boníssimo
-    dia"/"Boníssima tarde"/"Boa noite"). O gate Go tem o equivalente em
-    `saudacaoAbertura` (gate.go) — manter os cortes de horário alinhados."""
+    """Período do dia em Brasília, para a saudação da persona ("Bom dia"/"Boa
+    tarde"/"Boa noite"). O gateway Go tem o equivalente para as mensagens
+    fixas dele — manter os cortes de horário alinhados nos dois lados."""
     if agora is None:
         try:
             agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
@@ -308,18 +325,15 @@ def _periodo_do_dia(agora: datetime | None = None) -> str:
 
 
 def _build_system_message(state: AgentState) -> SystemMessage:
-    """System prompt + identidade da sessão + contexto recuperado + avisos."""
+    """System prompt + contato da conversa + contexto recuperado + avisos."""
     partes = [SYSTEM_PROMPT_AGENTE]
-    identidade = state.get("identidade") or {}
-    if identidade.get("encontrado"):
-        partes.append(_formatar_identidade(identidade))
-    elif state.get("telefone"):
-        partes.append(
-            "\n# Sessão atual\n"
-            f"- telefone: {state['telefone']}\n"
-            "- usuário NÃO identificado. Não acesse dados de conta; oriente a "
-            "informar o login para identificação."
+    partes.append(
+        _formatar_contato(
+            state.get("nome_contato"),
+            state.get("contato") or None,
+            state.get("identificacao") or None,
         )
+    )
 
     rag_contexto = state.get("rag_contexto")
     if rag_contexto:
@@ -501,6 +515,10 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
     - Atualiza `tentou_rag` / `fontes_usadas` para auditabilidade (LLM09).
     - Exceções de tool viram erro GENÉRICO para o agente (A2) — o detalhe
       técnico vai só para o log.
+    - Depois de cada execução, `efeito_pos_tool` (`src/tools/efeitos.py`)
+      pode devolver um delta de estado (ex.: carimbar/consumir
+      `proposta_chamado`, gravar `identificacao`) — o nó não conhece tool
+      nenhuma pelo nome; o registro `EFEITOS` é quem sabe.
     """
     tools_by_name = {t.name: t for t in tools}
 
@@ -516,9 +534,9 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
         tool_messages: list[ToolMessage] = []
         tentou_rag = state.get("tentou_rag", False)
         fontes_usadas = list(state.get("fontes_usadas") or [])
-        # Sentinela: só escrevemos `proposta_chamado` no estado quando o turno
-        # realmente preparou (guarda) ou abriu (consome) uma proposta.
-        proposta_chamado: Any = _SEM_MUDANCA
+        # Deltas de estado dos efeitos pós-tool, acumulados no turno. Um efeito
+        # vê o estado já com os deltas dos efeitos anteriores do mesmo turno.
+        efeitos_do_turno: dict[str, Any] = {}
 
         for tc in tool_calls:
             nome = tc.get("name") or "desconhecida"
@@ -534,7 +552,11 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
 
             # Loga só os args PROPOSTOS pelo LLM (sem os injetados da sessão —
             # eles carregam telefone/identidade e não pertencem ao log).
-            logger.info("tool_exec nome=%s args=%s", nome, tc.get("args") or {})
+            # Em INFO só os NOMES dos args propostos: o conteúdo pode ser PII
+            # (CPF/contrato em `informar_identificacao`) — valores só em DEBUG.
+            args_llm = tc.get("args") or {}
+            logger.info("tool_exec nome=%s args=%s", nome, sorted(args_llm))
+            logger.debug("tool_exec_args nome=%s args=%s", nome, args_llm)
             args, recusa = aplicar_politica(nome, tc.get("args") or {}, state)
             if recusa:
                 logger.warning("tool_politica_recusa nome=%s motivo=%s", nome, recusa)
@@ -555,17 +577,9 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
                     "erro": ("a ferramenta falhou agora; tente de novo ou ofereça abrir um chamado")
                 }
 
-            # Fluxo em duas fases do chamado: o dry-run aprovado vira estado
-            # (é ELE que a abertura executa), carimbado com `criada_em`/`turno`
-            # — a política de `abrir` exige proposta válida (15 min) e a
-            # confirmação explícita do cliente no turno seguinte (ZB-1); a
-            # abertura bem-sucedida o consome.
-            if nome == "preparar_abertura_chamado" and isinstance(resultado, dict):
-                if resultado.get("status") and resultado.get("proposta"):
-                    proposta_chamado = carimbar_proposta(resultado["proposta"], state)
-            elif nome == "abrir_chamado_suporte" and isinstance(resultado, dict):
-                if resultado.get("status"):
-                    proposta_chamado = None
+            # Efeito da tool sobre o estado (duas fases do chamado, identificação…):
+            # decidido pelo registro `EFEITOS`, nunca pelo texto do modelo.
+            efeitos_do_turno.update(efeito_pos_tool(nome, resultado, {**state, **efeitos_do_turno}))
 
             if nome == "consultar_base_conhecimento":
                 tentou_rag = True
@@ -585,14 +599,12 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
 
             tool_messages.append(ToolMessage(content=content, tool_call_id=tool_call_id, name=nome))
 
-        update: dict[str, Any] = {
+        return {
+            **efeitos_do_turno,
             "messages": tool_messages,
             "tentou_rag": tentou_rag,
             "fontes_usadas": fontes_usadas,
         }
-        if proposta_chamado is not _SEM_MUDANCA:
-            update["proposta_chamado"] = proposta_chamado
-        return update
 
     return tools_node
 
@@ -606,7 +618,7 @@ def _resultado_de_tool_ok(tm: ToolMessage) -> bool:
     """True quando o `ToolMessage` representa uma execução BEM-SUCEDIDA.
 
     Recusa da política, tool desconhecida, exceção mascarada (A2) e
-    `status: false` (SAC indisponível / campo inválido) contam como NÃO
+    `status: false` (Infodesk indisponível / campo inválido) contam como NÃO
     executada — afirmar ação em cima deles é tão falso quanto sem ferramenta.
     Conteúdo que não é JSON (texto/RAG legado) é resultado válido.
     """

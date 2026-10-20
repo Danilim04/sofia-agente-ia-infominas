@@ -1,11 +1,12 @@
-"""Construção do StateGraph (Épico 7 + Bloco A).
+"""Construção do StateGraph da Sofia.
 
 `build_graph()` aceita injeção opcional de `llm`, `tools`, `checkpointer` e
 `buscar_chunks` para facilitar testes — em produção o default é o LLM do
 OpenRouter (via `get_llm()`), as tools canônicas, `MemorySaver` (o `server.py`
 injeta o checkpointer SQLite persistente) e o retriever real da base.
 
-Fluxo (retrieval-first + classificador rebaixado — ver `nodes.py`):
+Fluxo (retrieval-first; E2.2 insere o nó `classificar` entre o guardrail e o
+`retrieve` — ver `nodes.py`):
 
     entry → input_guardrail → (malicioso) → safe_response → END
                               (demais)   → retrieve → agent ⇄ tools
@@ -43,24 +44,23 @@ from src.agent.nodes import (
     safe_response_node,
 )
 from src.agent.state import AgentState
-from src.tools.sac_tools import SAC_TOOLS
 
 
 def get_default_tools() -> list[BaseTool]:
-    """Tools canônicas: só os chamados reais (SAC via gateway Go).
+    """Tools canônicas expostas ao modelo.
 
-    O agente não acessa a internet. A base de conhecimento NÃO é mais tool: o
-    retrieval é etapa fixa do grafo (nó `retrieve`) — o modelo não decide "se"
-    consulta. Identidade/escopo nunca são argumentos do LLM: são injetados e
-    validados pela política (`src/agent/tool_policy.py`).
+    VAZIA nesta etapa (E1.3): as tools do domínio antigo saíram e as 6 tools
+    do Infodesk (`docs/plano/01-ferramentas.md`, seção A) entram em E2.3 —
+    junto com as entradas correspondentes em `tool_policy.POLITICAS` e os
+    efeitos em `src/tools/efeitos.py`.
 
-    NENHUM mock de `src/tools/crm_mocks.py` entra aqui (ZE-1, rodada 1): a
-    `rastrear_nota_fiscal` de teste estava nesta lista e respondeu "nota não
-    encontrada" a cliente real consultando um dicionário fictício. Rastreio de
-    NF só volta com integração real — `tests/test_default_tools.py` barra
-    qualquer tool de `crm_mocks` na lista.
+    Invariantes que esta lista sempre respeita: o agente não acessa a
+    internet; a base de conhecimento NÃO é tool (o retrieval é etapa fixa do
+    grafo — nó `retrieve` — para o modelo não decidir "se" consulta);
+    identidade/escopo nunca são argumentos do LLM (injetados e validados pela
+    política); nenhum mock/harness entra aqui (`tests/test_default_tools.py`).
     """
-    return [*SAC_TOOLS]
+    return []
 
 
 def build_graph(

@@ -3,9 +3,10 @@
 Barram o que linter comum não vê:
 
 1. **Camadas** do cérebro via import-linter (contratos em `pyproject.toml`).
-2. **Resquícios do domínio antigo** (Azapfy/Zapin/Chatwoot/Mongo/SAC) fora dos
-   caminhos ainda tolerados em `docs/plano/legado-permitido.txt` — a lista só
-   encolhe; cada onda remove linhas.
+2. **Resquícios do domínio antigo** (nomes do produto, do transporte, do banco
+   e do SAC anteriores) fora dos caminhos ainda tolerados em
+   `docs/plano/legado-permitido.txt` — a lista só encolhe; cada onda remove
+   linhas.
 3. **F7 novo**: toda tool exposta ao modelo tem entrada em `POLITICAS` e nenhum
    argumento de sessão aparece no schema que o LLM vê.
 """
@@ -41,7 +42,19 @@ def test_camadas_import_linter():
 # 2. Termos do domínio antigo
 # ---------------------------------------------------------------------------
 
-TERMOS_LEGADOS = re.compile(r"azapfy|zapin|chatwoot|mongo|\bsac_|azapers|zprs|zpf-", re.IGNORECASE)
+# Termos partidos de propósito (`+` explícito — o formatador não junta): o
+# próprio scanner é varrido e não pode conter, em claro, os termos que caça.
+_TERMOS = (
+    "azap" + "fy",
+    "za" + "pin",
+    "chat" + "woot",
+    "mon" + "go",
+    r"\bsa" + "c_",
+    "azap" + "ers",
+    "zp" + "rs",
+    "zp" + "f-",
+)
+TERMOS_LEGADOS = re.compile("|".join(_TERMOS), re.IGNORECASE)
 DIRETORIOS_VARRIDOS = (
     "agente-ia/src",
     "agente-ia/server.py",
@@ -133,7 +146,6 @@ ARGS_DE_SESSAO = {
     "classificacao",
     "proposta",
     "identificacao",
-    "grupos_emp_sessao",
 }
 
 

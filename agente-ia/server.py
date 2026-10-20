@@ -1,27 +1,31 @@
-"""Servidor HTTP do cérebro (Contrato A) — integração Chatwoot via backend Go.
+"""Servidor HTTP do cérebro da Sofia (Contrato A) — chamado pelo gateway Go.
 
-O backend Go (transporte Chatwoot + gate de identidade) chama `POST /chat`
-**somente quando o usuário já está identificado**, enviando a mensagem e o
-perfil mínimo (`identidade`) resolvido. Este serviço roda o grafo LangGraph
-(Épico 7), isolando conversas por `conversation_id` (= `thread_id` do
-`MemorySaver`), e devolve a resposta + ações opcionais para o Chatwoot.
+O gateway Go recebe o webhook do Infodesk, enfileira e coalesce as mensagens
+da conversa e chama `POST /chat` com a mensagem e o contato (telefone, nome
+no WhatsApp e, se houver, a identificação em cache). Este serviço roda o
+grafo LangGraph, isolando conversas por `conversation_id` (= `thread_id` do
+checkpointer), e devolve a resposta + ações + classificação.
 
 Rodar:
     uvicorn server:app --host 0.0.0.0 --port 8001
 
-Contrato A — request:
+Contrato A — request (`docs/plano/01-ferramentas.md`):
     {"conversation_id": "...", "canal": "whatsapp", "mensagem": "...",
-     "identidade": {...}, "telefone": "...", "session_token": "..."}
+     "telefone": "+55...", "nome_contato": "Maria",
+     "contato": {"forma": "cpf", "valor_mascarado": "***.***.789-**",
+                 "cliente_id": null, "nome_cadastro": null} | null,
+     "estado_conversa": "bot"}
 Contrato A — resposta:
-    {"reply": "...", "acoes": [], "fontes": [...]}
+    {"reply": "...", "acoes": [], "classificacao": null, "fontes": [...],
+     "erro": null}
 
 `POST /encerrar-episodio` `{"conversation_id": "..."}`: o gateway avisa que a
-conversa foi RESOLVIDA no Chatwoot; a proposta de chamado pendente é limpa
-(ZB-1). O histórico da conversa fica.
+conversa foi ENCERRADA no Infodesk (`conversation.finished`); a proposta de
+chamado pendente, a classificação e a identificação da conversa são limpas.
+O histórico de mensagens fica.
 
-Obs.: `session_token` é aceito e ignorado nesta fase. Ele só passa a importar
-no plano deferido (tools MCP), onde o Python o repassa ao Go para escopar as
-consultas de dados ao usuário autorizado.
+Campos só AUMENTAM neste contrato (compatibilidade): `classificacao` e
+`acoes` são devolvidos vazios até E2.2 preenchê-los.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ import logging
 import os
 import threading
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -47,7 +51,6 @@ from src.agent.falhas import (
 )
 from src.agent.graph import build_graph
 from src.config import get_settings
-from src.identity.login_extractor import extrair_login
 from src.observability.tracing import get_tracing_handler
 
 
@@ -76,20 +79,28 @@ logger = logging.getLogger(__name__)
 
 
 class ChatRequest(BaseModel):
+    """Turno do cliente (Contrato A). Campos além de `conversation_id` e
+    `mensagem` são opcionais — o contrato só cresce."""
+
     conversation_id: str
     mensagem: str
     canal: str = "whatsapp"
-    identidade: Optional[dict[str, Any]] = None
-    telefone: Optional[str] = None
-    session_token: Optional[str] = None
+    telefone: str | None = None
+    #: Nome do contato no WhatsApp (`data.contact.name` do webhook; pode ser apelido).
+    nome_contato: str | None = None
+    #: Identificação em cache no gateway: {forma, valor_mascarado, cliente_id,
+    #: nome_cadastro}; `None` se o cliente nunca se identificou.
+    contato: dict[str, Any] | None = None
+    #: "bot" | "transferida" — defesa: o gateway não deveria mandar transferida.
+    estado_conversa: str = "bot"
 
 
 class ErroChat(BaseModel):
     """Falha do turno, classificada para o gateway decidir (ver `src/agent/falhas.py`).
 
     `classe`: "transitoria" (vale repetir) | "definitiva" (transferir na hora).
-    `id_ocorrencia`: o MESMO id vai no log do cérebro, no log do gateway, na
-    nota privada da conversa e na tabela `gateway.falhas`.
+    `id_ocorrencia`: o MESMO id vai no log do cérebro, no log do gateway e na
+    tabela `falhas` do gateway.
     """
 
     classe: str
@@ -99,35 +110,39 @@ class ErroChat(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str = ""
+    #: Ações para o gateway executar (ex.: {"tipo": "transferir", ...}) — E2.2.
     acoes: list[dict[str, Any]] = Field(default_factory=list)
+    #: Classificação fixada para a conversa (auditoria/log do gateway) — E2.2.
+    classificacao: dict[str, Any] | None = None
     fontes: list[str] = Field(default_factory=list)
     erro: ErroChat | None = None
 
 
-class ExtractLoginRequest(BaseModel):
-    mensagem: str
-
-
-class ExtractLoginResponse(BaseModel):
-    login: Optional[str] = None
-
-
 class EncerrarEpisodioRequest(BaseModel):
-    """Corpo de `POST /encerrar-episodio`: a conversa foi RESOLVIDA no Chatwoot."""
+    """Corpo de `POST /encerrar-episodio`: a conversa foi ENCERRADA no Infodesk."""
 
     conversation_id: str
+
+
+#: Campos do estado zerados no fim do episódio (o histórico fica).
+#: `identificacao` entra por decisão desta etapa (ver PR da E1.3): o cache de
+#: identificação por telefone vive no gateway e volta em `contato` no próximo
+#: turno; aqui só o registro mascarado da conversa é descartado.
+CAMPOS_DO_EPISODIO = ("proposta_chamado", "classificacao", "identificacao")
 
 
 class EncerrarEpisodioResponse(BaseModel):
     status: str = "ok"
     #: True quando havia uma proposta de chamado pendente e ela foi limpa.
     proposta_limpa: bool = False
+    #: Quais campos do episódio tinham valor e foram zerados.
+    campos_limpos: list[str] = Field(default_factory=list)
 
 
 def _mascarar(valor: str) -> str:
     """Mascara um identificador deixando visíveis só os últimos 3 caracteres.
 
-    Usado para não enviar PII (login/CPF/e-mail) em claro ao tracing externo.
+    Usado para não enviar PII (telefone/CPF) em claro ao log nem ao tracing externo.
     """
     v = (valor or "").strip()
     if len(v) <= 3:
@@ -143,9 +158,7 @@ def _extrair_reply(valores: dict) -> str:
             if isinstance(conteudo, str):
                 return conteudo
             if isinstance(conteudo, list):
-                return "".join(
-                    b.get("text", "") for b in conteudo if isinstance(b, dict)
-                )
+                return "".join(b.get("text", "") for b in conteudo if isinstance(b, dict))
     return ""
 
 
@@ -153,26 +166,35 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
     """Roda o grafo para uma mensagem do Contrato A e devolve a resposta.
 
     Função pura (recebe o grafo por injeção) — testável sem servidor/rede.
-    A `identidade` entra no estado e é injetada no system prompt como DADO
-    (ver `nodes._build_system_message`).
+    `nome_contato`/`contato` entram no estado e vão ao system prompt como DADO
+    (ver `nodes._formatar_contato`).
     """
-    login = (req.identidade or {}).get("login") if req.identidade else None
-    # PII mascarada nos logs (F5/LLM06/LGPD): telefone e login nunca em claro;
-    # o conteúdo da mensagem só aparece em DEBUG.
+    # PII mascarada nos logs (LGPD): telefone nunca em claro; o nome do contato
+    # e o conteúdo da mensagem só aparecem em DEBUG.
     logger.info(
-        "chat_request conversation_id=%s canal=%s telefone=%s login=%s identificado=%s len_mensagem=%d",
+        "chat_request conversation_id=%s canal=%s telefone=%s identificado=%s "
+        "estado_conversa=%s len_mensagem=%d",
         req.conversation_id,
         req.canal,
         _mascarar(req.telefone or ""),
-        _mascarar(login or ""),
-        bool(req.identidade and req.identidade.get("encontrado")),
+        bool(req.contato),
+        req.estado_conversa,
         len(req.mensagem or ""),
     )
     logger.debug(
-        "chat_request_mensagem conversation_id=%s mensagem=%r",
+        "chat_request_mensagem conversation_id=%s nome_contato=%r mensagem=%r",
         req.conversation_id,
+        req.nome_contato,
         req.mensagem,
     )
+    if req.estado_conversa != "bot":
+        # Defesa: o gateway não deveria mandar turno de conversa transferida;
+        # se mandar, o cérebro responde normalmente e o gateway decide.
+        logger.warning(
+            "chat_request_estado_inesperado conversation_id=%s estado_conversa=%s",
+            req.conversation_id,
+            req.estado_conversa,
+        )
 
     config: dict[str, Any] = {"configurable": {"thread_id": req.conversation_id}}
     # Tracing opcional (Langfuse): agrupa o turno pela conversa e registra
@@ -183,16 +205,17 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
             "langfuse_session_id": req.conversation_id,
             "langfuse_tags": [req.canal],
         }
-        if login:
-            metadata["langfuse_user_id"] = _mascarar(login)
+        if req.telefone:
+            metadata["langfuse_user_id"] = _mascarar(req.telefone)
         config["callbacks"] = [handler]
         config["metadata"] = metadata
         config["run_name"] = "chat"
 
     inputs: dict[str, Any] = {
-        "identidade": req.identidade,
-        # Vai ao estado para as tools do SAC repassarem ao gateway (correlação
-        # do log de erro do SAC com a conversa — ponta Python do ZA-3).
+        "nome_contato": req.nome_contato,
+        "contato": req.contato,
+        # Vai ao estado para as tools repassarem ao gateway (correlação do log
+        # do gateway com a conversa) — nunca é argumento do modelo.
         "conversation_id": req.conversation_id,
         "messages": [HumanMessage(content=req.mensagem)],
     }
@@ -208,10 +231,11 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
         )
     except TimeoutError as exc:
         return _falha_do_turno(req, exc, classe=CLASSE_TRANSITORIA, causa=CAUSA_PRAZO_TURNO)
-    except Exception as exc:  # noqa: BLE001 — classificada, nunca um 500 mudo
+    except Exception as exc:
         return _falha_do_turno(req, exc)
     resposta = ChatResponse(
         reply=_extrair_reply(valores),
+        classificacao=valores.get("classificacao") or None,
         fontes=list(valores.get("fontes_usadas") or []),
     )
     logger.info(
@@ -229,32 +253,31 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
 
 
 async def encerrar_episodio(graph: Any, conversation_id: str) -> EncerrarEpisodioResponse:
-    """Fim do episódio (conversa resolvida no Chatwoot): limpa a proposta de
-    chamado pendente da conversa (ZB-1).
+    """Fim do episódio (conversa encerrada no Infodesk): zera os campos do
+    episódio — proposta de chamado pendente, classificação e identificação.
 
-    O Chatwoot REUTILIZA a conversa quando o contato volta a escrever — o
-    `thread_id` é o mesmo — e uma proposta preparada num episódio anterior não
-    pode ser "confirmada" por uma mensagem qualquer do episódio seguinte (caso
-    "Esse" → ZPRS25208029 da conversa #45). O histórico de mensagens fica
-    intacto; só `proposta_chamado` é zerada, gravada como se o último nó do
-    grafo (`output_guardrail`) a tivesse escrito — nada fica pendente para o
-    próximo turno. Conversa sem proposta (ou desconhecida) não ganha checkpoint.
+    O mesmo `conversation_id` pode voltar a receber mensagens; uma proposta
+    preparada num episódio anterior não pode ser "confirmada" por uma mensagem
+    qualquer do episódio seguinte, e a classificação/identificação de ontem
+    não valem para o problema de hoje (a identificação continua em cache no
+    gateway, por telefone — o Contrato A a devolve em `contato`). O histórico
+    de mensagens fica intacto; os campos são zerados como se o último nó do
+    grafo (`output_guardrail`) os tivesse escrito — nada fica pendente para o
+    próximo turno. Conversa sem nada a limpar (ou desconhecida) não ganha
+    checkpoint.
     """
     config: dict[str, Any] = {"configurable": {"thread_id": conversation_id}}
     estado = await graph.aget_state(config)
     valores = getattr(estado, "values", None) or {}
-    if not valores.get("proposta_chamado"):
-        logger.info(
-            "episodio_encerrado conversation_id=%s proposta_limpa=False", conversation_id
-        )
+    limpos = [campo for campo in CAMPOS_DO_EPISODIO if valores.get(campo)]
+    if not limpos:
+        logger.info("episodio_encerrado conversation_id=%s campos_limpos=[]", conversation_id)
         return EncerrarEpisodioResponse(proposta_limpa=False)
-    await graph.aupdate_state(
-        config, {"proposta_chamado": None}, as_node="output_guardrail"
+    await graph.aupdate_state(config, dict.fromkeys(CAMPOS_DO_EPISODIO), as_node="output_guardrail")
+    logger.info("episodio_encerrado conversation_id=%s campos_limpos=%s", conversation_id, limpos)
+    return EncerrarEpisodioResponse(
+        proposta_limpa="proposta_chamado" in limpos, campos_limpos=limpos
     )
-    logger.info(
-        "episodio_encerrado conversation_id=%s proposta_limpa=True", conversation_id
-    )
-    return EncerrarEpisodioResponse(proposta_limpa=True)
 
 
 def _falha_do_turno(
@@ -267,7 +290,7 @@ def _falha_do_turno(
     """Transforma a exceção do grafo em `ChatResponse.erro` (classe + ID).
 
     O gateway Go lê a classe para decidir (repetir × transferir) e o ID para
-    a nota privada; aqui o log `chat_erro` leva o mesmo ID e o
+    o registro da falha; aqui o log `chat_erro` leva o mesmo ID e o
     `conversation_id`, sem o conteúdo da mensagem (PII). `classe`/`causa`
     explícitas pulam a classificação (ex.: prazo do turno estourado).
     """
@@ -307,7 +330,7 @@ def _get_graph():
 
 
 def _warmup_rag_em_background() -> None:
-    """Aquece embeddings + ChromaDB fora do caminho da 1ª mensagem (B1).
+    """Aquece embeddings + índice fora do caminho da 1ª mensagem.
 
     O primeiro load do sentence-transformers custa vários segundos; sem o
     warm-up esse custo cai no primeiro cliente do dia. Fail-safe: erro só loga.
@@ -319,7 +342,7 @@ def _warmup_rag_em_background() -> None:
 
             buscar_chunks("warmup")
             logger.info("rag_warmup_ok")
-        except Exception as exc:  # noqa: BLE001 — warm-up nunca derruba o server
+        except Exception as exc:
             logger.warning("rag_warmup_falhou erro=%s", exc)
 
     threading.Thread(target=_aquecer, name="rag-warmup", daemon=True).start()
@@ -348,7 +371,7 @@ async def _lifespan(app: FastAPI):
         # nunca dispara — o server subiria "saudável" com todo /chat em 500.
         await saver.setup()
         logger.info("checkpointer_sqlite path=%s", caminho)
-    except Exception as exc:  # noqa: BLE001 — fail-soft para MemorySaver
+    except Exception as exc:
         if saver_cm is not None:
             with contextlib.suppress(Exception):
                 await saver_cm.__aexit__(None, None, None)
@@ -368,7 +391,7 @@ async def _lifespan(app: FastAPI):
             await saver_cm.__aexit__(None, None, None)
 
 
-app = FastAPI(title="Azapfy Suporte IA — cérebro", lifespan=_lifespan)
+app = FastAPI(title="Sofia — Infominas (cérebro)", lifespan=_lifespan)
 
 
 @app.get("/health")
@@ -390,9 +413,9 @@ async def chat(req: ChatRequest):
 
 @app.post("/encerrar-episodio", response_model=EncerrarEpisodioResponse)
 async def encerrar_episodio_endpoint(req: EncerrarEpisodioRequest):
-    """Chamado pelo gateway Go quando a conversa é resolvida no Chatwoot
-    (`encerrarEpisodio` em `engine.go`). Falha sai como 500 com corpo — o
-    gateway só loga: a validade de 15 min da proposta é a rede de segurança."""
+    """Chamado pelo gateway Go no `conversation.finished` do Infodesk. Falha
+    sai como 500 com corpo — o gateway só loga: a validade de 15 min da
+    proposta é a rede de segurança."""
     try:
         return await encerrar_episodio(_get_graph(), req.conversation_id)
     except Exception as exc:  # nunca um 500 mudo
@@ -403,21 +426,5 @@ async def encerrar_episodio_endpoint(req: EncerrarEpisodioRequest):
         )
         return JSONResponse(
             status_code=500,
-            content={"status": "erro", "proposta_limpa": False},
+            content={"status": "erro", "proposta_limpa": False, "campos_limpos": []},
         )
-
-
-@app.post("/extract-login", response_model=ExtractLoginResponse)
-async def extract_login(req: ExtractLoginRequest) -> ExtractLoginResponse:
-    """Extrai o login embutido numa frase (fallback do gate Go).
-
-    O valor é só um candidato — quem autoriza é o gate (Mongo + confirmação).
-    """
-    # A mensagem contém o próprio identificador (PII) — em claro só em DEBUG.
-    logger.info("extract_login_request len_mensagem=%d", len(req.mensagem or ""))
-    logger.debug("extract_login_request_mensagem mensagem=%r", req.mensagem)
-    resultado = extrair_login(req.mensagem)
-    logger.info(
-        "extract_login_response login=%s", _mascarar(resultado.get("login") or "")
-    )
-    return ExtractLoginResponse(login=resultado.get("login"))

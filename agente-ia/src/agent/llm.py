@@ -1,4 +1,4 @@
-"""Fábricas de LLM e embeddings (Épico 5).
+"""Fábricas de LLM e embeddings.
 
 Centraliza a criação dos clientes LLM apontando para o OpenRouter
 (`https://openrouter.ai/api/v1`) via `ChatOpenAI`, e provê os embeddings do
@@ -73,9 +73,8 @@ def get_llm() -> BaseChatModel:
 def get_classifier_llm() -> BaseChatModel:
     """LLM barato/rápido usado pelo classificador de segurança (Épico 6).
 
-    Temperature fixa em 0.0 — classificação é determinística por design. O
-    extrator de login (`src/identity/login_extractor.py`) usa este mesmo
-    cliente, então `LLM_MAX_TOKENS_CLASSIFICADOR` vale para os dois.
+    Temperature fixa em 0.0 — classificação é determinística por design.
+    `LLM_MAX_TOKENS_CLASSIFICADOR` limita a saída (JSON curto).
     """
     settings = get_settings()
     return _build_chat_openrouter(

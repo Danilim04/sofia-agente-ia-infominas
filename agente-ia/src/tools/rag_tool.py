@@ -3,7 +3,7 @@
 `buscar_chunks()` é a função pura usada pelo nó `retrieve` do grafo
 (retrieval-first: TODA mensagem que chega ao agente passa pela recuperação
 antes da chamada de LLM — o modelo não decide mais "se" consulta a base, o
-que elimina a classe de falha F4 do laudo: responder de memória citando
+que elimina a classe de falha herdada F4: responder de memória citando
 fonte fabricada).
 
 A tool `consultar_base_conhecimento` continua existindo como wrapper para
@@ -82,10 +82,10 @@ def buscar_chunks(pergunta: str) -> dict[str, Any]:
 
 @tool
 def consultar_base_conhecimento(pergunta: str) -> dict[str, Any]:
-    """Consulta a base de conhecimento técnico interna da Azapfy (docs indexadas).
+    """Consulta a base de conhecimento interna da Infominas (docs indexadas).
 
-    Fonte de verdade primária (e única) para dúvidas técnicas/operacionais sobre
-    os produtos Azapfy (plataforma Web, app do motorista, módulos, mercado).
+    Fonte de verdade primária (e única) para dúvidas sobre os serviços e
+    procedimentos da Infominas.
 
     Args:
         pergunta: Pergunta do usuário em linguagem natural (em português).
