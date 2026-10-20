@@ -1,0 +1,7 @@
+{
+  "status": true,
+  "departamento": {
+    "nome": "Suporte"
+  },
+  "mensagem_ao_cliente": "Estou te passando para um atendente da equipe de Suporte. Ele continua com você por aqui."
+}

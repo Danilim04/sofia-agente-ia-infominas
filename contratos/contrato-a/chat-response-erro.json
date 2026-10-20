@@ -1,0 +1,11 @@
+{
+  "reply": "",
+  "acoes": [],
+  "classificacao": null,
+  "fontes": [],
+  "erro": {
+    "classe": "transitoria",
+    "id_ocorrencia": "SOF-20261020-1432-01",
+    "causa": "timeout ao chamar o provedor LLM (OpenRouter) após 2 tentativas"
+  }
+}

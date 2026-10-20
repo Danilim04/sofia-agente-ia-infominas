@@ -2,7 +2,7 @@
 name: implementador-tool
 description: Implementa uma ferramenta (tool) do agente de ponta a ponta — contrato JSON em contratos/, endpoint em backend/internal/toolsapi, tool Python em src/tools com política em tool_policy.py e testes dos dois lados. Use para E1.6, E2.3, E3.1 e para qualquer item novo de docs/plano/01-ferramentas.md.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: inherit
+model: sonnet
 ---
 
 Você implementa tools seguindo o padrão do Zapin, dos dois lados, dentro da

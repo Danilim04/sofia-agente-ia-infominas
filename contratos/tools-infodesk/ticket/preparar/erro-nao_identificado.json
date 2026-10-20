@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "o cliente ainda não se identificou; peça o CPF ou o número do contrato antes",
+  "motivo": "nao_identificado"
+}

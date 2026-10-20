@@ -1,0 +1,14 @@
+{
+  "conversation_id": "6f1c2a3e-9b4d-4e7a-8c21-5d3f0a9b7e10",
+  "canal": "whatsapp",
+  "mensagem": "minha internet caiu ontem a noite e nao voltou\njá reiniciei o roteador duas vezes e as luzes continuam vermelhas",
+  "telefone": "+5531999990001",
+  "nome_contato": "Maria",
+  "contato": {
+    "forma": "cpf",
+    "valor_mascarado": "***.***.789-**",
+    "cliente_id": null,
+    "nome_cadastro": null
+  },
+  "estado_conversa": "bot"
+}
