@@ -122,18 +122,29 @@ func (c *Client) EnviarMensagem(ctx context.Context, convID, body string) error 
 	return c.do(ctx, http.MethodPost, rotaConversa(convID, "messages"), nil, map[string]string{"body": body}, nil)
 }
 
-// TransferirDepartamento faz POST /conversations/:id/department. deptID ""
-// envia `{"departmentId": null}`, que remove o departamento (texto literal do
-// PDF). É o caminho de "transferir para fila" do plano (C4).
+// TransferirDepartamento faz POST /conversations/:id/department com
+// `{departmentId}`. É o caminho de "transferir para fila" do plano (C4).
+// deptID vazio é ErrIDVazio — nunca vira `null` por acidente, porque `null`
+// REMOVE a conversa de qualquer departamento (ver RemoverDepartamento): um
+// nome ausente na tabela de roteamento tem de falhar, não tirar o cliente da
+// fila.
 func (c *Client) TransferirDepartamento(ctx context.Context, convID, deptID string) error {
 	if err := exigirID(convID); err != nil {
 		return err
 	}
-	var dept *string
-	if strings.TrimSpace(deptID) != "" {
-		dept = &deptID
+	if err := exigirID(deptID); err != nil {
+		return err
 	}
-	return c.do(ctx, http.MethodPost, rotaConversa(convID, "department"), nil, map[string]*string{"departmentId": dept}, nil)
+	return c.do(ctx, http.MethodPost, rotaConversa(convID, "department"), nil, map[string]string{"departmentId": deptID}, nil)
+}
+
+// RemoverDepartamento envia `{"departmentId": null}` ("ou null para remover",
+// texto literal do PDF). Implementado por completude; não usado na v1.
+func (c *Client) RemoverDepartamento(ctx context.Context, convID string) error {
+	if err := exigirID(convID); err != nil {
+		return err
+	}
+	return c.do(ctx, http.MethodPost, rotaConversa(convID, "department"), nil, map[string]*string{"departmentId": nil}, nil)
 }
 
 // Atribuir faz POST /conversations/:id/assign com `{userId}`. Implementado,
@@ -259,7 +270,9 @@ func cacheado[E any](ctx context.Context, c *Client, chave string, buscar func(c
 // então nenhuma falha é repetida aqui. Erro de rede após o envio é ambíguo
 // (o ticket pode existir): o chamador registra "pendente" (ADR 0005) e alerta.
 // 2xx sem `number` reconhecível devolve o Ticket (Bruto preenchido) junto com
-// ErrTicketSemNumero.
+// ErrTicketSemNumero. Regra para o chamador: QUALQUER erro depois do envio
+// (rede, 5xx, resposta ilegível, sem número) é "pendente" — Transitorio()
+// serve para alertar, nunca para repetir este POST.
 func (c *Client) CriarTicket(ctx context.Context, t NovoTicket) (Ticket, error) {
 	if strings.TrimSpace(t.DeskID) == "" {
 		return Ticket{}, fmt.Errorf("%w: deskId", ErrCampoObrigatorio)
@@ -350,7 +363,9 @@ func (c *Client) do(ctx context.Context, metodo, rota string, query url.Values, 
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, respostaMax))
 	if err != nil {
-		return &ErroRede{Rota: rota, Err: err}
+		// O status 2xx já chegou: a operação pode ter acontecido (em
+		// CriarTicket, o ticket pode existir). Definitivo, não transitório.
+		return &ErroResposta{Rota: rota, Motivo: "corpo interrompido"}
 	}
 	if len(bytes.TrimSpace(b)) == 0 {
 		return &ErroResposta{Rota: rota, Motivo: "corpo vazio"}

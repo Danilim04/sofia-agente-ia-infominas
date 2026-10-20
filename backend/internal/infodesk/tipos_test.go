@@ -181,8 +181,8 @@ func TestDecodificarMensagemRecebida_Casos(t *testing.T) {
 			t.Error("USER não é cliente")
 		}
 		m2, _ := DecodificarMensagemRecebida([]byte(`{"conversationId":"c1","message":{"sender":" client ","body":"oi"}}`))
-		if !m2.DoCliente() {
-			t.Error("comparação tolerante a caixa/espaço")
+		if m2.DoCliente() {
+			t.Error("só o valor documentado CLIENT conta (W2)")
 		}
 	})
 }

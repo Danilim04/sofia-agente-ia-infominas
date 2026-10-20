@@ -25,6 +25,7 @@ type servidor struct {
 
 type requisicao struct {
 	metodo, caminho, query string
+	uri                    string // RequestURI: caminho ainda escapado
 	cabecalhos             http.Header
 	corpo                  string
 }
@@ -34,7 +35,7 @@ func novoServidor(t *testing.T, responder func(w http.ResponseWriter, r *http.Re
 	s := &servidor{t: t, responder: responder}
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		s.ultima.Store(&requisicao{metodo: r.Method, caminho: r.URL.Path, query: r.URL.RawQuery, cabecalhos: r.Header.Clone(), corpo: string(b)})
+		s.ultima.Store(&requisicao{metodo: r.Method, caminho: r.URL.Path, query: r.URL.RawQuery, uri: r.RequestURI, cabecalhos: r.Header.Clone(), corpo: string(b)})
 		s.chamadas.Add(1)
 		s.responder(w, r)
 	}))
@@ -73,6 +74,8 @@ var chamadas = []chamada{
 		func(ctx context.Context, c *Client) error { return c.EnviarMensagem(ctx, "c1", "oi") }},
 	{"TransferirDepartamento", http.MethodPost, "/conversations/c1/department", false, `{}`,
 		func(ctx context.Context, c *Client) error { return c.TransferirDepartamento(ctx, "c1", "d1") }},
+	{"RemoverDepartamento", http.MethodPost, "/conversations/c1/department", false, `{}`,
+		func(ctx context.Context, c *Client) error { return c.RemoverDepartamento(ctx, "c1") }},
 	{"Atribuir", http.MethodPost, "/conversations/c1/assign", false, `{}`,
 		func(ctx context.Context, c *Client) error { return c.Atribuir(ctx, "c1", "u1") }},
 	{"Encerrar", http.MethodPost, "/conversations/c1/finish", false, ``,
@@ -561,7 +564,7 @@ func TestClient_CorposDasAcoesDeConversa(t *testing.T) {
 	if got := s.ultima.Load().corpo; got != `{"departmentId":"d9"}` {
 		t.Errorf("department: %q", got)
 	}
-	_ = c.TransferirDepartamento(ctx, "c1", "")
+	_ = c.RemoverDepartamento(ctx, "c1")
 	if got := s.ultima.Load().corpo; got != `{"departmentId":null}` {
 		t.Errorf("department null: %q", got)
 	}
@@ -587,14 +590,16 @@ func TestClient_ValidacoesLocais(t *testing.T) {
 		err  error
 		quer error
 	}{
-		"mensagemSemConversa":   {c.EnviarMensagem(ctx, " ", "oi"), ErrIDVazio},
-		"mensagemVazia":         {c.EnviarMensagem(ctx, "c1", "  "), ErrCorpoVazio},
-		"transferirSemConversa": {c.TransferirDepartamento(ctx, "", "d1"), ErrIDVazio},
-		"atribuirSemConversa":   {c.Atribuir(ctx, "", "u1"), ErrIDVazio},
-		"atribuirSemUsuario":    {c.Atribuir(ctx, "c1", ""), ErrIDVazio},
-		"encerrarSemConversa":   {c.Encerrar(ctx, ""), ErrIDVazio},
-		"responderSemNumero":    {c.ResponderTicket(ctx, "", "x"), ErrIDVazio},
-		"responderVazio":        {c.ResponderTicket(ctx, "1", ""), ErrCorpoVazio},
+		"mensagemSemConversa":       {c.EnviarMensagem(ctx, " ", "oi"), ErrIDVazio},
+		"mensagemVazia":             {c.EnviarMensagem(ctx, "c1", "  "), ErrCorpoVazio},
+		"transferirSemConversa":     {c.TransferirDepartamento(ctx, "", "d1"), ErrIDVazio},
+		"transferirSemDepartamento": {c.TransferirDepartamento(ctx, "c1", " "), ErrIDVazio},
+		"removerSemConversa":        {c.RemoverDepartamento(ctx, ""), ErrIDVazio},
+		"atribuirSemConversa":       {c.Atribuir(ctx, "", "u1"), ErrIDVazio},
+		"atribuirSemUsuario":        {c.Atribuir(ctx, "c1", ""), ErrIDVazio},
+		"encerrarSemConversa":       {c.Encerrar(ctx, ""), ErrIDVazio},
+		"responderSemNumero":        {c.ResponderTicket(ctx, "", "x"), ErrIDVazio},
+		"responderVazio":            {c.ResponderTicket(ctx, "1", ""), ErrCorpoVazio},
 	}
 	if _, err := c.Ticket(ctx, ""); !errors.Is(err, ErrIDVazio) {
 		t.Errorf("Ticket vazio: %v", err)
@@ -614,12 +619,21 @@ func TestClient_ValidacoesLocais(t *testing.T) {
 
 func TestClient_IDsSaoEscapadosNaRota(t *testing.T) {
 	s := novoServidor(t, responderJSON(http.StatusOK, `{}`))
-	_ = s.cliente().EnviarMensagem(context.Background(), "a/b c", "oi")
-	if got := s.ultima.Load().caminho; got != PrefixoRotas+"/conversations/a%2Fb%20c/messages" && got != PrefixoRotas+"/conversations/a/b c/messages" {
-		t.Errorf("caminho = %q", got)
+	c := s.cliente()
+	ctx := context.Background()
+
+	_ = c.EnviarMensagem(ctx, "a/b c", "oi")
+	if got := s.ultima.Load().uri; got != PrefixoRotas+"/conversations/a%2Fb%20c/messages" {
+		t.Errorf("RequestURI = %q", got)
 	}
-	if strings.Contains(s.ultima.Load().caminho, "..") {
-		t.Error("id não escapado")
+	// Um id malicioso não pode subir na árvore de rotas.
+	_ = c.EnviarMensagem(ctx, "../tickets", "oi")
+	if got := s.ultima.Load().uri; got != PrefixoRotas+"/conversations/..%2Ftickets/messages" || strings.Contains(got, "/../") {
+		t.Errorf("RequestURI = %q", got)
+	}
+	_, _ = c.Ticket(ctx, "1/../2")
+	if got := s.ultima.Load().uri; got != PrefixoRotas+"/tickets/1%2F..%2F2" {
+		t.Errorf("RequestURI = %q", got)
 	}
 }
 
@@ -653,9 +667,59 @@ func TestNew_NormalizaBaseURL(t *testing.T) {
 }
 
 func TestClient_ChaveNaoVazaNoErro(t *testing.T) {
-	s := novoServidor(t, responderJSON(http.StatusUnauthorized, `{"statusCode":401,"message":"Chave inválida"}`))
-	err := s.cliente().EnviarMensagem(context.Background(), "c1", "oi")
-	if strings.Contains(err.Error(), "ik_live_teste") {
-		t.Errorf("chave de API vazou no erro: %q", err.Error())
+	const chave = "ik_live_teste"
+	t.Run("HTTPError", func(t *testing.T) {
+		s := novoServidor(t, responderJSON(http.StatusUnauthorized, `{"statusCode":401,"message":"Chave inválida"}`))
+		err := s.cliente().EnviarMensagem(context.Background(), "c1", "oi")
+		if strings.Contains(err.Error(), chave) {
+			t.Errorf("chave de API vazou no erro: %q", err.Error())
+		}
+	})
+	t.Run("ErroRede", func(t *testing.T) {
+		s := novoServidor(t, responderJSON(http.StatusOK, `[]`))
+		url := s.srv.URL
+		s.srv.Close()
+		_, err := New(Options{BaseURL: url, APIKey: chave}).Conversas(context.Background(), "entrada", "d1")
+		if strings.Contains(err.Error(), chave) {
+			t.Errorf("chave de API vazou no erro de rede: %q", err.Error())
+		}
+	})
+	t.Run("ErroResposta", func(t *testing.T) {
+		s := novoServidor(t, responderJSON(http.StatusOK, `{"segredo":"`+chave+`"`))
+		_, err := s.cliente().Conversa(context.Background(), "c1")
+		if strings.Contains(err.Error(), chave) {
+			t.Errorf("corpo vazou no erro: %q", err.Error())
+		}
+	})
+}
+
+func TestClient_CorpoInterrompidoApos2xxEDefinitivo(t *testing.T) {
+	s := novoServidor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "500")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"number":`)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Skip("sem hijack")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("hijack: %v", err)
+		}
+		_ = conn.Close()
+	})
+	_, err := s.cliente().CriarTicket(context.Background(), NovoTicket{DeskID: "m1", Title: "t"})
+	var er *ErroResposta
+	if !errors.As(err, &er) {
+		t.Fatalf("esperado *ErroResposta (status já chegou), veio %T: %v", err, err)
+	}
+	if Transitorio(err) {
+		t.Error("ticket pode existir: não pode parecer transitório")
+	}
+	if n := s.chamadas.Load(); n != 1 {
+		t.Errorf("POST enviado %d vezes", n)
 	}
 }

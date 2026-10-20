@@ -30,6 +30,16 @@ func TestHigienizarCorpo_PII(t *testing.T) {
 			corpo: `erro 503 no upstream`,
 			quer:  "erro 503 no upstream",
 		},
+		"digitosColadosEmLetras": {
+			corpo:  `{"message":"contact5531990000000 duplicado; ticket INF-4521 ok"}`,
+			quer:   "contact[numero] duplicado; ticket INF-4521 ok",
+			naoTem: []string{"5531"},
+		},
+		"doisNumerosSeguidos": {
+			corpo:  `{"message":"12345678909 31999990001"}`,
+			quer:   "[numero]", // o espaço conta como separador: vira uma máscara só
+			naoTem: []string{"1234", "3199"},
+		},
 		"listaDeMensagens": {
 			corpo: `{"statusCode":400,"message":["title must be a string","deskId must be a UUID"],"error":"Bad Request"}`,
 			quer:  "title must be a string; deskId must be a UUID",

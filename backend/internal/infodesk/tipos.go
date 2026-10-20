@@ -123,7 +123,7 @@ func (e *Evento) UnmarshalJSON(b []byte) error {
 		Event:          aux.Event,
 		CreatedAt:      analisarInstante(aux.CreatedAt),
 		OrganizationID: aux.OrganizationID,
-		Data:           aux.Data,
+		Data:           bytes.Clone(aux.Data), // sem alias do buffer de entrada
 	}
 	return nil
 }
@@ -213,10 +213,11 @@ func (m MensagemRecebida) TemMidia() bool {
 	return strings.TrimSpace(m.Message.Body) == ""
 }
 
-// DoCliente informa se a mensagem veio do contato (sender == "CLIENT"). Só
-// essas seguem para o cérebro (W2).
+// DoCliente informa se a mensagem veio do contato: sender exatamente
+// "CLIENT", o único valor documentado. Qualquer outro (ou variação) é
+// ignorado e logado pelo receptor (W2).
 func (m MensagemRecebida) DoCliente() bool {
-	return strings.EqualFold(strings.TrimSpace(m.Message.Sender), RemetenteCliente)
+	return m.Message.Sender == RemetenteCliente
 }
 
 // DecodificarIDConversa extrai `data.conversationId` de conversation.started

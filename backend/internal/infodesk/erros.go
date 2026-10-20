@@ -36,8 +36,11 @@ var (
 )
 
 // HTTPError é uma resposta >= 400 do Infodesk. Mensagem já vem higienizada
-// (sem e-mail, sem sequências longas de dígitos, truncada): pode ir ao log,
-// nunca ao cliente final nem ao prompt do LLM.
+// (sem e-mail, sem sequências de 7+ dígitos, truncada): pode ir ao log,
+// nunca ao cliente final nem ao prompt do LLM. Limite conhecido: NOMES não
+// são detectáveis por padrão — um 4xx de validação que ecoe `title`,
+// `description` ou `contact.name` pode trazê-los; quem loga trata Mensagem
+// como "sem identificadores", não como "sem PII".
 type HTTPError struct {
 	Status     int
 	Mensagem   string
@@ -105,9 +108,10 @@ const (
 var (
 	// reEmail e reNumero mascaram o que parecer dado pessoal num texto vindo do
 	// Infodesk: e-mails e números longos (telefone, CPF/CNPJ — 7+ dígitos, com
-	// ou sem separadores). Códigos HTTP (3 dígitos) continuam legíveis.
+	// ou sem separadores), mesmo colados a letras (`contact5531…`). Códigos
+	// HTTP (3 dígitos) e UUIDs com segmentos curtos continuam legíveis.
 	reEmail  = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
-	reNumero = regexp.MustCompile(`\b\d(?:[\s().\-/]{0,2}\d){6,}\b`)
+	reNumero = regexp.MustCompile(`\d(?:[\s().\-/]{0,2}\d){6,}`)
 )
 
 // higienizarCorpo extrai a `message` do envelope {statusCode, message}
