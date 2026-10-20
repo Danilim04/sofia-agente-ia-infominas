@@ -57,12 +57,16 @@ python_rapido() {
   [ -d "$A/src" ] || { amarelo "agente-ia/src ausente — pulando Python"; return; }
   if [ -z "$PY" ]; then pular "python" "instale Python 3.12+"; return; fi
 
+  # E1.5: evals/ entra no lint, nos tipos e nos testes quando existir (branches antigas não têm).
+  local ALVOS="src tests" TESTES="tests" MYPY="src"
+  if [ -d "$A/evals" ]; then ALVOS="src tests evals"; TESTES="tests evals"; MYPY="src evals"; fi
+
   if py_mod ruff; then
-    etapa "ruff format --check" "$A" "$PY" -m ruff format --check src tests
-    etapa "ruff check" "$A" "$PY" -m ruff check src tests
+    etapa "ruff format --check" "$A" "$PY" -m ruff format --check $ALVOS
+    etapa "ruff check" "$A" "$PY" -m ruff check $ALVOS
   else pular "ruff" "pip install -r agente-ia/requirements-dev.txt"; fi
 
-  if py_mod mypy; then etapa "mypy" "$A" "$PY" -m mypy src
+  if py_mod mypy; then etapa "mypy" "$A" "$PY" -m mypy $MYPY
   else pular "mypy" "pip install -r agente-ia/requirements-dev.txt"; fi
 
   if py_mod importlinter && grep -q 'tool.importlinter' "$A/pyproject.toml" 2>/dev/null; then
@@ -71,14 +75,14 @@ python_rapido() {
     etapa "import-linter" "$A" "$LI"
   else pular "import-linter" "pip install import-linter (+ [tool.importlinter] no pyproject)"; fi
 
-  if py_mod pytest; then etapa "pytest (unit + arquitetura)" "$A" "$PY" -m pytest -q
+  if py_mod pytest; then etapa "pytest (unit + arquitetura)" "$A" "$PY" -m pytest -q $TESTES
   else pular "pytest" "pip install -r agente-ia/requirements.txt"; fi
 }
 
 python_completo() {
   local A="$RAIZ/agente-ia"
   [ -d "$A/evals" ] || return
-  if py_mod pytest; then etapa "evals de PR (determinísticos)" "$A" "$PY" -m pytest -q -m evals_pr; fi
+  if py_mod pytest; then etapa "evals de PR (determinísticos)" "$A" "$PY" -m pytest -q -m evals_pr evals/; fi
 }
 
 # ---------------------------------------------------------------------- Go --

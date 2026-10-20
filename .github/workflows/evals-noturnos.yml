@@ -33,7 +33,7 @@ jobs:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
           if [ -f evals/classificacao/__main__.py ] || [ -d evals/classificacao ]; then
-            python -m evals.classificacao --fonte sintetico --jev --relatorio relatorios/jev.md || echo "::warning::evals de classificação falharam (E2.4)"
+            python -m evals.classificacao --fonte sintetico --jev --relatorio evals/relatorios/jev.md || echo "::warning::evals de classificação falharam (E2.4)"
           else
             echo "evals/classificacao ainda não existe (E1.5/E2.4)"
           fi
@@ -43,7 +43,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           if [ -d evals/conversa/juiz ]; then
-            python -m evals.juiz --relatorio relatorios/juiz.md || echo "::warning::evals com juiz falharam (E4.4)"
+            python -m evals.juiz --relatorio evals/relatorios/juiz.md || echo "::warning::evals com juiz falharam (E4.4)"
           else
             echo "evals/conversa/juiz ainda não existe (E4.4)"
           fi
