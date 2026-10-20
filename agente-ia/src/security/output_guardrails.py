@@ -35,8 +35,7 @@ import html
 import logging
 import re
 import unicodedata
-from typing import Iterable, Mapping
-
+from collections.abc import Iterable, Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -225,11 +224,7 @@ _AFIRMACOES_DE_ACAO_RE = tuple(
             r"(?:recado|aviso|alerta|registro|anotacao|observacao)\b"
         ),
         # encaminhei/repassei + o caso / sua solicitação
-        (
-            r"\b(?:ja\s+)?(?:encaminhei|repassei|encaminhamos|repassamos)\s+"
-            + _OBJETO_CASO
-            + r"\b"
-        ),
+        (r"\b(?:ja\s+)?(?:encaminhei|repassei|encaminhamos|repassamos)\s+" + _OBJETO_CASO + r"\b"),
         # comunicação ao time: avisei/falei/passei/pedi/encaminhei ... (para) o time
         (
             r"\b(?:ja\s+)?(?:avisei|comuniquei|alertei|informei|falei|passei|pedi|solicitei|"

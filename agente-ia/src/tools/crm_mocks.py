@@ -26,11 +26,10 @@ política). `tests/test_default_tools.py` barra qualquer tool daqui na lista.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, Optional
+from datetime import UTC, datetime
+from typing import Annotated, Any
 
 from langchain_core.tools import InjectedToolArg, tool
-
 
 # ---------------------------------------------------------------------------
 # "Banco de dados" mockado
@@ -220,7 +219,7 @@ def verificar_chamados_abertos(id_cliente: str) -> dict[str, Any]:
 @tool
 def rastrear_nota_fiscal(
     numero_nota: str,
-    grupos_emp_sessao: Annotated[Optional[list[str]], InjectedToolArg] = None,
+    grupos_emp_sessao: Annotated[list[str] | None, InjectedToolArg] = None,
 ) -> dict[str, Any]:
     """Rastreia uma nota fiscal (NF da mercadoria) no ciclo de entrega da Azapfy.
 
@@ -306,7 +305,7 @@ def abrir_novo_chamado(id_cliente: str, resumo: str) -> dict[str, Any]:
         "id": ticket_id,
         "assunto": resumo_limpo,
         "status": "aberto",
-        "criado_em": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "criado_em": datetime.now(UTC).replace(microsecond=0).isoformat(),
     }
     chamados_existentes.append(novo)
 

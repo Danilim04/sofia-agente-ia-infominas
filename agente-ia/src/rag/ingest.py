@@ -62,9 +62,7 @@ def load_markdown_dir(docs_dir: Path) -> list[Document]:
     # strip_headers=False mantém o título dentro do texto do chunk (ajuda tanto
     # o embedding quanto a leitura do trecho pelo LLM); a seção também vai p/
     # metadata para a citação.
-    splitter = MarkdownHeaderTextSplitter(
-        headers_to_split_on=_HEADERS, strip_headers=False
-    )
+    splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_HEADERS, strip_headers=False)
     documents: list[Document] = []
     for md in md_files:
         texto = md.read_text(encoding="utf-8").strip()
@@ -115,9 +113,9 @@ def split_documents(
 def persist_chunks(
     chunks: list[Document],
     persist_dir: Path,
-    embeddings: "Embeddings",
+    embeddings: Embeddings,
     collection_name: str = COLLECTION_NAME,
-) -> "Chroma":
+) -> Chroma:
     """Persiste os chunks num ChromaDB em disco e devolve o vector store.
 
     Reseta a coleção antes de gravar para não misturar a ingestão atual com
@@ -134,7 +132,7 @@ def persist_chunks(
             embedding_function=embeddings,
             persist_directory=str(persist_dir),
         ).delete_collection()
-    except Exception as exc:  # noqa: BLE001 — sem coleção prévia para limpar
+    except Exception as exc:
         logger.debug("Nenhuma coleção anterior para limpar (%s).", exc)
 
     store = Chroma.from_documents(
@@ -155,10 +153,10 @@ def persist_chunks(
 def ingest(
     docs_dir: Path,
     persist_dir: Path,
-    embeddings: "Embeddings",
+    embeddings: Embeddings,
     chunk_size: int = 800,
     chunk_overlap: int = 120,
-) -> "Chroma":
+) -> Chroma:
     """Pipeline completo: carrega os .md → splita → persiste em ChromaDB."""
     documents = load_markdown_dir(docs_dir)
     chunks = split_documents(documents, chunk_size, chunk_overlap)
@@ -169,14 +167,12 @@ def _cli() -> None:
     from src.agent.llm import get_local_embeddings
     from src.config import get_settings
 
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     settings = get_settings()
 
     parser = argparse.ArgumentParser(
         description="Ingere as docs Markdown da Azapfy no ChromaDB persistido "
-                    f"(sempre com o modelo local {CHROMA_EMBEDDINGS_MODEL})."
+        f"(sempre com o modelo local {CHROMA_EMBEDDINGS_MODEL})."
     )
     parser.add_argument(
         "--docs-dir",

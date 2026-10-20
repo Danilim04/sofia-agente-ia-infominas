@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from langchain_core.documents import Document
 
 
-def formatar(pergunta: str, docs: "list[Document]", chars: int = 200) -> str:
+def formatar(pergunta: str, docs: list[Document], chars: int = 200) -> str:
     """Relatório legível do top-k (fonte, seção, trecho) — puro, testável."""
     if not docs:
         return f"Nenhum trecho para {pergunta!r} — índice vazio?"

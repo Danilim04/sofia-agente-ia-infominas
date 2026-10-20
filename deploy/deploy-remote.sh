@@ -6,7 +6,7 @@
 #   deploy-remote.sh --host <ip> --version <tag> --env-file <env-renderizado> \
 #     --key <chave-ssh> [--user deploy] [--build-on-host | --skip-build]
 #
-# Onde as imagens nascem (3 modos, mesma saída: azapfy-bot:{brain,gateway}-<v>
+# Onde as imagens nascem (3 modos, mesma saída: sofia-bot:{brain,gateway}-<v>
 # no docker da VPS):
 #   · (default)        build LOCAL aqui + `docker save | ssh docker load`
 #   · --skip-build     imagens já existem aqui (o CI buildou) → só save|load
@@ -63,7 +63,7 @@ if [ -n "${SSH_EXTRA_OPTS:-}" ]; then
 fi
 SSH=(ssh "${SSH_OPTS[@]}" "${SSH_USER}@${HOST}")
 DEST=/opt/azapfy-bot
-REPO=azapfy-bot
+REPO=sofia-bot
 BRAIN_IMG="$REPO:brain-$VERSION"
 GATEWAY_IMG="$REPO:gateway-$VERSION"
 

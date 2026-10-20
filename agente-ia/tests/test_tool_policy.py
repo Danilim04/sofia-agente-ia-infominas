@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -16,7 +16,6 @@ from src.agent.tool_policy import (
     grupos_da_sessao,
 )
 from src.tools.crm_mocks import rastrear_nota_fiscal
-
 
 _IDENTIDADE_AZAPERS = {
     "encontrado": True,
@@ -128,8 +127,22 @@ def test_abrir_injeta_a_proposta_do_estado():
 
 @pytest.mark.parametrize(
     "texto",
-    ["sim", "Sim!", "SIM", "ok", "Ok.", "pode abrir", "Pode abrir, sim", "pode", "confirmo",
-     "Pode abrir 👍", "tá bom", "beleza", "sim, por favor", "pode abrir o chamado"],
+    [
+        "sim",
+        "Sim!",
+        "SIM",
+        "ok",
+        "Ok.",
+        "pode abrir",
+        "Pode abrir, sim",
+        "pode",
+        "confirmo",
+        "Pode abrir 👍",
+        "tá bom",
+        "beleza",
+        "sim, por favor",
+        "pode abrir o chamado",
+    ],
 )
 def test_confirmacao_explicita_aceita(texto):
     assert eh_confirmacao_explicita(texto) is True
@@ -165,7 +178,7 @@ def _estado_abrir(proposta: dict, mensagens: list) -> dict:
 
 
 def test_carimbar_proposta_registra_criada_em_utc_e_turno():
-    agora = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+    agora = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
     msgs = [HumanMessage(content="a"), AIMessage(content="b"), HumanMessage(content="c")]
     proposta = carimbar_proposta({"resumo": "x"}, {"messages": msgs}, agora=agora)
     assert proposta == {"resumo": "x", "criada_em": "2026-10-06T12:00:00+00:00", "turno": 2}
@@ -173,9 +186,11 @@ def test_carimbar_proposta_registra_criada_em_utc_e_turno():
 
 def test_abrir_recusado_quando_proposta_venceu():
     velha = carimbar_proposta(
-        {"resumo": "x"}, {}, agora=datetime.now(timezone.utc) - PROPOSTA_VALIDADE - timedelta(seconds=1)
+        {"resumo": "x"}, {}, agora=datetime.now(UTC) - PROPOSTA_VALIDADE - timedelta(seconds=1)
     )
-    _, erro = aplicar_politica("abrir_chamado_suporte", {}, _estado_abrir(velha, [HumanMessage(content="sim")]))
+    _, erro = aplicar_politica(
+        "abrir_chamado_suporte", {}, _estado_abrir(velha, [HumanMessage(content="sim")])
+    )
     assert erro is not None and "venceu" in erro
 
 
@@ -210,7 +225,11 @@ def test_abrir_recusado_quando_proposta_sem_carimbo():
 
 def test_abrir_aceito_com_proposta_valida_e_sim_no_turno_seguinte():
     proposta = carimbar_proposta({"resumo": "x"}, {"messages": [HumanMessage(content="1")]})
-    msgs = [HumanMessage(content="1"), AIMessage(content="Posso abrir?"), HumanMessage(content="Sim!")]
+    msgs = [
+        HumanMessage(content="1"),
+        AIMessage(content="Posso abrir?"),
+        HumanMessage(content="Sim!"),
+    ]
     args, erro = aplicar_politica("abrir_chamado_suporte", {}, _estado_abrir(proposta, msgs))
     assert erro is None and args["proposta"] == proposta
 
@@ -314,7 +333,11 @@ def test_novo_chamado_true_sem_pedido_do_cliente_e_recusado(mensagem):
         "preparar_abertura_chamado",
         {**_ARGS_PREPARAR, "novo_chamado": True},
         _estado_preparar(
-            [HumanMessage(content="o app trava"), AIMessage(content="Entendi. Em qual tela?"), HumanMessage(content=mensagem)]
+            [
+                HumanMessage(content="o app trava"),
+                AIMessage(content="Entendi. Em qual tela?"),
+                HumanMessage(content=mensagem),
+            ]
         ),
     )
     assert erro is not None and "novo_chamado=true" in erro and "chamados abertos" in erro
@@ -352,7 +375,9 @@ def test_novo_chamado_true_passa_quando_cliente_confirma_pergunta_sobre_chamado_
         HumanMessage(content="Sim, pode abrir"),
     ]
     _, erro = aplicar_politica(
-        "preparar_abertura_chamado", {**_ARGS_PREPARAR, "novo_chamado": True}, _estado_preparar(msgs)
+        "preparar_abertura_chamado",
+        {**_ARGS_PREPARAR, "novo_chamado": True},
+        _estado_preparar(msgs),
     )
     assert erro is None
 
@@ -365,7 +390,9 @@ def test_novo_chamado_true_com_sim_a_outra_pergunta_e_recusado():
         HumanMessage(content="sim"),
     ]
     _, erro = aplicar_politica(
-        "preparar_abertura_chamado", {**_ARGS_PREPARAR, "novo_chamado": True}, _estado_preparar(msgs)
+        "preparar_abertura_chamado",
+        {**_ARGS_PREPARAR, "novo_chamado": True},
+        _estado_preparar(msgs),
     )
     assert erro is not None
 
@@ -393,12 +420,19 @@ def test_preparar_recusado_quando_cliente_cita_protocolo(mensagem, protocolo):
 
 @pytest.mark.parametrize(
     "mensagem",
-    ["abre um chamado, o app trava", "romaneio 4-123456 não aparece", "RCF-123456 sumiu", "NF 35210912345678 não baixou"],
+    [
+        "abre um chamado, o app trava",
+        "romaneio 4-123456 não aparece",
+        "RCF-123456 sumiu",
+        "NF 35210912345678 não baixou",
+    ],
 )
 def test_preparar_passa_sem_protocolo_na_mensagem(mensagem):
     """Romaneio, NF e números soltos não são protocolo de chamado."""
     _, erro = aplicar_politica(
-        "preparar_abertura_chamado", dict(_ARGS_PREPARAR), _estado_preparar([HumanMessage(content=mensagem)])
+        "preparar_abertura_chamado",
+        dict(_ARGS_PREPARAR),
+        _estado_preparar([HumanMessage(content=mensagem)]),
     )
     assert erro is None, mensagem
 

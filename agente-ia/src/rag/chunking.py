@@ -30,9 +30,7 @@ def chunkear_documento(
     if not texto:
         return []
 
-    splitter = MarkdownHeaderTextSplitter(
-        headers_to_split_on=_HEADERS, strip_headers=False
-    )
+    splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_HEADERS, strip_headers=False)
     secoes: list[Document] = []
     for secao in splitter.split_text(texto):
         secao.metadata = {

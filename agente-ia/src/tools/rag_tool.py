@@ -21,7 +21,6 @@ from langchain_core.tools import tool
 from src.config import get_settings
 from src.rag.retriever import get_retriever
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +48,7 @@ def buscar_chunks(pergunta: str) -> dict[str, Any]:
     try:
         retriever = get_retriever(k=settings.rag_top_k)
         docs = retriever.invoke(pergunta)
-    except Exception as exc:  # noqa: BLE001 — fail-soft com log
+    except Exception as exc:
         logger.warning("rag_falhou pergunta_chars=%d erro=%s", len(pergunta), exc)
         logger.debug("rag_falhou_texto pergunta=%r", pergunta)
         return {

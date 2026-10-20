@@ -11,7 +11,7 @@
 # ==============================================================================
 
 # --- Imagens (chegam via docker load — ver deploy-remote.sh) ------------------
-IMAGE_REPO=azapfy-bot
+IMAGE_REPO=sofia-bot
 IMAGE_TAG=${IMAGE_TAG}
 COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
 

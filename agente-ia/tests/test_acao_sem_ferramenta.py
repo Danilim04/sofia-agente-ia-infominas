@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -209,7 +209,10 @@ def test_frase_no_passado_dita_pelo_cliente_e_citada_nao_barra():
         'Entendi, você comentou "já registrei a ocorrência no app" e ela não aparece. '
         "Consegue me dizer em qual aba você olhou, por gentileza?"
     )
-    assert _guardrail([HumanMessage(content="já registrei e sumiu"), AIMessage(content=resposta)]) == {}
+    assert (
+        _guardrail([HumanMessage(content="já registrei e sumiu"), AIMessage(content=resposta)])
+        == {}
+    )
 
 
 def test_acao_do_cliente_em_terceira_pessoa_nao_barra():
@@ -217,7 +220,10 @@ def test_acao_do_cliente_em_terceira_pessoa_nao_barra():
         "Certinho: você registrou a ocorrência e o motorista anotou o canhoto. "
         "Vamos ver por que não sincronizou — arrasta a tela para baixo no app, por gentileza."
     )
-    assert _guardrail([HumanMessage(content="registrei a ocorrência"), AIMessage(content=resposta)]) == {}
+    assert (
+        _guardrail([HumanMessage(content="registrei a ocorrência"), AIMessage(content=resposta)])
+        == {}
+    )
 
 
 @pytest.mark.parametrize(
@@ -279,9 +285,7 @@ def test_tool_que_falhou_nao_conta_como_acao():
 
 
 def test_vazamento_interno_tem_precedencia_sobre_afirmacao():
-    ultima = AIMessage(
-        content='Registrei aqui. Traceback (most recent call last) File "/app/x.py"'
-    )
+    ultima = AIMessage(content='Registrei aqui. Traceback (most recent call last) File "/app/x.py"')
     out = _guardrail([HumanMessage(content="x"), ultima])
     assert out["messages"][0].content == RESPOSTA_ERRO_INTERNO
 
@@ -348,7 +352,9 @@ def test_resposta_segura_e_whatsapp_native_e_abre_fluxo_de_chamado():
     assert "chamado" in r.lower()
     # Termina perguntando → o próximo turno é fluxo ativo (classificador pulado)
     assert r.rstrip().endswith("?")
-    assert nodes._fluxo_ativo([HumanMessage(content="a"), AIMessage(content=r), HumanMessage(content="sim")])
+    assert nodes._fluxo_ativo(
+        [HumanMessage(content="a"), AIMessage(content=r), HumanMessage(content="sim")]
+    )
     # A própria resposta segura não dispara o filtro (sem loop).
     assert afirmacoes_de_acao(r) == []
     # Não afirma nada feito: nada de "registrei"/"abri" fora de negação.
@@ -377,9 +383,7 @@ def test_e2e_grafo_troca_afirmacao_sem_ferramenta_pela_resposta_segura(monkeypat
     assert out["messages"][-1].content == RESPOSTA_ACAO_SEM_FERRAMENTA
     # A resposta original não sobrevive no estado (reducer substitui pelo id).
     assert not any(
-        "recado registrado" in str(m.content)
-        for m in out["messages"]
-        if isinstance(m, AIMessage)
+        "recado registrado" in str(m.content) for m in out["messages"] if isinstance(m, AIMessage)
     )
 
 
@@ -413,7 +417,7 @@ def test_e2e_grafo_abertura_real_de_chamado_mantem_resposta(monkeypatch):
             "proposta_chamado": {
                 "resumo": "APP TRAVANDO",
                 "categoria": "APLICATIVO",
-                "criada_em": datetime.now(timezone.utc).isoformat(),
+                "criada_em": datetime.now(UTC).isoformat(),
                 "turno": 0,
             },
             "messages": [HumanMessage(content="pode abrir")],

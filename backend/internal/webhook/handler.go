@@ -11,8 +11,8 @@ import (
 
 	"context"
 
-	"bot-azapfy/internal/chatwoot"
-	"bot-azapfy/internal/store"
+	"bot-infominas/internal/chatwoot"
+	"bot-infominas/internal/store"
 )
 
 // Engine é a interface do motor consumida pela camada HTTP.

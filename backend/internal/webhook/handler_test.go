@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"bot-azapfy/internal/chatwoot"
-	"bot-azapfy/internal/store"
+	"bot-infominas/internal/chatwoot"
+	"bot-infominas/internal/store"
 )
 
 // engineNoop satisfaz Engine sem processar nada: os testes olham só a borda
@@ -44,7 +44,7 @@ func newServer(t *testing.T, secret, token string) *Server {
 // post envia o corpo ao handler com os headers dados (sem X-Chatwoot-Delivery:
 // a dedup fica fora do caminho e cada chamada conta como evento novo).
 func post(s *Server, url, body string, headers map[string]string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, url, strings.NewReader(body))
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}

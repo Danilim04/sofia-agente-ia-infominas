@@ -23,7 +23,6 @@ from langchain_core.tools import tool
 from src.agent import nodes
 from src.agent.graph import build_graph
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -48,9 +47,7 @@ def _texto_de(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(
-            b.get("text", "") if isinstance(b, dict) else str(b) for b in content
-        )
+        return "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
     return str(content)
 
 
@@ -161,9 +158,7 @@ def test_input_guardrail_avalia_a_ULTIMA_humana(monkeypatch):
 
 def test_route_after_input_guardrail_safe_vai_pra_retrieve():
     assert (
-        nodes.route_after_input_guardrail(
-            {"seguranca": {"is_safe": True, "categoria": "suporte"}}
-        )
+        nodes.route_after_input_guardrail({"seguranca": {"is_safe": True, "categoria": "suporte"}})
         == "retrieve"
     )
 
@@ -252,9 +247,7 @@ def test_tools_node_executa_tool_simples_e_retorna_toolmessage():
         "messages": [
             AIMessage(
                 content="",
-                tool_calls=[
-                    {"id": "tc1", "name": "_tool_simples", "args": {"x": "abc"}}
-                ],
+                tool_calls=[{"id": "tc1", "name": "_tool_simples", "args": {"x": "abc"}}],
             )
         ]
     }
@@ -313,9 +306,7 @@ def test_tools_node_falha_de_tool_e_capturada():
         "messages": [
             AIMessage(
                 content="",
-                tool_calls=[
-                    {"id": "tc1", "name": "_tool_que_falha", "args": {"x": "y"}}
-                ],
+                tool_calls=[{"id": "tc1", "name": "_tool_que_falha", "args": {"x": "y"}}],
             )
         ]
     }
@@ -419,15 +410,11 @@ def test_podar_historico_stuba_toolmessage_de_turnos_anteriores():
     msgs = [
         HumanMessage(content="primeira pergunta"),
         AIMessage(content="", tool_calls=[{"id": "tc1", "name": "rag", "args": {}}]),
-        ToolMessage(
-            content="conteudo enorme do RAG antigo", tool_call_id="tc1", name="rag"
-        ),
+        ToolMessage(content="conteudo enorme do RAG antigo", tool_call_id="tc1", name="rag"),
         AIMessage(content="resposta do turno 1"),
         HumanMessage(content="segunda pergunta"),  # início do turno atual
         AIMessage(content="", tool_calls=[{"id": "tc2", "name": "rag", "args": {}}]),
-        ToolMessage(
-            content="conteudo fresco do RAG atual", tool_call_id="tc2", name="rag"
-        ),
+        ToolMessage(content="conteudo fresco do RAG atual", tool_call_id="tc2", name="rag"),
     ]
     podadas = nodes._podar_historico(msgs)
 
@@ -520,9 +507,7 @@ def test_grafo_e2e_loop_agent_tools_agent(monkeypatch):
         scripted=[
             AIMessage(
                 content="",
-                tool_calls=[
-                    {"id": "tc1", "name": "_tool_simples", "args": {"x": "y"}}
-                ],
+                tool_calls=[{"id": "tc1", "name": "_tool_simples", "args": {"x": "y"}}],
             ),
             AIMessage(content="terminei"),
         ]
@@ -587,9 +572,7 @@ def test_grafo_e2e_acumula_fontes_quando_rag_e_chamado(monkeypatch):
         ]
     )
 
-    g = build_graph(
-        llm=fake, tools=[consultar_base_conhecimento_fake], buscar_chunks=_sem_rag
-    )
+    g = build_graph(llm=fake, tools=[consultar_base_conhecimento_fake], buscar_chunks=_sem_rag)
     out = g.invoke(
         {
             "telefone": "11999990001",
@@ -710,9 +693,7 @@ def test_input_guardrail_pula_classificador_em_fluxo_ativo(monkeypatch):
         chamadas.append(texto)
         return {"is_safe": False, "categoria": "off_topic", "motivo": "spy"}
 
-    monkeypatch.setattr(
-        "src.security.input_guardrails._classificar_via_llm", _classificador_spy
-    )
+    monkeypatch.setattr("src.security.input_guardrails._classificar_via_llm", _classificador_spy)
     out = nodes.input_guardrail_node(
         {
             "messages": [
@@ -739,9 +720,7 @@ def test_output_guardrail_remove_citacao_fabricada():
             '(fonte: Azapfy, seção "App do Motorista (Mobile)").'
         )
     )
-    out = nodes.output_guardrail_node(
-        {"messages": [ultima], "fontes_usadas": []}
-    )
+    out = nodes.output_guardrail_node({"messages": [ultima], "fontes_usadas": []})
     novo = out["messages"][0]
     assert "fonte:" not in novo.content
     assert "3 cliques" in novo.content
@@ -752,9 +731,7 @@ def test_output_guardrail_remove_citacao_fabricada():
 def test_output_guardrail_remove_tambem_citacao_real():
     # Decisão de produto: o cliente não recebe referência de documentação,
     # mesmo quando a fonte existe de verdade — fica só em fontes_usadas.
-    ultima = AIMessage(
-        content='Use a Pesquisa (fonte: azapfy-web.md, seção "Módulo: Pesquisa").'
-    )
+    ultima = AIMessage(content='Use a Pesquisa (fonte: azapfy-web.md, seção "Módulo: Pesquisa").')
     out = nodes.output_guardrail_node(
         {
             "messages": [ultima],
@@ -777,11 +754,10 @@ def test_output_guardrail_sem_citacao_nao_altera():
 def test_output_guardrail_mascara_vazamento_interno():
     from src.agent.prompts import RESPOSTA_ERRO_INTERNO
 
-    ultima = AIMessage(
-        content='Erro: Traceback (most recent call last) File "/app/src/x.py"'
-    )
+    ultima = AIMessage(content='Erro: Traceback (most recent call last) File "/app/src/x.py"')
     out = nodes.output_guardrail_node({"messages": [ultima], "fontes_usadas": []})
     assert out["messages"][0].content == RESPOSTA_ERRO_INTERNO
+
 
 # ===========================================================================
 # ZB-1 — Consentimento real antes de abrir chamado: a proposta vence (15 min)
@@ -791,7 +767,7 @@ def test_output_guardrail_mascara_vazamento_interno():
 # aberto sem consentimento. Aqui nada disso chega ao gateway.
 # ===========================================================================
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from src.agent import tool_policy
 from src.tools import sac_tools
@@ -819,7 +795,7 @@ _IDENTIDADE_ZB = {
 
 def _proposta_carimbada(idade: timedelta = timedelta(minutes=1), turno: int = 0) -> dict:
     """Proposta como o `tools_node` a guarda: com `criada_em` e `turno`."""
-    criada = datetime.now(timezone.utc) - idade
+    criada = datetime.now(UTC) - idade
     return {**_PROPOSTA_ZB, "criada_em": criada.isoformat(), "turno": turno}
 
 
@@ -948,9 +924,7 @@ def test_zb1_proposta_dentro_da_validade_ainda_vale(monkeypatch, gateway):
         "isso",
     ],
 )
-def test_zb1_mensagem_que_nao_e_confirmacao_explicita_recusa_abrir(
-    monkeypatch, gateway, mensagem
-):
+def test_zb1_mensagem_que_nao_e_confirmacao_explicita_recusa_abrir(monkeypatch, gateway, mensagem):
     """A proposta está válida e no turno certo; só a mensagem não confirma —
     quem decide é o código, não o modelo (que aqui INSISTE em abrir)."""
     g, _ = _grafo_zb(monkeypatch, [_tc_abrir(), AIMessage(content="entendi")])
@@ -1064,7 +1038,7 @@ def test_zb1_fluxo_feliz_preparar_turno_n_confirmar_turno_n_mais_1(monkeypatch, 
 
 def test_zb1_tools_node_carimba_a_proposta_com_criada_em_e_turno(gateway):
     node = nodes.make_tools_node(SAC_TOOLS)
-    antes = datetime.now(timezone.utc)
+    antes = datetime.now(UTC)
     out = node(
         {
             "telefone": "5531999990000",
@@ -1079,7 +1053,7 @@ def test_zb1_tools_node_carimba_a_proposta_com_criada_em_e_turno(gateway):
     proposta = out["proposta_chamado"]
     assert proposta["turno"] == 2  # duas mensagens do cliente no histórico
     criada = datetime.fromisoformat(proposta["criada_em"])
-    assert criada.tzinfo is not None and antes <= criada <= datetime.now(timezone.utc)
+    assert criada.tzinfo is not None and antes <= criada <= datetime.now(UTC)
     assert {k: v for k, v in proposta.items() if k not in ("criada_em", "turno")} == _PROPOSTA_ZB
     # O que o modelo vê é o resultado do gateway, sem o carimbo.
     assert "criada_em" not in out["messages"][0].content

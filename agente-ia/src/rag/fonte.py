@@ -1,7 +1,7 @@
 """Fontes de documentação para o pipeline de sincronização (Contrato B).
 
 Uma "fonte" é quem fornece a documentação a indexar. O contrato de dados é o
-do `contrato-b-api-documentacao-v1.md` (raiz do repo): listagem barata
+do `docs/zapin/contrato-b-api-documentacao-v1.md`: listagem barata
 (metadados, sem conteúdo) + busca de documento completo por id. Duas
 implementações:
 
@@ -25,7 +25,7 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
@@ -179,7 +179,7 @@ class DiagnosticoAPI:
     escopos_chave: tuple[str, ...]
     espacos: tuple[EspacoAPI, ...]
     contrato_versao: str
-    retencao_tombstone_dias: Optional[int]
+    retencao_tombstone_dias: int | None
 
     def problemas(self) -> list[str]:
         """Motivos pelos quais o sync NÃO deve rodar ([] = pronto)."""
@@ -222,7 +222,7 @@ class FonteAPIDocumentacao:
         api_key: str = "",
         timeout: float = 30.0,
         limite_pagina: int = 500,
-        transport: Optional[Any] = None,
+        transport: Any | None = None,
     ):
         import httpx
 
@@ -231,20 +231,20 @@ class FonteAPIDocumentacao:
         headers = {"X-API-Key": api_key} if api_key else {}
         self._client = httpx.Client(headers=headers, timeout=timeout, transport=transport)
 
-    def _request(self, url: str, params: Optional[dict[str, Any]] = None) -> Any:
+    def _request(self, url: str, params: dict[str, Any] | None = None) -> Any:
         try:
             return self._client.get(url, params=params)
-        except Exception as exc:  # noqa: BLE001 — rede/timeout viram ErroDeFonte
+        except Exception as exc:
             raise ErroDeFonte(f"falha de rede na fonte ({url}): {exc}") from exc
 
     @staticmethod
     def _json(resp: Any, url: str) -> dict[str, Any]:
         try:
             return resp.json()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ErroDeFonte(f"resposta não-JSON da fonte em {url}") from exc
 
-    def _get(self, url: str, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    def _get(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         resp = self._request(url, params)
         if resp.status_code != 200:
             # §4.2: erro explícito (401/5xx etc.) aborta o ciclo; nunca
@@ -279,7 +279,7 @@ class FonteAPIDocumentacao:
 
     def listar(self) -> list[ItemListagem]:
         itens: list[ItemListagem] = []
-        cursor: Optional[str] = None
+        cursor: str | None = None
         while True:
             params: dict[str, Any] = {"limit": self._limite_pagina}
             if cursor:

@@ -34,11 +34,7 @@ def _modulo_de_origem(tool: BaseTool) -> str | None:
 
 def _tools_definidas_em_crm_mocks() -> dict[int, str]:
     """Toda instância de `BaseTool` presente no namespace do módulo mock."""
-    return {
-        id(obj): nome
-        for nome, obj in vars(crm_mocks).items()
-        if isinstance(obj, BaseTool)
-    }
+    return {id(obj): nome for nome, obj in vars(crm_mocks).items() if isinstance(obj, BaseTool)}
 
 
 def test_nenhuma_tool_da_lista_oficial_vem_de_crm_mocks():
@@ -56,9 +52,7 @@ def test_nenhuma_tool_da_lista_oficial_vem_de_crm_mocks():
     infratoras = sorted(
         t.name
         for t in tools
-        if _modulo_de_origem(t) == MODULO_MOCKS
-        or id(t) in por_identidade
-        or t.name in nomes_mock
+        if _modulo_de_origem(t) == MODULO_MOCKS or id(t) in por_identidade or t.name in nomes_mock
     )
     assert infratoras == [], (
         f"tool(s) de TESTE ({MODULO_MOCKS}) na lista oficial do agente: "

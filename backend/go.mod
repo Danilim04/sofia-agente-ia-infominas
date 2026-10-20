@@ -1,4 +1,4 @@
-module bot-azapfy
+module bot-infominas
 
 go 1.26.4
 

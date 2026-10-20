@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"bot-azapfy/internal/alerta"
-	"bot-azapfy/internal/brain"
-	"bot-azapfy/internal/chatwoot"
-	"bot-azapfy/internal/store"
+	"bot-infominas/internal/alerta"
+	"bot-infominas/internal/brain"
+	"bot-infominas/internal/chatwoot"
+	"bot-infominas/internal/store"
 )
 
 // Origens de uma transferência para a fila humana (campo `origem` da tabela
@@ -91,7 +91,7 @@ func NovoIDOcorrencia(agora time.Time) string {
 	if loc, err := time.LoadLocation("America/Sao_Paulo"); err == nil {
 		agora = agora.In(loc)
 	}
-	return fmt.Sprintf("ZPF-%s-%s-%02d", agora.Format("20060102"), agora.Format("1504"), rand.IntN(100))
+	return fmt.Sprintf("ZPF-%s-%s-%02d", agora.Format("20060102"), agora.Format("1504"), rand.IntN(100)) //nolint:gosec // G404: sufixo legível de ID de ocorrência, não é material criptográfico
 }
 
 // TransferirParaHumano é o ÚNICO caminho para a fila humana — usado pelo gate

@@ -70,7 +70,9 @@ def test_processar_chat_tolera_content_em_blocos():
     """`content` pode ser lista de blocos (Anthropic/cache_control)."""
     valores = {
         "messages": [
-            AIMessage(content=[{"type": "text", "text": "parte 1 "}, {"type": "text", "text": "parte 2"}])
+            AIMessage(
+                content=[{"type": "text", "text": "parte 1 "}, {"type": "text", "text": "parte 2"}]
+            )
         ],
     }
     g = _FakeGraph(valores)
@@ -151,7 +153,9 @@ def test_processar_chat_classifica_pela_causa_encadeada():
     except RuntimeError as exc:
         embrulhada = exc
     resp = asyncio.run(
-        processar_chat(_GrafoQueExplode(embrulhada), ChatRequest(conversation_id="c", mensagem="oi"))
+        processar_chat(
+            _GrafoQueExplode(embrulhada), ChatRequest(conversation_id="c", mensagem="oi")
+        )
     )
     assert resp.erro is not None and resp.erro.classe == "definitiva"
 

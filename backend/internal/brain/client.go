@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"bot-azapfy/internal/mongo"
+	"bot-infominas/internal/mongo"
 )
 
 // Classes de falha do cérebro (mesmos valores de agente-ia/src/agent/falhas.py).
@@ -154,7 +154,7 @@ func erroDeStatus(status int, body []byte) *Erro {
 // *Erro classificado (ver ComoErro): o orquestrador decide repetir
 // (transitória) ou transferir ao atendente (definitiva).
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	payload, err := json.Marshal(req)
+	payload, err := json.Marshal(req) //nolint:gosec // G117: session_token é campo do Contrato A (sai em E1.1), não um segredo
 	if err != nil {
 		return nil, &Erro{Classe: ClasseDefinitiva, Causa: "requisição ao cérebro inválida", Err: err}
 	}

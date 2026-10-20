@@ -15,7 +15,7 @@ dashboard.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from src.config import Settings, get_settings
 
@@ -35,8 +35,8 @@ def _build_chat_openrouter(
     model: str,
     temperature: float,
     max_tokens: int,
-    settings: Optional[Settings] = None,
-) -> "BaseChatModel":
+    settings: Settings | None = None,
+) -> BaseChatModel:
     from langchain_openai import ChatOpenAI
 
     settings = settings or get_settings()
@@ -58,7 +58,7 @@ def _build_chat_openrouter(
 
 
 @lru_cache(maxsize=1)
-def get_llm() -> "BaseChatModel":
+def get_llm() -> BaseChatModel:
     """LLM principal do agente (suporta tool-calling)."""
     settings = get_settings()
     return _build_chat_openrouter(
@@ -70,7 +70,7 @@ def get_llm() -> "BaseChatModel":
 
 
 @lru_cache(maxsize=1)
-def get_classifier_llm() -> "BaseChatModel":
+def get_classifier_llm() -> BaseChatModel:
     """LLM barato/rápido usado pelo classificador de segurança (Épico 6).
 
     Temperature fixa em 0.0 — classificação é determinística por design. O
@@ -90,7 +90,7 @@ EMBEDDINGS_PROVIDERS = ("local", "openrouter")
 
 
 @lru_cache(maxsize=4)
-def get_local_embeddings(model_name: str) -> "Embeddings":
+def get_local_embeddings(model_name: str) -> Embeddings:
     """Embeddings locais via `sentence-transformers` em CPU (sem rede).
 
     Usado pelo provider "local" e SEMPRE pelo Chroma embutido na imagem
@@ -105,7 +105,7 @@ def get_local_embeddings(model_name: str) -> "Embeddings":
     )
 
 
-def _build_openrouter_embeddings(settings: Settings) -> "Embeddings":
+def _build_openrouter_embeddings(settings: Settings) -> Embeddings:
     """Embeddings pelo endpoint /embeddings do OpenRouter (mesma chave do LLM)."""
     from langchain_openai import OpenAIEmbeddings
 
@@ -125,7 +125,7 @@ def _build_openrouter_embeddings(settings: Settings) -> "Embeddings":
 
 
 @lru_cache(maxsize=1)
-def get_embeddings() -> "Embeddings":
+def get_embeddings() -> Embeddings:
     """Embeddings do índice pgvector, conforme EMBEDDINGS_PROVIDER.
 
     "local" (default; dev/testes, offline) ou "openrouter" (produção:

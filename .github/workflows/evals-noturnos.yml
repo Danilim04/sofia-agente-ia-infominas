@@ -1,0 +1,55 @@
+# ==============================================================================
+# Evals noturnos — camada 2, não bloqueiam merge (docs/plano/04).
+# JEV real sobre os datasets de classificação e (E4.4) LLM real com juiz.
+# Esqueleto criado em E0.3; os comandos reais entram em E2.4 e E4.4.
+# Secrets: TYPESAFE_API_KEY, OPENROUTER_API_KEY (vazios = passo pulado).
+# ==============================================================================
+name: Evals noturnos
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 03:00 America/Sao_Paulo
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  classificacao:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults: { run: { working-directory: agente-ia } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*.txt" }
+      - run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: classificação com JEV real
+        if: ${{ env.TYPESAFE_API_KEY != '' }}
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: |
+          if [ -f evals/classificacao/__main__.py ] || [ -d evals/classificacao ]; then
+            python -m evals.classificacao --fonte sintetico --jev --relatorio relatorios/jev.md || echo "::warning::evals de classificação falharam (E2.4)"
+          else
+            echo "evals/classificacao ainda não existe (E1.5/E2.4)"
+          fi
+      - name: conversa com LLM real + juiz
+        if: ${{ env.OPENROUTER_API_KEY != '' }}
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -d evals/conversa/juiz ]; then
+            python -m evals.juiz --relatorio relatorios/juiz.md || echo "::warning::evals com juiz falharam (E4.4)"
+          else
+            echo "evals/conversa/juiz ainda não existe (E4.4)"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: relatorios-evals
+          path: agente-ia/evals/relatorios/
+          if-no-files-found: ignore

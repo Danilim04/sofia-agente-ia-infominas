@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable, Iterable
 from datetime import datetime
-from typing import Any, Callable, Iterable, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import (
@@ -54,7 +55,6 @@ from src.security.output_guardrails import (
     envolver_chunks_rag,
     remover_citacoes,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +136,7 @@ def _texto_de(conteudo: Any) -> str:
     if isinstance(conteudo, str):
         return conteudo
     if isinstance(conteudo, list):
-        return "".join(
-            b.get("text", "") for b in conteudo if isinstance(b, dict)
-        )
+        return "".join(b.get("text", "") for b in conteudo if isinstance(b, dict))
     return "" if conteudo is None else str(conteudo)
 
 
@@ -211,7 +209,7 @@ def _registrar_fontes_rag(chunks: Iterable[dict], fontes: list[str]) -> None:
 
 
 def make_retrieve_node(
-    buscar: Optional[Callable[[str], dict]] = None,
+    buscar: Callable[[str], dict] | None = None,
 ) -> Callable[[AgentState], dict]:
     """Nó que recupera contexto da base ANTES da chamada do agente.
 
@@ -283,9 +281,7 @@ def _formatar_identidade(identidade: dict) -> str:
             )
             for base in emp.get("bases") or []:
                 mods = ", ".join(base.get("modulos_ativos") or []) or "—"
-                linhas.append(
-                    f"    - base {base.get('nome')} ({base.get('sigla')}): {mods}"
-                )
+                linhas.append(f"    - base {base.get('nome')} ({base.get('sigla')}): {mods}")
     else:
         linhas.append("- sem empresa/base com acesso ativo.")
     linhas.append(
@@ -295,7 +291,7 @@ def _formatar_identidade(identidade: dict) -> str:
     return "\n".join(linhas)
 
 
-def _periodo_do_dia(agora: Optional[datetime] = None) -> str:
+def _periodo_do_dia(agora: datetime | None = None) -> str:
     """Período do dia em Brasília, para a saudação da persona ("Boníssimo
     dia"/"Boníssima tarde"/"Boa noite"). O gate Go tem o equivalente em
     `saudacaoAbertura` (gate.go) — manter os cortes de horário alinhados."""
@@ -330,8 +326,7 @@ def _build_system_message(state: AgentState) -> SystemMessage:
         partes.append(
             "\n# Trechos da base de conhecimento (recuperados para a mensagem atual)\n"
             "Use-os quando forem relevantes, SEM citar fonte, arquivo ou seção "
-            "na resposta. Se não forem relevantes, ignore-os.\n"
-            + rag_contexto
+            "na resposta. Se não forem relevantes, ignore-os.\n" + rag_contexto
         )
 
     seguranca = state.get("seguranca") or {}
@@ -358,9 +353,7 @@ def _build_system_message(state: AgentState) -> SystemMessage:
 # Poda do histórico enviado ao LLM (economia de tokens)
 # ---------------------------------------------------------------------------
 
-_STUB_TOOL_ANTERIOR = (
-    "[resultado de ferramenta de turno anterior omitido para economizar contexto]"
-)
+_STUB_TOOL_ANTERIOR = "[resultado de ferramenta de turno anterior omitido para economizar contexto]"
 
 
 def _podar_historico(messages: list[BaseMessage]) -> list[BaseMessage]:
@@ -533,9 +526,7 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
             tool_call_id = tc.get("id") or ""
 
             if tool is None:
-                content = json.dumps(
-                    {"erro": f"tool desconhecida: {nome}"}, ensure_ascii=False
-                )
+                content = json.dumps({"erro": f"tool desconhecida: {nome}"}, ensure_ascii=False)
                 tool_messages.append(
                     ToolMessage(content=content, tool_call_id=tool_call_id, name=nome)
                 )
@@ -558,13 +549,10 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
 
             try:
                 resultado = tool.invoke(args)
-            except Exception as exc:  # noqa: BLE001 — erro genérico pro agente (A2)
+            except Exception as exc:
                 logger.warning("tool_falhou nome=%s erro=%s", nome, exc)
                 resultado = {
-                    "erro": (
-                        "a ferramenta falhou agora; tente de novo ou ofereça "
-                        "abrir um chamado"
-                    )
+                    "erro": ("a ferramenta falhou agora; tente de novo ou ofereça abrir um chamado")
                 }
 
             # Fluxo em duas fases do chamado: o dry-run aprovado vira estado
@@ -595,9 +583,7 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
                     else json.dumps(resultado, ensure_ascii=False, default=str)
                 )
 
-            tool_messages.append(
-                ToolMessage(content=content, tool_call_id=tool_call_id, name=nome)
-            )
+            tool_messages.append(ToolMessage(content=content, tool_call_id=tool_call_id, name=nome))
 
         update: dict[str, Any] = {
             "messages": tool_messages,
@@ -655,9 +641,7 @@ def _turno_executou_ferramenta(messages: Iterable[BaseMessage] | None) -> bool:
         if isinstance(msgs[i], HumanMessage):
             inicio = i + 1
             break
-    return any(
-        isinstance(m, ToolMessage) and _resultado_de_tool_ok(m) for m in msgs[inicio:]
-    )
+    return any(isinstance(m, ToolMessage) and _resultado_de_tool_ok(m) for m in msgs[inicio:])
 
 
 def output_guardrail_node(state: AgentState) -> dict:

@@ -8,7 +8,7 @@
 #
 #   deploy/build-on-host.sh <version>
 #
-# Resultado: azapfy-bot:brain-<version> e azapfy-bot:gateway-<version> no
+# Resultado: sofia-bot:brain-<version> e sofia-bot:gateway-<version> no
 # docker local da VM — o mesmo que o `docker load` do caminho por imagem.
 # O cache de camadas fica na VM (o build seguinte só refaz o que mudou).
 # ==============================================================================
@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 
 VERSION="${1:-}"
 [ -n "$VERSION" ] || { echo "Uso: build-on-host.sh <version>" >&2; exit 1; }
-REPO=azapfy-bot
+REPO=sofia-bot
 
 [ -d src/agente-ia ] && [ -d src/backend ] ||
   { echo "ERRO: fontes ausentes em $(pwd)/src — o deploy-remote.sh sincroniza antes." >&2; exit 1; }

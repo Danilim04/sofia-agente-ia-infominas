@@ -25,9 +25,9 @@
 # ==============================================================================
 name: Deploy
 
+# E0.3: deploy automático DESLIGADO até a infra da Infominas ser definida (P10).
+# Esta pipeline ainda descreve a VM da Azapfy (omni-route); será reescrita em E4.2.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       version:

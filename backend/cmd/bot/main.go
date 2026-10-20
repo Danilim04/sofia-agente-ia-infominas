@@ -16,16 +16,16 @@ import (
 	"syscall"
 	"time"
 
-	"bot-azapfy/internal/brain"
-	"bot-azapfy/internal/chatwoot"
-	"bot-azapfy/internal/config"
-	"bot-azapfy/internal/engine"
-	"bot-azapfy/internal/identity"
-	"bot-azapfy/internal/mongo"
-	"bot-azapfy/internal/sac"
-	"bot-azapfy/internal/store"
-	"bot-azapfy/internal/toolsapi"
-	"bot-azapfy/internal/webhook"
+	"bot-infominas/internal/brain"
+	"bot-infominas/internal/chatwoot"
+	"bot-infominas/internal/config"
+	"bot-infominas/internal/engine"
+	"bot-infominas/internal/identity"
+	"bot-infominas/internal/mongo"
+	"bot-infominas/internal/sac"
+	"bot-infominas/internal/store"
+	"bot-infominas/internal/toolsapi"
+	"bot-infominas/internal/webhook"
 )
 
 func main() {
@@ -54,7 +54,7 @@ func main() {
 	repo, err := mongo.NewRepo(ctx, cfg.MongoURI, cfg.MongoDB, cfg.MongoCollection, cfg.MongoTimeout)
 	if err != nil {
 		log.Error("conectar ao Mongo", "err", err)
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic // exitAfterDefer: o boot aborta; não há nada a liberar ainda
 	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

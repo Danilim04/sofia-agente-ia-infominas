@@ -16,10 +16,9 @@ Política de falha: fail-soft. Erro de rede/parse → `login=None` (o Go segue c
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from pydantic import BaseModel, Field
-
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +26,7 @@ logger = logging.getLogger(__name__)
 class LoginExtraido(BaseModel):
     """Schema estruturado da resposta do extrator."""
 
-    login: Optional[str] = Field(
+    login: str | None = Field(
         default=None,
         description=(
             "O identificador que o usuário forneceu (CPF, CNPJ, e-mail ou "
@@ -51,7 +50,7 @@ def _extrair_via_llm(mensagem: str) -> dict:
                 HumanMessage(content=mensagem),
             ]
         )
-    except Exception as exc:  # noqa: BLE001 — fail-soft com log
+    except Exception as exc:
         logger.warning("extrator_login_indisponivel erro=%s", exc)
         return {"login": None, "erro": str(exc)}
 
@@ -62,7 +61,7 @@ def _extrair_via_llm(mensagem: str) -> dict:
 def extrair_login(
     mensagem: str,
     *,
-    extrator: Optional[Callable[[str], dict]] = None,
+    extrator: Callable[[str], dict] | None = None,
 ) -> dict:
     """Extrai o login de uma mensagem em linguagem natural.
 

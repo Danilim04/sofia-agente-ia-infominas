@@ -11,11 +11,11 @@
 # "fiação" entre containers (URLs internas, paths) mora AQUI em environment:
 # — vence o .env e não depende de ninguém preencher certo.
 # ==============================================================================
-name: azapfy-bot
+name: sofia-bot
 
 services:
   # Postgres + pgvector: índice do RAG (tabelas rag_* — Contrato B, ver
-  # plano-migracao-pgvector.md) e persistência do gateway (schema `gateway`:
+  # docs/zapin/plano-migracao-pgvector.md) e persistência do gateway (schema `gateway`:
   # dedup, estado do gate de identidade, cache telefone→perfil). É ESTADO de
   # produção: o volume pgvector-data precisa de backup.
   pgvector:
@@ -39,7 +39,7 @@ services:
       start_period: 20s
 
   brain:
-    image: ${IMAGE_REPO:-azapfy-bot}:brain-${IMAGE_TAG:-dev}
+    image: ${IMAGE_REPO:-sofia-bot}:brain-${IMAGE_TAG:-dev}
     build: ./agente-ia
     env_file:
       # required:false só para `compose config`/build funcionarem sem .env;
@@ -72,7 +72,7 @@ services:
       start_period: 40s
 
   gateway:
-    image: ${IMAGE_REPO:-azapfy-bot}:gateway-${IMAGE_TAG:-dev}
+    image: ${IMAGE_REPO:-sofia-bot}:gateway-${IMAGE_TAG:-dev}
     build: ./backend
     env_file:
       - path: .env

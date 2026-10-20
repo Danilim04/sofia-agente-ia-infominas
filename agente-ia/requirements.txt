@@ -3,7 +3,7 @@ langchain>=0.3.0,<0.4.0
 langchain-core>=0.3.0,<0.4.0
 langchain-openai>=0.2.0,<0.3.0
 langchain-community>=0.3.0,<0.4.0
-langchain-chroma>=0.1.4,<0.2.0
+langchain-chroma>=0.2.0,<0.3.0
 langchain-huggingface>=0.1.0,<0.2.0
 langgraph>=0.2.50,<0.4.0
 # Checkpointer persistente (histórico de conversa sobrevive a restart do brain)
@@ -12,7 +12,7 @@ langgraph-checkpoint-sqlite>=2.0.0,<3.0.0
 aiosqlite>=0.21,<0.22
 
 # --- RAG ---
-chromadb>=0.5.0,<0.6.0
+chromadb>=1.0.0,<2.0.0
 pypdf>=5.0.0,<6.0.0
 sentence-transformers>=3.0.0,<4.0.0
 # Índice pgvector (sync incremental do Contrato B + backend de leitura opcional)

@@ -19,9 +19,7 @@ from src.rag.fonte import DocumentoFonte, ItemListagem
 
 PG_URL = os.environ.get("PGVECTOR_TEST_URL", "")
 
-pytestmark = pytest.mark.skipif(
-    not PG_URL, reason="integração pgvector: defina PGVECTOR_TEST_URL"
-)
+pytestmark = pytest.mark.skipif(not PG_URL, reason="integração pgvector: defina PGVECTOR_TEST_URL")
 
 DIM = 8
 MODELO = "fake-model"
@@ -47,14 +45,13 @@ def indice():
         ind.fechar()
 
 
-def _indexar(indice, doc_id="a.md", titulo="Doc A", texto="conteúdo", seed=1.0,
-             updated_at="v1"):
+def _indexar(indice, doc_id="a.md", titulo="Doc A", texto="conteúdo", seed=1.0, updated_at="v1"):
     from src.rag.chunking import chunkear_documento
 
-    item = ItemListagem(id=doc_id, titulo=titulo, categoria="Frotas",
-                        updated_at=updated_at)
-    doc = DocumentoFonte(id=doc_id, titulo=titulo, categoria="Frotas",
-                         conteudo=f"# {titulo}\n\n{texto}")
+    item = ItemListagem(id=doc_id, titulo=titulo, categoria="Frotas", updated_at=updated_at)
+    doc = DocumentoFonte(
+        id=doc_id, titulo=titulo, categoria="Frotas", conteudo=f"# {titulo}\n\n{texto}"
+    )
     chunks = chunkear_documento(doc)
     indice.substituir_documento(
         item, f"hash-{doc_id}-{updated_at}", chunks, [_vec(seed)] * len(chunks)
@@ -89,15 +86,14 @@ def test_roundtrip_indexar_consultar_substituir_remover(indice):
     indice.remover_documento("a.md", "hash-tombstone")
     assert indice.estado()["a.md"].deleted
     contagens = indice.contagens()
-    assert contagens == {"docs_vivos": 1, "tombstones": 1,
-                         "chunks": contagens["chunks"]}
+    assert contagens == {"docs_vivos": 1, "tombstones": 1, "chunks": contagens["chunks"]}
     docs = PgRetriever(PG_URL, EmbFixa(), k=5).invoke("qualquer pergunta")
     assert all(d.metadata["source"] != "Doc A" for d in docs)
 
 
 def test_modelo_registrado_persiste_e_limpar_tudo_reseta(indice):
     assert indice.modelo_registrado() == MODELO
-    indice.preparar_esquema("outro-modelo", DIM)   # não sobrescreve
+    indice.preparar_esquema("outro-modelo", DIM)  # não sobrescreve
     assert indice.modelo_registrado() == MODELO
 
     _indexar(indice)
@@ -109,8 +105,8 @@ def test_modelo_registrado_persiste_e_limpar_tudo_reseta(indice):
 
 def test_sync_completo_contra_postgres_real(indice):
     """O motor inteiro (sync) contra o índice real — fonte e embeddings fakes."""
-    from tests.test_sync import FakeEmbeddings, FakeFonte, _doc
     from src.rag.sync import executar_sync
+    from tests.test_sync import FakeEmbeddings, FakeFonte, _doc
 
     fonte = FakeFonte({"a.md": _doc(), "b.md": _doc(titulo="Avisos RNTRC")})
     emb = FakeEmbeddings()

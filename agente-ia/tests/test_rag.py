@@ -13,7 +13,6 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-
 # ---------------------------------------------------------------------------
 # Fake embeddings — determinístico, sem dependências externas
 # ---------------------------------------------------------------------------

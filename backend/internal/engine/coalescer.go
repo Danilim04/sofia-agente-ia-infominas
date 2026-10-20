@@ -18,7 +18,7 @@ import (
 	"context"
 	"time"
 
-	"bot-azapfy/internal/chatwoot"
+	"bot-infominas/internal/chatwoot"
 )
 
 // inbound é uma mensagem de cliente já filtrada/higienizada, aguardando lote.

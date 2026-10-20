@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # azapfy-sync-docs — rotina do sync da base de conhecimento do bot
-# (AzapDocs → pgvector; Fase 4 do plano-migracao-pgvector.md).
+# (AzapDocs → pgvector; Fase 4 do docs/zapin/plano-migracao-pgvector.md).
 #
 # Instalado pelo ansible (role base) em /usr/local/bin e chamado pelo cron do
 # usuário deploy. Roda o sync DENTRO da imagem do brain (mesmo código, mesmo

@@ -21,14 +21,13 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Any, Optional
-
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
-def get_tracing_handler() -> Optional[Any]:
+def get_tracing_handler() -> Any | None:
     """Devolve um `CallbackHandler` do Langfuse, ou `None` se o tracing estiver off.
 
     O handler é seguro para reuso entre requisições (os dados por-turno vêm no
@@ -38,9 +37,7 @@ def get_tracing_handler() -> Optional[Any]:
 
     settings = get_settings()
     if not settings.langfuse_enabled:
-        logger.info(
-            "langfuse_tracing desativado (sem LANGFUSE_PUBLIC_KEY/SECRET_KEY)"
-        )
+        logger.info("langfuse_tracing desativado (sem LANGFUSE_PUBLIC_KEY/SECRET_KEY)")
         return None
 
     try:
@@ -57,8 +54,6 @@ def get_tracing_handler() -> Optional[Any]:
         handler = CallbackHandler()
         logger.info("langfuse_tracing ativo host=%s", settings.langfuse_host)
         return handler
-    except Exception as exc:  # noqa: BLE001 — tracing jamais derruba o atendimento
-        logger.warning(
-            "langfuse_tracing_falhou erro=%s — seguindo SEM tracing", exc
-        )
+    except Exception as exc:
+        logger.warning("langfuse_tracing_falhou erro=%s — seguindo SEM tracing", exc)
         return None

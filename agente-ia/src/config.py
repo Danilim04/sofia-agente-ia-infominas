@@ -14,21 +14,15 @@ class Settings(BaseSettings):
     )
 
     openrouter_api_key: str = Field(..., alias="OPENROUTER_API_KEY")
-    openrouter_base_url: str = Field(
-        "https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL"
-    )
-    openrouter_model: str = Field(
-        "google/gemini-3.5-flash", alias="OPENROUTER_MODEL"
-    )
+    openrouter_base_url: str = Field("https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL")
+    openrouter_model: str = Field("google/gemini-3.5-flash", alias="OPENROUTER_MODEL")
     openrouter_classifier_model: str = Field(
         "google/gemini-2.5-flash-lite", alias="OPENROUTER_CLASSIFIER_MODEL"
     )
     app_referer: str = Field("http://localhost:8000", alias="APP_REFERER")
     app_title: str = Field("Azapfy Suporte IA", alias="APP_TITLE")
 
-    chroma_persist_dir: Path = Field(
-        Path("./chroma_db"), alias="CHROMA_PERSIST_DIR"
-    )
+    chroma_persist_dir: Path = Field(Path("./chroma_db"), alias="CHROMA_PERSIST_DIR")
     docs_dir: Path = Field(Path("./docs"), alias="DOCS_DIR")
     # Embeddings do índice pgvector (sync + retrieval do agente):
     #   provider "local"      → sentence-transformers em CPU; EMBEDDINGS_MODEL é
@@ -48,7 +42,7 @@ class Settings(BaseSettings):
     # Backend de leitura do RAG: "chroma" (legado, default) ou "pgvector".
     # A migração é chaveável para permitir rollback instantâneo: o sync grava
     # no pgvector independente deste valor; este valor só decide de onde o
-    # agente LÊ. Ver plano-migracao-pgvector.md na raiz do repo.
+    # agente LÊ. Ver docs/zapin/plano-migracao-pgvector.md.
     vector_backend: str = Field("chroma", alias="VECTOR_BACKEND")
     pgvector_url: str = Field("", alias="PGVECTOR_URL")
 
@@ -98,9 +92,7 @@ class Settings(BaseSettings):
     # Checkpointer persistente do grafo (histórico das conversas por
     # conversation_id). Sem o pacote `langgraph-checkpoint-sqlite` (ou em erro),
     # o server cai para MemorySaver com warning — dev/testes seguem sem setup.
-    checkpoint_db_path: Path = Field(
-        Path("./data/checkpoints.db"), alias="CHECKPOINT_DB_PATH"
-    )
+    checkpoint_db_path: Path = Field(Path("./data/checkpoints.db"), alias="CHECKPOINT_DB_PATH")
 
     # --- Observabilidade: Langfuse (tracing) — OPCIONAL ---
     # Sem as duas chaves, o tracing fica DESLIGADO e o agente roda normal
