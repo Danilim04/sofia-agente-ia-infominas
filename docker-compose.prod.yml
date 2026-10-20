@@ -39,22 +39,6 @@ services:
     ports: !reset []
     restart: unless-stopped
     logging: *log
-    networks:
-      default: {}
-      chatwoot:
-        aliases:
-          - azapfy-bot
-    # --- Exposição pública via Traefik (desligada até o DNS existir) ---------
-    # labels:
-    #   traefik.enable: 'true'
-    #   traefik.docker.network: omniroute_default
-    #   traefik.http.routers.azapfy-bot.rule: Host(`${DOMAIN_BOT}`)
-    #   traefik.http.routers.azapfy-bot.entrypoints: websecure
-    #   traefik.http.routers.azapfy-bot.tls: 'true'
-    #   traefik.http.services.azapfy-bot.loadbalancer.server.port: '8080'
-
-networks:
-  # Rede da stack omni-route (Chatwoot/Traefik) já existente no servidor.
-  chatwoot:
-    name: omniroute_default
-    external: true
+    # O webhook do Infodesk chega pela internet: a exposição pública
+    # (reverse proxy/TLS da infra da Infominas) é definida no runbook novo
+    # (docs/plano/00-visao-geral.md, "Deploy") — TODO(E4.x).

@@ -70,9 +70,9 @@ func TestEncerrarEpisodioFalhaViraErro(t *testing.T) {
 // TestChatLeClasseEIDDoCorpo: o cérebro (ZC-2) devolve 500/503 com o envelope
 // `erro` — classe, id_ocorrencia e causa chegam intactos ao gateway.
 func TestChatLeClasseEIDDoCorpo(t *testing.T) {
-	c := servidor(t, 500, `{"reply":"","acoes":[],"fontes":[],"erro":{"classe":"definitiva","id_ocorrencia":"ZPF-20261002-0911-55","causa":"saldo do OpenRouter insuficiente (402)"}}`)
+	c := servidor(t, 500, `{"reply":"","acoes":[],"fontes":[],"erro":{"classe":"definitiva","id_ocorrencia":"SOF-20261002-0911-55","causa":"saldo do OpenRouter insuficiente (402)"}}`)
 	e := chamar(t, c)
-	if e.Classe != ClasseDefinitiva || e.IDOcorrencia != "ZPF-20261002-0911-55" || e.Status != 500 {
+	if e.Classe != ClasseDefinitiva || e.IDOcorrencia != "SOF-20261002-0911-55" || e.Status != 500 {
 		t.Fatalf("erro inesperado: %+v", e)
 	}
 	if e.Transitoria() {

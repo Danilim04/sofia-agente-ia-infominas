@@ -19,16 +19,9 @@ linters:
     - bodyclose
     - noctx
     - gocritic
-    - depguard
   settings:
-    depguard:
-      rules:
-        legado:
-          deny:
-            - pkg: go.mongodb.org/mongo-driver
-              desc: "Mongo saiu do projeto (ADR 0003): identidade vem do telefone + CPF"
-            - pkg: bot-azapfy
-              desc: "módulo renomeado para bot-infominas (E0.6)"
+    # depguard saiu em E1.1: as dependências do domínio antigo não existem mais
+    # e o teste de arquitetura (internal/arquitetura) impede que voltem.
     gosec:
       excludes:
         - G104 # erros não checados: já coberto por errcheck com mensagens melhores
@@ -43,13 +36,6 @@ linters:
     presets:
       - std-error-handling
       - common-false-positives
-    paths:
-      # Pacotes com data marcada para sair na Onda 1 (E1.1): não vale a pena
-      # corrigir lint neles. REMOVER estas linhas junto com os pacotes.
-      - internal/chatwoot
-      - internal/mongo
-      - internal/sac
-      - internal/identity
 
 formatters:
   enable:

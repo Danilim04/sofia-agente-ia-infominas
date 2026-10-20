@@ -2,117 +2,87 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	"bot-infominas/internal/alerta"
 	"bot-infominas/internal/brain"
-	"bot-infominas/internal/chatwoot"
 	"bot-infominas/internal/config"
-	"bot-infominas/internal/identity"
-	"bot-infominas/internal/mongo"
 	"bot-infominas/internal/store"
 )
 
 // ---------------------------------------------------------------------------
-// Fakes de Chatwoot e cérebro — a engine só enxerga as interfaces.
+// Fakes de transporte e cérebro — a engine só enxerga as interfaces.
 // ---------------------------------------------------------------------------
 
 type msgEnviada struct {
-	conv    int64
-	content string
-	private bool
+	conv string
+	body string
 }
 
-type fakeChatwoot struct {
-	mu      sync.Mutex
-	msgs    []msgEnviada
-	labels  map[int64][]string
-	status  map[int64]string
-	equipes map[int64]int64
-	typing  map[int64]int // vezes que "digitando" foi ligado
-	// estado "ao vivo" devolvido por GetConversation; sem entrada → conversa
-	// na fila do bot. getErr simula Chatwoot fora.
-	aoVivo map[int64]*chatwoot.Conversation
-	getErr error
-	gets   int
+// fakeTransporte satisfaz Transporte sem rede, registrando o que a engine
+// pediu ao canal.
+type fakeTransporte struct {
+	mu            sync.Mutex
+	msgs          []msgEnviada
+	departamentos map[string][]string // conversa → departamentos pedidos, em ordem
+	enviarErr     error
+	transferirErr error
 }
 
-func novoFakeChatwoot() *fakeChatwoot {
-	return &fakeChatwoot{
-		labels: map[int64][]string{}, status: map[int64]string{}, equipes: map[int64]int64{},
-		typing: map[int64]int{}, aoVivo: map[int64]*chatwoot.Conversation{},
+func novoFakeTransporte() *fakeTransporte {
+	return &fakeTransporte{departamentos: map[string][]string{}}
+}
+
+func (f *fakeTransporte) EnviarMensagem(_ context.Context, convID, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.enviarErr != nil {
+		return f.enviarErr
 	}
+	f.msgs = append(f.msgs, msgEnviada{conv: convID, body: body})
+	return nil
 }
 
-func (f *fakeChatwoot) GetConversation(_ context.Context, convID int64) (*chatwoot.Conversation, error) {
+func (f *fakeTransporte) TransferirDepartamento(_ context.Context, convID, deptID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.gets++
-	if f.getErr != nil {
-		return nil, f.getErr
+	if f.transferirErr != nil {
+		return f.transferirErr
 	}
-	if c, ok := f.aoVivo[convID]; ok {
-		return c, nil
-	}
-	c := conversaDoBot(convID, chatwoot.StatusOpen)
-	return &c, nil
-}
-
-func (f *fakeChatwoot) ToggleTyping(_ context.Context, convID int64, on bool) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if on {
-		f.typing[convID]++
-	}
+	f.departamentos[convID] = append(f.departamentos[convID], deptID)
 	return nil
 }
 
-func (f *fakeChatwoot) SetLabels(_ context.Context, convID int64, labels []string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.labels[convID] = append([]string{}, labels...)
-	return nil
+func (f *fakeTransporte) LerConversa(_ context.Context, convID string) (map[string]any, error) {
+	return map[string]any{"id": convID}, nil
 }
 
-func (f *fakeChatwoot) SendMessage(_ context.Context, convID int64, content string, private bool) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.msgs = append(f.msgs, msgEnviada{conv: convID, content: content, private: private})
-	return nil
-}
-
-func (f *fakeChatwoot) ToggleStatus(_ context.Context, convID int64, status string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.status[convID] = status
-	return nil
-}
-
-func (f *fakeChatwoot) AssignTeam(_ context.Context, convID int64, teamID int64) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.equipes[convID] = teamID
-	return nil
-}
-
-// mensagens devolve o conteúdo das mensagens da conversa (públicas ou privadas).
-func (f *fakeChatwoot) mensagens(convID int64, privadas bool) []string {
+// mensagens devolve o corpo das mensagens enviadas na conversa.
+func (f *fakeTransporte) mensagens(convID string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []string
 	for _, m := range f.msgs {
-		if m.conv == convID && m.private == privadas {
-			out = append(out, m.content)
+		if m.conv == convID {
+			out = append(out, m.body)
 		}
 	}
 	return out
+}
+
+// transferida devolve os departamentos para os quais a conversa foi movida.
+func (f *fakeTransporte) transferida(convID string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string{}, f.departamentos[convID]...)
 }
 
 type fakeBrain struct {
@@ -120,6 +90,8 @@ type fakeBrain struct {
 	chamadas int
 	// respostas em sequência; a última repete. Vazio = resposta "ok".
 	respostas []func() (*brain.ChatResponse, error)
+	// pedidos guarda cada ChatRequest recebido (Contrato A).
+	pedidos []brain.ChatRequest
 	// encerrados registra os conversation_id recebidos em EncerrarEpisodio
 	// (ZB-1); encerrarErr simula o cérebro fora nessa chamada.
 	encerrados  []string
@@ -139,10 +111,11 @@ func (f *fakeBrain) episodiosEncerrados() []string {
 	return append([]string{}, f.encerrados...)
 }
 
-func (f *fakeBrain) Chat(_ context.Context, _ brain.ChatRequest) (*brain.ChatResponse, error) {
+func (f *fakeBrain) Chat(_ context.Context, req brain.ChatRequest) (*brain.ChatResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.chamadas++
+	f.pedidos = append(f.pedidos, req)
 	if len(f.respostas) == 0 {
 		return &brain.ChatResponse{Reply: "ok"}, nil
 	}
@@ -159,6 +132,15 @@ func (f *fakeBrain) total() int {
 	return f.chamadas
 }
 
+func (f *fakeBrain) ultimoPedido() brain.ChatRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.pedidos) == 0 {
+		return brain.ChatRequest{}
+	}
+	return f.pedidos[len(f.pedidos)-1]
+}
+
 func sempre(err error) func() (*brain.ChatResponse, error) {
 	return func() (*brain.ChatResponse, error) { return nil, err }
 }
@@ -167,46 +149,26 @@ func responde(reply string) func() (*brain.ChatResponse, error) {
 	return func() (*brain.ChatResponse, error) { return &brain.ChatResponse{Reply: reply}, nil }
 }
 
-// repoVazio: gate sem ninguém no Mongo — a identificação resolve só pelo
-// cache telefone→perfil que o teste semeia.
-type repoVazio struct{}
-
-func (repoVazio) BuscarPorLogin(context.Context, string) (mongo.UsuarioDoc, bool, error) {
-	return mongo.UsuarioDoc{}, false, nil
-}
-
 const (
-	telefoneIdentificado = "5511999990060"
-	perfilIdentificado   = `{"encontrado":true,"login":"10596693664","nome":"Daniel","empresas":[{"grupo_empresa":"AZAPERS"}]}`
+	telefoneCliente = "+5511999990060"
+	deptHumano      = "dept-humano-1"
 )
 
-// engineCompleta monta a engine com Chatwoot e cérebro falsos, gate real (sobre
-// SQLite) e um telefone já identificado em cache.
-func engineCompleta(t *testing.T) (*Engine, store.Store, *fakeChatwoot, *fakeBrain) {
+// engineCompleta monta a engine com transporte e cérebro falsos sobre SQLite.
+func engineCompleta(t *testing.T) (*Engine, store.Store, *fakeTransporte, *fakeBrain) {
 	t.Helper()
-	st, err := store.NewSQLite(filepath.Join(t.TempDir(), "gate.db"))
+	st, err := store.NewSQLite(filepath.Join(t.TempDir(), "gateway.db"))
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	if err := st.PutIdentity(context.Background(), &store.CachedIdentity{
-		Phone: telefoneIdentificado, Login: "10596693664", Perfil: perfilIdentificado,
-		ExpiresAt: time.Now().Add(time.Hour),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	cfg := &config.Config{LabelBot: "fila-bot", LabelHumano: "fila-humano", TeamHumanoID: 7}
-	gate := identity.New(st, repoVazio{}, "email", 3, time.Hour, time.Hour, nil, nil)
-	cw, br := novoFakeChatwoot(), &fakeBrain{}
-	e := New(cfg, cw, gate, br, st, nil)
-	return e, st, cw, br
+	cfg := &config.Config{DepartamentoHumanoPadrao: deptHumano}
+	tr, br := novoFakeTransporte(), &fakeBrain{}
+	e := New(cfg, tr, br, st, nil)
+	return e, st, tr, br
 }
 
-func conversaDoBot(id int64, status string) chatwoot.Conversation {
-	return chatwoot.Conversation{ID: id, Labels: []string{"fila-bot"}, Status: status}
-}
-
-var reIDOcorrencia = regexp.MustCompile(`ZPF-\d{8}-\d{4}-\d{2}`)
+var reIDOcorrencia = regexp.MustCompile(`SOF-\d{8}-\d{4}-\d{2}`)
 
 // relogioFalso injeta tempo e espera na engine: dormir avança o relógio em vez
 // de dormir de verdade (teste não gasta segundos reais).
@@ -245,7 +207,7 @@ func comRelogioFalso(e *Engine) *relogioFalso {
 	return r
 }
 
-// notificadorFalso captura os alertas da vigia (ZC-7/ZC-8).
+// notificadorFalso captura os alertas da vigia (ZC-7).
 type notificadorFalso struct {
 	mu      sync.Mutex
 	alertas []alerta.Alerta
@@ -283,782 +245,20 @@ func erro402() *brain.Erro {
 	return &brain.Erro{Classe: brain.ClasseDefinitiva, Causa: "saldo do OpenRouter insuficiente (402)", Status: 500}
 }
 
-// turno roda um lote de uma mensagem do telefone identificado na conversa.
-func turno(e *Engine, conv int64, recebido time.Time) {
-	e.processarLote(context.Background(), []inbound{{
-		conv: conversaDoBot(conv, chatwoot.StatusOpen), phone: telefoneIdentificado,
-		content: "oi", recebidoEm: recebido,
-	}})
+// msg monta uma mensagem de texto do cliente na conversa dada.
+func msg(conv, texto string) Inbound {
+	return Inbound{ConversationID: conv, Telefone: telefoneCliente, Nome: "Daniel", Texto: texto}
 }
 
-// engineComStore monta uma Engine só com o store (sem Chatwoot/gate/cérebro):
-// os handlers de status não falam com ninguém além da persistência.
-func engineComStore(t *testing.T) (*Engine, store.Store) {
-	t.Helper()
-	st, err := store.NewSQLite(filepath.Join(t.TempDir(), "gate.db"))
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return New(&config.Config{}, nil, nil, nil, st, nil), st
-}
-
-func mudancaDeStatus(convID int64, de, para string) *chatwoot.ConversationUpdated {
-	ev := &chatwoot.ConversationUpdated{
-		ChangedAttributes: []map[string]chatwoot.ChangeValue{{
-			"status": {CurrentValue: json.RawMessage(`"` + para + `"`), PreviousValue: json.RawMessage(`"` + de + `"`)},
-		}},
-	}
-	ev.ID = convID
-	ev.Status = para
-	return ev
-}
-
-func TestConversaResolvidaApagaEstadoDoGate(t *testing.T) {
-	e, st := engineComStore(t)
-	ctx := context.Background()
-	const conv = int64(41)
-	if err := st.SetGate(ctx, &store.GateState{ConversationID: conv, State: store.GateFalha}); err != nil {
-		t.Fatal(err)
-	}
-
-	e.HandleConversationUpdated(ctx, mudancaDeStatus(conv, chatwoot.StatusOpen, chatwoot.StatusResolved))
-
-	if gs, _ := st.GetGate(ctx, conv); gs != nil {
-		t.Fatalf("resolvida: esperava gate apagado, ainda existe %+v", gs)
-	}
-}
-
-func TestConversaResolvidaNaoMexeEmOutrasConversas(t *testing.T) {
-	e, st := engineComStore(t)
-	ctx := context.Background()
-	_ = st.SetGate(ctx, &store.GateState{ConversationID: 42, State: store.GateIdentificado})
-	_ = st.SetGate(ctx, &store.GateState{ConversationID: 43, State: store.GateFalha})
-
-	e.HandleConversationUpdated(ctx, mudancaDeStatus(42, chatwoot.StatusOpen, chatwoot.StatusResolved))
-
-	if gs, _ := st.GetGate(ctx, 43); gs == nil || gs.State != store.GateFalha {
-		t.Fatalf("conversa 43 não podia mudar, veio %+v", gs)
-	}
-}
-
-func TestConversaReabertaOuComEtiquetaNaoApagaGate(t *testing.T) {
-	e, st := engineComStore(t)
-	ctx := context.Background()
-	const conv = int64(44)
-	_ = st.SetGate(ctx, &store.GateState{ConversationID: conv, State: store.GateIdentificado, Data: `{"perfil":{}}`})
-
-	// Reabertura (resolved → open) e mudança só de etiquetas: sem ação.
-	e.HandleConversationUpdated(ctx, mudancaDeStatus(conv, chatwoot.StatusResolved, chatwoot.StatusOpen))
-	soEtiquetas := &chatwoot.ConversationUpdated{
-		ChangedAttributes: []map[string]chatwoot.ChangeValue{{
-			"labels": {CurrentValue: json.RawMessage(`["fila-bot"]`), PreviousValue: json.RawMessage(`[]`)},
-		}},
-	}
-	soEtiquetas.ID = conv
-	soEtiquetas.Status = chatwoot.StatusResolved // status atual, mas não mudou NESTA atualização
-	e.HandleConversationUpdated(ctx, soEtiquetas)
-
-	if gs, _ := st.GetGate(ctx, conv); gs == nil || gs.State != store.GateIdentificado {
-		t.Fatalf("gate não podia ser apagado, veio %+v", gs)
-	}
-}
-
-func TestEventoStatusChangedResolvidoApagaGate(t *testing.T) {
-	e, st := engineComStore(t)
-	ctx := context.Background()
-	const conv = int64(45)
-	_ = st.SetGate(ctx, &store.GateState{ConversationID: conv, State: store.GateFalha})
-
-	ev := &chatwoot.ConversationStatusChanged{}
-	ev.ID = conv
-	ev.Status = chatwoot.StatusResolved
-	e.HandleConversationStatusChanged(ctx, ev)
-
-	if gs, _ := st.GetGate(ctx, conv); gs != nil {
-		t.Fatalf("status_changed resolved: esperava gate apagado, ainda existe %+v", gs)
-	}
-}
-
-// TestConversaResolvidaLimpaPropostaNoCerebro (ZB-1): resolver a conversa é o
-// fim do episódio também no cérebro — o gateway chama EncerrarEpisodio com o
-// id da conversa (como string, igual ao Contrato A) para a proposta de
-// chamado pendente não sobreviver à reutilização da conversa pelo Chatwoot.
-// Vale para os dois eventos (conversation_updated e conversation_status_changed).
-func TestConversaResolvidaLimpaPropostaNoCerebro(t *testing.T) {
-	e, st, _, br := engineCompleta(t)
-	ctx := context.Background()
-	_ = st.SetGate(ctx, &store.GateState{ConversationID: 45, State: store.GateIdentificado})
-
-	e.HandleConversationUpdated(ctx, mudancaDeStatus(45, chatwoot.StatusOpen, chatwoot.StatusResolved))
-	ev := &chatwoot.ConversationStatusChanged{}
-	ev.ID = 46
-	ev.Status = chatwoot.StatusResolved
-	e.HandleConversationStatusChanged(ctx, ev)
-
-	if got := br.episodiosEncerrados(); len(got) != 2 || got[0] != "45" || got[1] != "46" {
-		t.Fatalf("esperava EncerrarEpisodio para 45 e 46, veio %v", got)
-	}
-	if gs, _ := st.GetGate(ctx, 45); gs != nil {
-		t.Fatalf("gate da 45 deveria ter sido apagado: %+v", gs)
-	}
-	// Reabertura e mudança só de etiqueta NÃO encerram episódio no cérebro.
-	e.HandleConversationUpdated(ctx, mudancaDeStatus(45, chatwoot.StatusResolved, chatwoot.StatusOpen))
-	e.HandleConversationUpdated(ctx, mudancaDeEtiquetas(45, nil, []string{"fila-bot"}))
-	if got := br.episodiosEncerrados(); len(got) != 2 {
-		t.Fatalf("reabrir/etiquetar não podia chamar o cérebro, veio %v", got)
-	}
-}
-
-// TestConversaResolvidaComCerebroForaAindaApagaGate (ZB-1): a limpeza no
-// cérebro é best-effort — se ele estiver fora, o gate da conversa é apagado
-// do mesmo jeito e nada explode (a validade da proposta é a rede de segurança).
-func TestConversaResolvidaComCerebroForaAindaApagaGate(t *testing.T) {
-	e, st, _, br := engineCompleta(t)
-	br.encerrarErr = errors.New("cérebro fora")
-	ctx := context.Background()
-	_ = st.SetGate(ctx, &store.GateState{ConversationID: 47, State: store.GateFalha})
-
-	e.HandleConversationUpdated(ctx, mudancaDeStatus(47, chatwoot.StatusOpen, chatwoot.StatusResolved))
-
-	if got := br.episodiosEncerrados(); len(got) != 1 || got[0] != "47" {
-		t.Fatalf("esperava a tentativa no cérebro, veio %v", got)
-	}
-	if gs, _ := st.GetGate(ctx, 47); gs != nil {
-		t.Fatalf("gate deveria ter sido apagado mesmo com o cérebro fora: %+v", gs)
-	}
-}
-
-// TestMensagemDeGrupoNaoEntraNaFila: o bot não responde grupo de WhatsApp. A
-// mensagem é descartada na borda — nenhum worker de conversa é criado (sem
-// gate, sem cérebro, sem resposta).
-func TestMensagemDeGrupoNaoEntraNaFila(t *testing.T) {
-	e, _ := engineComStore(t)
-	ctx := context.Background()
-
-	msg := &chatwoot.MessageCreated{
-		MessageType: chatwoot.MessageIncoming,
-		Content:     "alguém sabe se o app caiu?",
-		SourceID:    "waid-grupo-1",
-		Sender:      chatwoot.Sender{Type: "contact", Name: "Fulano", Identifier: "120363041234567890@g.us"},
-	}
-	msg.Conversation.ID = 50
-	msg.Conversation.Meta.Sender = chatwoot.Contact{Name: "Grupo Logística", Identifier: "120363041234567890@g.us"}
-
-	e.HandleMessageCreated(ctx, msg)
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if _, ok := e.filas[50]; ok {
-		t.Fatal("mensagem de grupo não pode abrir fila/worker de conversa")
-	}
-}
-
-// TestConversaDeGrupoNaoEhAdotada: conversation_created de grupo na caixa do
-// bot não recebe a etiqueta da fila do bot.
-func TestConversaDeGrupoNaoEhAdotada(t *testing.T) {
-	e, _ := engineComStore(t)
-	e.cfg.LabelBot = "fila-bot"
-	ctx := context.Background()
-
-	conv := chatwoot.Conversation{ID: 51}
-	conv.Meta.Sender = chatwoot.Contact{Name: "Grupo", PhoneNumber: "+120363041234567890"}
-	if e.adotarConversa(ctx, &conv) {
-		t.Fatal("conversa de grupo não pode ser adotada pela fila do bot")
-	}
-}
-
-// TestPayloadRealDeGrupoNaoEntraNaFila repete o incidente de 2026-09-14
-// (conversa 5, grupo de teste) com o webhook real: hoje a engine descarta na
-// borda, mesmo com a conversa já etiquetada como fila-bot.
-func TestPayloadRealDeGrupoNaoEntraNaFila(t *testing.T) {
-	e, _ := engineComStore(t)
-	e.cfg.LabelBot = "fila-bot"
-	ctx := context.Background()
-
-	var msg chatwoot.MessageCreated
-	if err := json.Unmarshal([]byte(payloadGrupoReal), &msg); err != nil {
-		t.Fatal(err)
-	}
-	e.HandleMessageCreated(ctx, &msg)
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if _, ok := e.filas[msg.Conversation.ID]; ok {
-		t.Fatal("payload real de grupo não pode abrir fila/worker de conversa")
-	}
-}
-
-// payloadGrupoReal: cópia do fixture de internal/chatwoot (telefone mascarado).
-const payloadGrupoReal = `{
- "event": "message_created", "id": 118,
- "content": "**+55 (31) 9999-0000 - Participante Teste:**\n\nteste",
- "message_type": "incoming", "private": false, "source_id": "WAID:3EB03E00F600330A1AADC8",
- "sender": {"id": 3, "identifier": "120363428192696101@g.us", "name": " (GROUP)", "phone_number": null, "additional_attributes": {}},
- "conversation": {
-  "id": 5, "inbox_id": 3, "labels": ["fila-bot"], "status": "open", "additional_attributes": {},
-  "meta": {"sender": {"id": 3, "identifier": "120363428192696101@g.us", "name": " (GROUP)", "phone_number": null, "type": "contact"}, "assignee": null}
- },
- "account": {"id": 1, "name": "Omni Route"}
-}`
-
-// ---------------------------------------------------------------------------
-// ZC-3: transferência única e silenciosa
-// ---------------------------------------------------------------------------
-
-// TestCerebroFalhandoTransfereSilenciosamente: falha definitiva do cérebro
-// (402 do OpenRouter) → mensagem neutra ao cliente, fila-humano, equipe,
-// status open, nota privada com o MESMO ID do cérebro e registro em `falhas`.
-// Nenhuma mensagem de erro técnico ao cliente.
-func TestCerebroFalhandoTransfereSilenciosamente(t *testing.T) {
-	e, st, cw, br := engineCompleta(t)
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(&brain.Erro{
-		Classe: brain.ClasseDefinitiva, IDOcorrencia: "ZPF-20261002-0911-55",
-		Causa: "saldo do OpenRouter insuficiente (402)", Status: 500,
-	})}
-	ctx := context.Background()
-	conv := conversaDoBot(60, chatwoot.StatusPending)
-
-	e.processarLote(ctx, []inbound{{conv: conv, phone: telefoneIdentificado, content: "como rastreio a NF?"}})
-
-	publicas := cw.mensagens(60, false)
-	if len(publicas) != 1 || publicas[0] != FormatWhatsApp(MsgTransferencia) {
-		t.Fatalf("esperava só a mensagem neutra de transferência, veio %q", publicas)
-	}
-	for _, m := range publicas {
-		if strings.Contains(strings.ToLower(m), "problema técnico") || strings.Contains(m, "402") || strings.Contains(m, "ZPF-") {
-			t.Fatalf("erro técnico vazou ao cliente: %q", m)
-		}
-	}
-	if labels := cw.labels[60]; len(labels) != 1 || labels[0] != "fila-humano" {
-		t.Fatalf("esperava etiqueta fila-humano (sem fila-bot), veio %v", labels)
-	}
-	if cw.equipes[60] != 7 {
-		t.Fatalf("esperava equipe padrão 7, veio %d", cw.equipes[60])
-	}
-	if cw.status[60] != chatwoot.StatusOpen {
-		t.Fatalf("conversa pendente devia voltar a open, veio %q", cw.status[60])
-	}
-	notas := cw.mensagens(60, true)
-	if len(notas) != 1 {
-		t.Fatalf("esperava 1 nota privada, veio %d: %q", len(notas), notas)
-	}
-	for _, quer := range []string{"ZPF-20261002-0911-55", "saldo do OpenRouter insuficiente (402)", "Quando:", "Ocorrência:"} {
-		if !strings.Contains(notas[0], quer) {
-			t.Fatalf("nota privada sem %q:\n%s", quer, notas[0])
-		}
-	}
-	f, err := st.UltimaFalha(ctx, 60)
-	if err != nil || f == nil {
-		t.Fatalf("falha não registrada: %+v err=%v", f, err)
-	}
-	if f.ID != "ZPF-20261002-0911-55" || f.Origem != OrigemCerebro || f.Classe != brain.ClasseDefinitiva {
-		t.Fatalf("registro em falhas inesperado: %+v", f)
-	}
-}
-
-// TestTransferenciaGeraIDQuandoCerebroNaoManda: cérebro caiu sem corpo (sem
-// ID) → o gateway gera o ID no mesmo formato e o usa na nota e no registro.
-func TestTransferenciaGeraIDQuandoCerebroNaoManda(t *testing.T) {
-	e, st, cw, br := engineCompleta(t)
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(&brain.Erro{
-		Classe: brain.ClasseDefinitiva, Causa: "erro não tratado no cérebro (status 500)", Status: 500,
-	})}
-	ctx := context.Background()
-	e.processarLote(ctx, []inbound{{conv: conversaDoBot(61, chatwoot.StatusOpen), phone: telefoneIdentificado, content: "oi"}})
-
-	notas := cw.mensagens(61, true)
-	if len(notas) != 1 {
-		t.Fatalf("esperava 1 nota privada, veio %q", notas)
-	}
-	id := reIDOcorrencia.FindString(notas[0])
-	if id == "" {
-		t.Fatalf("nota sem ID de ocorrência:\n%s", notas[0])
-	}
-	if f, _ := st.UltimaFalha(ctx, 61); f == nil || f.ID != id {
-		t.Fatalf("registro deve ter o mesmo ID da nota (%s): %+v", id, f)
-	}
-	// Conversa já aberta: não mexe no status.
-	if _, ok := cw.status[61]; ok {
-		t.Fatalf("conversa open não devia ter status alterado: %q", cw.status[61])
-	}
-}
-
-// TestGateRoteiaHumanoPelaTransferenciaUnica: a desistência do gate passa pelo
-// mesmo caminho — mensagem do gate (persona) + etiqueta + nota com ID + registro.
-func TestGateRoteiaHumanoPelaTransferenciaUnica(t *testing.T) {
-	e, st, cw, _ := engineCompleta(t)
-	ctx := context.Background()
-	conv := conversaDoBot(62, chatwoot.StatusOpen)
-	const phone = "5511000000062"
-	for _, m := range []string{"oi", "naoexiste", "naoexiste", "naoexiste"} {
-		e.processarLote(ctx, []inbound{{conv: conv, phone: phone, content: m}})
-	}
-	publicas := cw.mensagens(62, false)
-	if len(publicas) == 0 || !strings.Contains(publicas[len(publicas)-1], "encaminhar") {
-		t.Fatalf("última mensagem devia ser a do gate avisando a transferência: %q", publicas)
-	}
-	if labels := cw.labels[62]; len(labels) != 1 || labels[0] != "fila-humano" {
-		t.Fatalf("esperava fila-humano, veio %v", labels)
-	}
-	notas := cw.mensagens(62, true)
-	if len(notas) != 1 || !reIDOcorrencia.MatchString(notas[0]) || !strings.Contains(notas[0], "identificar") {
-		t.Fatalf("nota privada do gate inesperada: %q", notas)
-	}
-	if f, _ := st.UltimaFalha(ctx, 62); f == nil || f.Origem != OrigemGate || !strings.Contains(f.Causa, "identificar") {
-		t.Fatalf("registro do gate inesperado: %+v", f)
-	}
-}
-
-// TestRespostaNormalNaoTransfere: caminho feliz intacto — resposta do cérebro
-// chega ao cliente, sem etiqueta/nota/registro.
-func TestRespostaNormalNaoTransfere(t *testing.T) {
-	e, st, cw, br := engineCompleta(t)
-	br.respostas = []func() (*brain.ChatResponse, error){responde("Boníssimo dia! Posso ajudar?")}
-	ctx := context.Background()
-	e.processarLote(ctx, []inbound{{conv: conversaDoBot(63, chatwoot.StatusOpen), phone: telefoneIdentificado, content: "oi"}})
-	if got := cw.mensagens(63, false); len(got) != 1 || got[0] != "Boníssimo dia! Posso ajudar?" {
-		t.Fatalf("resposta do cérebro não chegou: %q", got)
-	}
-	if _, ok := cw.labels[63]; ok {
-		t.Fatal("caminho feliz não mexe em etiqueta")
-	}
-	if f, _ := st.UltimaFalha(ctx, 63); f != nil {
-		t.Fatalf("caminho feliz não registra falha: %+v", f)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// ZC-5: nova tentativa só para falha transitória + teto do turno + disjuntor
-// ---------------------------------------------------------------------------
-
-// TestTransitoriaRepeteEDepoisTransfere: 3 chamadas (1 + 2 novas tentativas,
-// esperas de 2 s e 5 s com "digitando"), então transferência silenciosa.
-func TestTransitoriaRepeteEDepoisTransfere(t *testing.T) {
-	e, st, cw, br := engineCompleta(t)
-	rel := comRelogioFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio())}
-
-	turno(e, 70, rel.now())
-
-	if br.total() != 3 {
-		t.Fatalf("esperava 3 chamadas ao cérebro (1 + 2 novas tentativas), veio %d", br.total())
-	}
-	if len(rel.esperas) != 2 || rel.esperas[0] != 2*time.Second || rel.esperas[1] != 5*time.Second {
-		t.Fatalf("esperas: queria [2s 5s], veio %v", rel.esperas)
-	}
-	if cw.typing[70] != 2 {
-		t.Fatalf("esperava 'digitando' ligado antes de cada nova tentativa (2), veio %d", cw.typing[70])
-	}
-	if got := cw.mensagens(70, false); len(got) != 1 || got[0] != FormatWhatsApp(MsgTransferencia) {
-		t.Fatalf("esperava só a mensagem neutra, veio %q", got)
-	}
-	f, _ := st.UltimaFalha(context.Background(), 70)
-	if f == nil || f.Classe != brain.ClasseTransitoria || !strings.Contains(f.Causa, "3 tentativas") {
-		t.Fatalf("registro da transferência inesperado: %+v", f)
-	}
-}
-
-// TestTransitoriaRecuperaNaNovaTentativa: a 2ª tentativa dá certo → resposta
-// entregue, sem transferência.
-func TestTransitoriaRecuperaNaNovaTentativa(t *testing.T) {
-	e, st, cw, br := engineCompleta(t)
-	comRelogioFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio()), responde("tudo certo!")}
-
-	turno(e, 71, e.agora())
-
-	if br.total() != 2 {
-		t.Fatalf("esperava 2 chamadas, veio %d", br.total())
-	}
-	if got := cw.mensagens(71, false); len(got) != 1 || got[0] != "tudo certo!" {
-		t.Fatalf("resposta da nova tentativa não chegou: %q", got)
-	}
-	if f, _ := st.UltimaFalha(context.Background(), 71); f != nil {
-		t.Fatalf("recuperou: não devia registrar falha: %+v", f)
-	}
-}
-
-// TestDefinitivaNaoRepete: 402 → uma única chamada e transferência.
-func TestDefinitivaNaoRepete(t *testing.T) {
-	e, _, cw, br := engineCompleta(t)
-	rel := comRelogioFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
-
-	turno(e, 72, rel.now())
-
-	if br.total() != 1 || len(rel.esperas) != 0 || cw.typing[72] != 0 {
-		t.Fatalf("definitiva não repete: chamadas=%d esperas=%v typing=%d", br.total(), rel.esperas, cw.typing[72])
-	}
-	if labels := cw.labels[72]; len(labels) != 1 || labels[0] != "fila-humano" {
-		t.Fatalf("esperava fila-humano, veio %v", labels)
-	}
-}
-
-// TestTetoDoTurnoImpedeNovaTentativa: mensagem recebida há 44 s (rajada +
-// cérebro lento) → sem tempo para esperar 2 s dentro do teto de 45 s: não
-// repete, transfere.
-func TestTetoDoTurnoImpedeNovaTentativa(t *testing.T) {
-	e, st, _, br := engineCompleta(t)
-	rel := comRelogioFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio())}
-
-	turno(e, 73, rel.now().Add(-44*time.Second))
-
-	if br.total() != 1 || len(rel.esperas) != 0 {
-		t.Fatalf("fora do teto não repete: chamadas=%d esperas=%v", br.total(), rel.esperas)
-	}
-	if f, _ := st.UltimaFalha(context.Background(), 73); f == nil || !strings.Contains(f.Causa, "teto") {
-		t.Fatalf("causa devia citar o teto: %+v", f)
-	}
-}
-
-// TestDisjuntorAbreNaTerceiraEFechaAposTeste: 3 falhas definitivas iguais em
-// 5 min abrem o disjuntor (10 min sem chamar o cérebro, transferência direta);
-// vencido o prazo, UMA chamada de teste bem-sucedida fecha.
-func TestDisjuntorAbreNaTerceiraEFechaAposTeste(t *testing.T) {
-	e, st, cw, br := engineCompleta(t)
-	rel := comRelogioFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
-
-	for conv := int64(80); conv < 83; conv++ {
-		turno(e, conv, rel.now())
-		rel.avancar(30 * time.Second)
-	}
-	if br.total() != 3 {
-		t.Fatalf("3 falhas → 3 chamadas, veio %d", br.total())
-	}
-	if aberto, _ := e.disjuntor.estado(); !aberto {
-		t.Fatal("3ª falha definitiva igual devia abrir o disjuntor")
-	}
-
-	// Aberto: a 4ª conversa nem chama o cérebro e é transferida direto.
-	turno(e, 83, rel.now())
-	if br.total() != 3 {
-		t.Fatalf("disjuntor aberto não pode chamar o cérebro; chamadas=%d", br.total())
-	}
-	f, _ := st.UltimaFalha(context.Background(), 83)
-	if f == nil || f.Origem != OrigemDisjuntor || !strings.Contains(f.Causa, "402") {
-		t.Fatalf("transferência pelo disjuntor inesperada: %+v", f)
-	}
-	if got := cw.mensagens(83, false); len(got) != 1 || got[0] != FormatWhatsApp(MsgTransferencia) {
-		t.Fatalf("cliente devia receber só a mensagem neutra: %q", got)
-	}
-
-	// Ainda dentro dos 10 min: continua fechado para o cérebro.
-	rel.avancar(9 * time.Minute)
-	turno(e, 84, rel.now())
-	if br.total() != 3 {
-		t.Fatalf("antes de 10 min o disjuntor segue aberto; chamadas=%d", br.total())
-	}
-
-	// Passaram 10 min e o cérebro voltou: a chamada de teste passa e fecha.
-	rel.avancar(2 * time.Minute)
-	br.respostas = []func() (*brain.ChatResponse, error){responde("voltei")}
-	turno(e, 85, rel.now())
-	if br.total() != 4 {
-		t.Fatalf("após 10 min devia liberar a chamada de teste; chamadas=%d", br.total())
-	}
-	if got := cw.mensagens(85, false); len(got) != 1 || got[0] != "voltei" {
-		t.Fatalf("resposta da chamada de teste não chegou: %q", got)
-	}
-	if aberto, _ := e.disjuntor.estado(); aberto {
-		t.Fatal("chamada de teste bem-sucedida devia fechar o disjuntor")
-	}
-	turno(e, 86, rel.now())
-	if br.total() != 5 {
-		t.Fatalf("fechado: toda conversa volta a chamar o cérebro; chamadas=%d", br.total())
-	}
-}
-
-// TestDisjuntorReabreSeTesteFalha: a chamada de teste falha definitiva → mais
-// 10 min fechado, sem chamar o cérebro.
-func TestDisjuntorReabreSeTesteFalha(t *testing.T) {
-	e, _, _, br := engineCompleta(t)
-	rel := comRelogioFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
-	for conv := int64(90); conv < 93; conv++ {
-		turno(e, conv, rel.now())
-	}
-	rel.avancar(11 * time.Minute)
-	turno(e, 93, rel.now()) // chamada de teste: falha de novo
-	if br.total() != 4 {
-		t.Fatalf("esperava a chamada de teste (4ª), veio %d", br.total())
-	}
-	turno(e, 94, rel.now())
-	if br.total() != 4 {
-		t.Fatalf("teste falhou: disjuntor reaberto, não chama; chamadas=%d", br.total())
-	}
-}
-
-// TestFalhasDefinitivasDiferentesNaoAbremDisjuntor: 2 de um tipo + 1 de outro
-// em 5 min não são "3 falhas iguais".
-func TestFalhasDefinitivasDiferentesNaoAbremDisjuntor(t *testing.T) {
-	e, _, _, br := engineCompleta(t)
-	rel := comRelogioFalso(e)
-	outra := &brain.Erro{Classe: brain.ClasseDefinitiva, Causa: "chave do OpenRouter inválida (401)", Status: 500}
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402()), sempre(erro402()), sempre(outra)}
-	for conv := int64(95); conv < 98; conv++ {
-		turno(e, conv, rel.now())
-	}
-	if aberto, _ := e.disjuntor.estado(); aberto {
-		t.Fatal("falhas de chaves diferentes não abrem o disjuntor")
-	}
-}
-
-// TestFalhasForaDaJanelaNaoAbremDisjuntor: 3 falhas iguais espalhadas por mais
-// de 5 min não abrem.
-func TestFalhasForaDaJanelaNaoAbremDisjuntor(t *testing.T) {
-	e, _, _, br := engineCompleta(t)
-	rel := comRelogioFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
-	for conv := int64(100); conv < 103; conv++ {
-		turno(e, conv, rel.now())
-		rel.avancar(3 * time.Minute)
-	}
-	if aberto, _ := e.disjuntor.estado(); aberto {
-		t.Fatal("3 falhas em 6 min (janela de 5) não abrem o disjuntor")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// ZC-6: reconferir etiqueta imediatamente antes de enviar
-// ---------------------------------------------------------------------------
-
-// TestRespostaNaoSaiSeConversaPassouParaHumano: entre a chamada ao cérebro e
-// o envio, a conversa ganhou fila-humano (atendente assumiu) → a resposta do
-// bot é descartada; nada de transferência nem nota.
-func TestRespostaNaoSaiSeConversaPassouParaHumano(t *testing.T) {
-	e, st, cw, br := engineCompleta(t)
-	comRelogioFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){func() (*brain.ChatResponse, error) {
-		// O atendente assume ENQUANTO o cérebro responde.
-		c := chatwoot.Conversation{ID: 110, Labels: []string{"fila-humano"}, Status: chatwoot.StatusOpen}
-		cw.mu.Lock()
-		cw.aoVivo[110] = &c
-		cw.mu.Unlock()
-		return &brain.ChatResponse{Reply: "resposta atrasada do bot"}, nil
-	}}
-
-	turno(e, 110, e.agora())
-
-	if got := cw.mensagens(110, false); len(got) != 0 {
-		t.Fatalf("conversa já com atendente não pode receber resposta do bot: %q", got)
-	}
-	if got := cw.mensagens(110, true); len(got) != 0 {
-		t.Fatalf("não é falha: sem nota privada: %q", got)
-	}
-	if f, _ := st.UltimaFalha(context.Background(), 110); f != nil {
-		t.Fatalf("não é falha: sem registro: %+v", f)
-	}
-	if cw.gets == 0 {
-		t.Fatal("esperava a reconferência (GetConversation) antes de enviar")
-	}
-}
-
-// TestRespostaNaoSaiSeConversaSaiuDaFilaDoBot: perdeu fila-bot (sem ganhar
-// fila-humano) → também não envia.
-func TestRespostaNaoSaiSeConversaSaiuDaFilaDoBot(t *testing.T) {
-	e, _, cw, br := engineCompleta(t)
-	comRelogioFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){responde("oi")}
-	c := chatwoot.Conversation{ID: 111, Labels: []string{"vip"}, Status: chatwoot.StatusOpen}
-	cw.aoVivo[111] = &c
-
-	turno(e, 111, e.agora())
-
-	if got := cw.mensagens(111, false); len(got) != 0 {
-		t.Fatalf("conversa fora da fila do bot não recebe resposta: %q", got)
-	}
-}
-
-// TestEnvioSegueQuandoReconferenciaFalha: Chatwoot fora na consulta → fail-open
-// (a resposta sai; um Chatwoot instável não cala o bot).
-func TestEnvioSegueQuandoReconferenciaFalha(t *testing.T) {
-	e, _, cw, br := engineCompleta(t)
-	comRelogioFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){responde("oi")}
-	cw.getErr = context.DeadlineExceeded
-
-	turno(e, 112, e.agora())
-
-	if got := cw.mensagens(112, false); len(got) != 1 || got[0] != "oi" {
-		t.Fatalf("fail-open: resposta devia sair, veio %q", got)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// ZC-7: alertas ao responsável
-// ---------------------------------------------------------------------------
-
-// TestFalhaDefinitivaDoCerebroAlerta: 402 → um alerta `falha_definitiva` com o
-// ID da ocorrência e o link da conversa; nada de alerta no caminho feliz.
-func TestFalhaDefinitivaDoCerebroAlerta(t *testing.T) {
-	e, _, _, br := engineCompleta(t)
-	e.cfg.ChatwootBaseURL, e.cfg.ChatwootAccountID = "http://chatwoot:3000", "1"
-	e.cfg.ChatwootPublicURL = "https://painel.exemplo"
-	comRelogioFalso(e)
-	n := comNotificadorFalso(e)
-
-	br.respostas = []func() (*brain.ChatResponse, error){responde("ok")}
-	turno(e, 120, e.agora())
-	if len(n.alertas) != 0 {
-		t.Fatalf("caminho feliz não alerta: %+v", n.alertas)
-	}
-
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(&brain.Erro{
-		Classe: brain.ClasseDefinitiva, IDOcorrencia: "ZPF-20261002-0911-55", Causa: "saldo do OpenRouter insuficiente (402)", Status: 500,
-	})}
-	turno(e, 121, e.agora())
-	al := n.doTipo(alerta.TipoFalhaDefinitiva)
-	if len(al) != 1 || al[0].IDOcorrencia != "ZPF-20261002-0911-55" || al[0].ConversationID != 121 {
-		t.Fatalf("esperava 1 alerta de falha definitiva com o ID do cérebro: %+v", n.alertas)
-	}
-	if al[0].Link != "https://painel.exemplo/app/accounts/1/conversations/121" {
-		t.Fatalf("link da conversa (URL pública) inesperado: %q", al[0].Link)
-	}
-}
-
-// TestTransitoriaEsgotadaNaoAlertaDefinitivaMasContaNaTaxa: transitória não
-// gera alerta de definitiva; 3 turnos com falha em 15 min geram o de taxa.
-func TestTransitoriaEsgotadaContaNaTaxa(t *testing.T) {
-	e, _, _, br := engineCompleta(t)
-	comRelogioFalso(e)
-	n := comNotificadorFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio())}
-	for conv := int64(130); conv < 133; conv++ {
-		turno(e, conv, e.agora())
-	}
-	if len(n.doTipo(alerta.TipoFalhaDefinitiva)) != 0 {
-		t.Fatalf("transitória não é falha definitiva: %+v", n.alertas)
-	}
-	if len(n.doTipo(alerta.TipoTaxaDeFalhas)) != 1 {
-		t.Fatalf("3 turnos falhos em 15 min deviam gerar 1 alerta de taxa: %+v", n.alertas)
-	}
-}
-
-// TestDisjuntorAbertoAlertaUmaVez: a 3ª falha igual abre o disjuntor e alerta.
-func TestDisjuntorAbertoAlertaUmaVez(t *testing.T) {
-	e, _, _, br := engineCompleta(t)
-	comRelogioFalso(e)
-	n := comNotificadorFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
-	for conv := int64(140); conv < 144; conv++ { // a 4ª já cai no disjuntor
-		turno(e, conv, e.agora())
-	}
-	if al := n.doTipo(alerta.TipoDisjuntorAberto); len(al) != 1 || !strings.Contains(al[0].Texto, "402") {
-		t.Fatalf("esperava exatamente 1 alerta de disjuntor aberto: %+v", n.alertas)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// ZC-8: etiqueta reportar-zapin avisa o responsável (uma vez)
-// ---------------------------------------------------------------------------
-
-func mudancaDeEtiquetas(convID int64, de, para []string) *chatwoot.ConversationUpdated {
-	deJSON, _ := json.Marshal(de)
-	paraJSON, _ := json.Marshal(para)
-	ev := &chatwoot.ConversationUpdated{
-		ChangedAttributes: []map[string]chatwoot.ChangeValue{{
-			"labels": {CurrentValue: paraJSON, PreviousValue: deJSON},
-		}},
-	}
-	ev.ID = convID
-	ev.Labels = para
-	return ev
-}
-
-// TestEtiquetaReportarDisparaNotificadorUmaVez: ao ganhar `reportar-zapin`, o
-// responsável recebe um alerta com o ID e a causa da última ocorrência da
-// conversa e o link; atualizações seguintes com a etiqueta já presente não
-// repetem; conversa sem ocorrência registrada avisa mesmo assim.
-func TestEtiquetaReportarDisparaNotificadorUmaVez(t *testing.T) {
-	e, st := engineComStore(t)
-	e.cfg.LabelReportar = "reportar-zapin"
-	e.cfg.ChatwootBaseURL, e.cfg.ChatwootAccountID = "https://painel.exemplo", "1"
-	n := comNotificadorFalso(e)
-	ctx := context.Background()
-	const conv = int64(150)
-	_ = st.RegistrarFalha(ctx, &store.Falha{ID: "ZPF-20261002-0911-55", ConversationID: conv, Origem: OrigemCerebro,
-		Classe: brain.ClasseDefinitiva, Causa: "saldo do OpenRouter insuficiente (402)"})
-
-	e.HandleConversationUpdated(ctx, mudancaDeEtiquetas(conv, []string{"fila-humano"}, []string{"fila-humano", "reportar-zapin"}))
-	al := n.doTipo(alerta.TipoReportado)
-	if len(al) != 1 {
-		t.Fatalf("esperava 1 alerta de reporte, veio %+v", n.alertas)
-	}
-	if al[0].IDOcorrencia != "ZPF-20261002-0911-55" || al[0].ConversationID != conv ||
-		!strings.Contains(al[0].Texto, "402") || al[0].Link != "https://painel.exemplo/app/accounts/1/conversations/150" {
-		t.Fatalf("alerta de reporte sem ID/causa/link: %+v", al[0])
-	}
-
-	// Etiqueta já presente: outra mudança de etiquetas não repete o aviso.
-	e.HandleConversationUpdated(ctx, mudancaDeEtiquetas(conv, []string{"fila-humano", "reportar-zapin"}, []string{"fila-humano", "reportar-zapin", "vip"}))
-	// Mudança só de status também não.
-	e.HandleConversationUpdated(ctx, mudancaDeStatus(conv, chatwoot.StatusOpen, chatwoot.StatusResolved))
-	if len(n.doTipo(alerta.TipoReportado)) != 1 {
-		t.Fatalf("o aviso de reporte deve sair uma vez por aplicação da etiqueta: %+v", n.alertas)
-	}
-
-	// Conversa sem ocorrência registrada: avisa, sem ID.
-	e.HandleConversationUpdated(ctx, mudancaDeEtiquetas(151, nil, []string{"reportar-zapin"}))
-	al = n.doTipo(alerta.TipoReportado)
-	if len(al) != 2 || al[1].IDOcorrencia != "" || al[1].ConversationID != 151 {
-		t.Fatalf("conversa sem ocorrência devia avisar sem ID: %+v", al)
-	}
-}
-
-// TestEtiquetaReportarDesligadaNaoAvisa: LABEL_REPORTAR vazia = sem reação.
-func TestEtiquetaReportarDesligadaNaoAvisa(t *testing.T) {
-	e, _ := engineComStore(t)
-	n := comNotificadorFalso(e)
-	e.HandleConversationUpdated(context.Background(), mudancaDeEtiquetas(152, nil, []string{"reportar-zapin"}))
-	if len(n.alertas) != 0 {
-		t.Fatalf("etiqueta desligada não avisa: %+v", n.alertas)
-	}
-}
-
-// TestPedidoDeAtendentePassaPelaTransferenciaUnica: "quero falar com
-// atendente" numa conversa identificada → sem chamada ao cérebro, mensagem
-// do gate, fila-humano, nota com origem cliente.
-func TestPedidoDeAtendentePassaPelaTransferenciaUnica(t *testing.T) {
-	e, st, cw, br := engineCompleta(t)
-	comRelogioFalso(e)
-	e.processarLote(context.Background(), []inbound{{
-		conv: conversaDoBot(153, chatwoot.StatusOpen), phone: telefoneIdentificado, content: "quero falar com atendente",
-	}})
-	if br.total() != 0 {
-		t.Fatalf("pedido de atendente não vai ao cérebro; chamadas=%d", br.total())
-	}
-	if labels := cw.labels[153]; len(labels) != 1 || labels[0] != "fila-humano" {
-		t.Fatalf("esperava fila-humano, veio %v", labels)
-	}
-	if f, _ := st.UltimaFalha(context.Background(), 153); f == nil || f.Origem != OrigemCliente {
-		t.Fatalf("registro com origem cliente esperado: %+v", f)
-	}
-	if got := cw.mensagens(153, false); len(got) != 1 || !strings.Contains(got[0], "encaminhar") {
-		t.Fatalf("cliente devia receber a confirmação do encaminhamento: %q", got)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// ZD-1: conversa com responsável humano não vai ao cérebro
-// ---------------------------------------------------------------------------
-
-// mensagemDoCliente monta um message_created de entrada do telefone
-// identificado, na conversa dada.
-func mensagemDoCliente(conv chatwoot.Conversation, content, waid string) *chatwoot.MessageCreated {
-	return &chatwoot.MessageCreated{
-		MessageType:  chatwoot.MessageIncoming,
-		Content:      content,
-		SourceID:     waid,
-		Sender:       chatwoot.Sender{Type: "contact", Name: "Daniel", PhoneNumber: telefoneIdentificado},
-		Conversation: conv,
-	}
+// turno roda um lote de uma mensagem do cliente na conversa.
+func turno(e *Engine, conv string, recebido time.Time) {
+	m := msg(conv, "oi")
+	m.CriadoEm = recebido
+	e.processarLote(context.Background(), []Inbound{m})
 }
 
 // naFila informa se a conversa tem worker/fila aberta (a mensagem passou da borda).
-func naFila(e *Engine, convID int64) bool {
+func naFila(e *Engine, convID string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	_, ok := e.filas[convID]
@@ -1076,249 +276,665 @@ func esperarCerebro(br *fakeBrain, n int) bool {
 	return br.total() >= n
 }
 
-// TestMensagemComResponsavelHumanoNaoVaiAoCerebro: conversa na fila do bot
-// mas atribuída a um atendente (assignee ≠ usuário do bot) → a mensagem é
-// descartada na borda, nenhuma chamada a /chat, nenhuma resposta, e a
-// etiqueta fila-bot é trocada por fila-humano (a conversa é da equipe).
-func TestMensagemComResponsavelHumanoNaoVaiAoCerebro(t *testing.T) {
-	e, _, cw, br := engineCompleta(t)
-	e.cfg.BotUserID = 3
-	conv := conversaDoBot(160, chatwoot.StatusOpen)
-	conv.Meta.Assignee = &chatwoot.User{ID: 9, Name: "Ana (suporte)"}
-
-	e.HandleMessageCreated(context.Background(), mensagemDoCliente(conv, "e aí, resolveu?", "waid-zd1-1"))
-
-	if naFila(e, 160) {
-		t.Fatal("conversa com responsável humano não pode abrir fila/worker (iria ao cérebro)")
-	}
-	if br.total() != 0 {
-		t.Fatalf("cérebro não pode ser chamado; chamadas=%d", br.total())
-	}
-	if got := cw.mensagens(160, false); len(got) != 0 {
-		t.Fatalf("bot não responde conversa com atendente: %q", got)
-	}
-	if labels := cw.labels[160]; len(labels) != 1 || labels[0] != "fila-humano" {
-		t.Fatalf("esperava fila-bot trocada por fila-humano, veio %v", labels)
-	}
-}
-
-// TestMensagemAtribuidaAoProprioBotSegueParaOCerebro: responsável = o
-// próprio usuário do bot (BOT_USER_ID) não é atendente humano — segue normal.
-func TestMensagemAtribuidaAoProprioBotSegueParaOCerebro(t *testing.T) {
-	e, _, cw, br := engineCompleta(t)
-	e.cfg.BotUserID = 3
-	conv := conversaDoBot(161, chatwoot.StatusOpen)
-	conv.Meta.Assignee = &chatwoot.User{ID: 3, Name: "Zapin"}
-
-	e.HandleMessageCreated(context.Background(), mensagemDoCliente(conv, "oi", "waid-zd1-2"))
-
-	if !naFila(e, 161) {
-		t.Fatal("conversa atribuída ao próprio bot devia entrar na fila")
-	}
-	if !esperarCerebro(br, 1) {
-		t.Fatal("cérebro devia ter sido chamado")
-	}
-	if _, ok := cw.labels[161]; ok {
-		t.Fatalf("etiqueta não devia mudar: %v", cw.labels[161])
-	}
-}
-
-// TestSemBotUserIDQualquerResponsavelEhHumano: sem BOT_USER_ID (descoberta
-// falhou), não há como saber quem é o bot — qualquer responsável cala o bot.
-func TestSemBotUserIDQualquerResponsavelEhHumano(t *testing.T) {
-	e, _, _, br := engineCompleta(t)
-	e.cfg.BotUserID = 0
-	conv := conversaDoBot(162, chatwoot.StatusOpen)
-	conv.Meta.Assignee = &chatwoot.User{ID: 3}
-
-	e.HandleMessageCreated(context.Background(), mensagemDoCliente(conv, "oi", "waid-zd1-3"))
-
-	if naFila(e, 162) || br.total() != 0 {
-		t.Fatal("sem o id do bot, conversa com responsável não vai ao cérebro")
-	}
-}
-
-// TestConversaComResponsavelHumanoNaoEhAdotada: conversa nova (ou reaberta)
-// já atribuída a um atendente não ganha fila-bot.
-func TestConversaComResponsavelHumanoNaoEhAdotada(t *testing.T) {
-	e, _, cw, _ := engineCompleta(t)
-	e.cfg.BotUserID = 3
-	conv := chatwoot.Conversation{ID: 163, Status: chatwoot.StatusOpen}
-	conv.Meta.Assignee = &chatwoot.User{ID: 9, Name: "Ana"}
-
-	if e.adotarConversa(context.Background(), &conv) {
-		t.Fatal("conversa com responsável humano não pode ser adotada pela fila do bot")
-	}
-	if _, ok := cw.labels[163]; ok {
-		t.Fatalf("nenhuma etiqueta devia ser aplicada: %v", cw.labels[163])
-	}
-	// Mensagem nessa conversa (sem etiqueta de fila) também não é adotada.
-	e.HandleMessageCreated(context.Background(), mensagemDoCliente(conv, "oi", "waid-zd1-4"))
-	if naFila(e, 163) {
-		t.Fatal("mensagem em conversa com responsável humano não entra na fila")
-	}
-}
-
-// TestRespostaNaoSaiSeHumanoAssumiuEnquantoCerebroPensava: a reconferência
-// antes de enviar (ZC-6) também olha o responsável: atendente se atribuiu a
-// conversa enquanto o cérebro respondia → resposta descartada.
-func TestRespostaNaoSaiSeHumanoAssumiuEnquantoCerebroPensava(t *testing.T) {
-	e, _, cw, br := engineCompleta(t)
-	e.cfg.BotUserID = 3
-	comRelogioFalso(e)
-	br.respostas = []func() (*brain.ChatResponse, error){func() (*brain.ChatResponse, error) {
-		c := conversaDoBot(164, chatwoot.StatusOpen) // etiqueta intacta...
-		c.Meta.Assignee = &chatwoot.User{ID: 9}      // ...mas um humano se atribuiu
-		cw.mu.Lock()
-		cw.aoVivo[164] = &c
-		cw.mu.Unlock()
-		return &brain.ChatResponse{Reply: "resposta atrasada do bot"}, nil
-	}}
-
-	turno(e, 164, e.agora())
-
-	if got := cw.mensagens(164, false); len(got) != 0 {
-		t.Fatalf("conversa assumida por atendente não recebe resposta do bot: %q", got)
-	}
-	// Atribuída ao próprio bot: envia.
-	c := conversaDoBot(165, chatwoot.StatusOpen)
-	c.Meta.Assignee = &chatwoot.User{ID: 3}
-	cw.aoVivo[165] = &c
-	br.respostas = []func() (*brain.ChatResponse, error){responde("oi")}
-	turno(e, 165, e.agora())
-	if got := cw.mensagens(165, false); len(got) != 1 || got[0] != "oi" {
-		t.Fatalf("atribuída ao próprio bot devia responder: %q", got)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// ZD-2: anexo/áudio avisa e transfere · caixa de entrada fixa
-// ---------------------------------------------------------------------------
-
-// esperarMensagens aguarda (até 3 s) n mensagens públicas na conversa.
-func esperarMensagens(cw *fakeChatwoot, conv int64, n int) []string {
+// esperarMensagens aguarda (até 3 s) n mensagens na conversa.
+func esperarMensagens(tr *fakeTransporte, conv string, n int) []string {
 	for i := 0; i < 300; i++ {
-		if got := cw.mensagens(conv, false); len(got) >= n {
+		if got := tr.mensagens(conv); len(got) >= n {
 			return got
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return cw.mensagens(conv, false)
+	return tr.mensagens(conv)
 }
 
-// TestMensagemSoComAnexoAvisaETransfere: áudio sem texto → o cliente recebe
-// o aviso (não fica em silêncio), a conversa vai para fila-humano com nota
-// privada citando o áudio, e o cérebro NÃO é chamado.
-func TestMensagemSoComAnexoAvisaETransfere(t *testing.T) {
-	e, st, cw, br := engineCompleta(t)
+// ---------------------------------------------------------------------------
+// Caminho feliz e Contrato A
+// ---------------------------------------------------------------------------
+
+// TestRespostaNormalNaoTransfere: resposta do cérebro chega ao cliente, sem
+// transferência nem registro.
+func TestRespostaNormalNaoTransfere(t *testing.T) {
+	e, st, tr, br := engineCompleta(t)
+	br.respostas = []func() (*brain.ChatResponse, error){responde("Boa tarde! Posso ajudar?")}
 	ctx := context.Background()
-
-	e.processarLote(ctx, []inbound{{
-		conv: conversaDoBot(170, chatwoot.StatusOpen), phone: telefoneIdentificado, anexo: chatwoot.AnexoAudio,
-	}})
-
-	if br.total() != 0 {
-		t.Fatalf("anexo não vai ao cérebro; chamadas=%d", br.total())
+	e.processarLote(ctx, []Inbound{msg("c-63", "oi")})
+	if got := tr.mensagens("c-63"); len(got) != 1 || got[0] != "Boa tarde! Posso ajudar?" {
+		t.Fatalf("resposta do cérebro não chegou: %q", got)
 	}
-	publicas := cw.mensagens(170, false)
-	if len(publicas) != 1 || publicas[0] != FormatWhatsApp(MsgAnexo(chatwoot.AnexoAudio)) {
-		t.Fatalf("esperava só o aviso de áudio ao cliente, veio %q", publicas)
+	if got := tr.transferida("c-63"); len(got) != 0 {
+		t.Fatalf("caminho feliz não transfere: %v", got)
 	}
-	if !strings.Contains(publicas[0], "áudio") || !strings.Contains(publicas[0], "atendente") {
-		t.Fatalf("aviso devia citar o áudio e o encaminhamento: %q", publicas[0])
-	}
-	if labels := cw.labels[170]; len(labels) != 1 || labels[0] != "fila-humano" {
-		t.Fatalf("esperava fila-humano, veio %v", labels)
-	}
-	notas := cw.mensagens(170, true)
-	if len(notas) != 1 || !strings.Contains(notas[0], "áudio") || !reIDOcorrencia.MatchString(notas[0]) {
-		t.Fatalf("nota privada devia citar o áudio e o ID: %q", notas)
-	}
-	if f, _ := st.UltimaFalha(ctx, 170); f == nil || f.Origem != OrigemAnexo {
-		t.Fatalf("registro com origem anexo esperado: %+v", f)
+	if f, _ := st.UltimaFalha(ctx, "c-63"); f != nil {
+		t.Fatalf("caminho feliz não registra falha: %+v", f)
 	}
 }
 
-// TestAnexoComLegendaTambemTransfere: imagem com legenda ("segue o print") —
-// o bot não vê a imagem, então a legenda sozinha não vai ao cérebro.
-func TestAnexoComLegendaTambemTransfere(t *testing.T) {
-	e, _, cw, br := engineCompleta(t)
-	e.processarLote(context.Background(), []inbound{
-		{conv: conversaDoBot(171, chatwoot.StatusOpen), phone: telefoneIdentificado, content: "oi"},
-		{conv: conversaDoBot(171, chatwoot.StatusOpen), phone: telefoneIdentificado, content: "segue o print do erro", anexo: chatwoot.AnexoImagem},
-	})
-	if br.total() != 0 {
-		t.Fatalf("rajada com anexo não vai ao cérebro; chamadas=%d", br.total())
-	}
-	if got := cw.mensagens(171, false); len(got) != 1 || !strings.Contains(got[0], "imagem") {
-		t.Fatalf("esperava o aviso de imagem, veio %q", got)
-	}
-}
-
-// TestMensagemSoComAnexoEntraNaFila: na borda, message_created sem texto e
-// com anexo NÃO é descartado (era a causa das 38 mensagens sem resposta):
-// entra na fila e o worker avisa + transfere.
-func TestMensagemSoComAnexoEntraNaFila(t *testing.T) {
-	e, _, cw, br := engineCompleta(t)
-	msg := mensagemDoCliente(conversaDoBot(172, chatwoot.StatusOpen), "", "waid-zd2-1")
-	msg.Attachments = []chatwoot.Attachment{{ID: 1, FileType: "audio", DataURL: "http://cw/audio.ogg"}}
-
-	e.HandleMessageCreated(context.Background(), msg)
-
-	if !naFila(e, 172) {
-		t.Fatal("mensagem só com anexo devia entrar na fila da conversa (não ser descartada)")
-	}
-	if got := esperarMensagens(cw, 172, 1); len(got) != 1 || !strings.Contains(got[0], "áudio") {
-		t.Fatalf("cliente devia receber o aviso de áudio: %q", got)
-	}
-	if br.total() != 0 {
-		t.Fatalf("anexo não vai ao cérebro; chamadas=%d", br.total())
-	}
-	// Mensagem realmente vazia (sem texto e sem anexo) continua ignorada.
-	e.HandleMessageCreated(context.Background(), mensagemDoCliente(conversaDoBot(173, chatwoot.StatusOpen), "", "waid-zd2-2"))
-	if naFila(e, 173) {
-		t.Fatal("mensagem vazia sem anexo não entra na fila")
-	}
-}
-
-// TestAnexoEmConversaJaRoteadaNaoTransfereDeNovo: conversa que o gate já
-// mandou para a equipe (GateFalha) recebe anexo → nada (sem 2ª transferência).
-func TestAnexoEmConversaJaRoteadaNaoTransfereDeNovo(t *testing.T) {
-	e, st, cw, _ := engineCompleta(t)
-	ctx := context.Background()
-	_ = st.SetGate(ctx, &store.GateState{ConversationID: 174, State: store.GateFalha})
-
-	e.processarLote(ctx, []inbound{{conv: conversaDoBot(174, chatwoot.StatusOpen), phone: "5511000000174", anexo: chatwoot.AnexoImagem}})
-
-	if got := cw.mensagens(174, false); len(got) != 0 {
-		t.Fatalf("conversa já roteada não recebe novo aviso: %q", got)
-	}
-	if _, ok := cw.labels[174]; ok {
-		t.Fatalf("sem nova transferência: etiqueta não devia mudar: %v", cw.labels[174])
-	}
-}
-
-// TestMensagemForaDaCaixaDoBotEhIgnorada: com INBOX_ID fixado, mensagem de
-// outra caixa é ignorada na borda mesmo com fila-bot; da caixa certa, entra.
-func TestMensagemForaDaCaixaDoBotEhIgnorada(t *testing.T) {
+// TestContratoALevaConversaETelefone: o cérebro recebe conversation_id (string
+// do transporte), canal whatsapp, o texto coalescido e o telefone — e nada
+// de identidade resolvida pelo gateway (não há gate).
+func TestContratoALevaConversaETelefone(t *testing.T) {
 	e, _, _, br := engineCompleta(t)
-	e.cfg.InboxID = 5
-	ctx := context.Background()
-
-	outra := conversaDoBot(175, chatwoot.StatusOpen)
-	outra.InboxID = 7 // ex.: wpp-csassistente
-	e.HandleMessageCreated(ctx, mensagemDoCliente(outra, "oi", "waid-zd2-3"))
-	if naFila(e, 175) {
-		t.Fatal("mensagem de outra caixa não pode entrar na fila do bot")
+	e.processarLote(context.Background(), []Inbound{
+		msg("uuid-conv-1", "oi"), msg("uuid-conv-1", "o boleto não abre"),
+	})
+	req := br.ultimoPedido()
+	if req.ConversationID != "uuid-conv-1" || req.Canal != "whatsapp" || req.Telefone != telefoneCliente {
+		t.Fatalf("Contrato A inesperado: %+v", req)
 	}
+	if req.Mensagem != "oi\no boleto não abre" {
+		t.Fatalf("rajada devia virar UM turno com os textos unidos por \\n: %q", req.Mensagem)
+	}
+}
 
-	certa := conversaDoBot(176, chatwoot.StatusOpen)
-	certa.InboxID = 5
-	e.HandleMessageCreated(ctx, mensagemDoCliente(certa, "oi", "waid-zd2-4"))
-	if !naFila(e, 176) {
-		t.Fatal("mensagem da caixa do bot devia entrar na fila")
+// TestRespostaVaziaDoCerebroViraPedidoDeReformular: reply vazio não deixa o
+// cliente sem resposta.
+func TestRespostaVaziaDoCerebroViraPedidoDeReformular(t *testing.T) {
+	e, _, tr, br := engineCompleta(t)
+	br.respostas = []func() (*brain.ChatResponse, error){responde("   ")}
+	e.processarLote(context.Background(), []Inbound{msg("c-64", "oi")})
+	if got := tr.mensagens("c-64"); len(got) != 1 || got[0] != FormatWhatsApp(MsgSemResposta) {
+		t.Fatalf("esperava a mensagem padrão de reformular, veio %q", got)
+	}
+}
+
+// TestRespostaEmBolhasViraVariasMensagens: o cérebro separa bolhas com `---`;
+// cada uma vira uma mensagem no transporte, formatada para o WhatsApp.
+func TestRespostaEmBolhasViraVariasMensagens(t *testing.T) {
+	e, _, tr, br := engineCompleta(t)
+	br.respostas = []func() (*brain.ChatResponse, error){responde("Oi, Ana! 🧡\n---\nAbra *Configurações* e salve.")}
+	e.processarLote(context.Background(), []Inbound{msg("c-65", "oi")})
+	got := tr.mensagens("c-65")
+	if len(got) != 2 || got[0] != "Oi, Ana! 🧡" || got[1] != "Abra **Configurações** e salve." {
+		t.Fatalf("bolhas inesperadas: %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Borda: HandleMensagem (higiene, dedup, idade) e fim de episódio
+// ---------------------------------------------------------------------------
+
+// TestMensagemDeTextoEntraNaFilaEChegaAoCerebro: o caminho inteiro pelo
+// worker — mensagem neutra → fila → cérebro → transporte.
+func TestMensagemDeTextoEntraNaFilaEChegaAoCerebro(t *testing.T) {
+	e, _, tr, br := engineCompleta(t)
+	br.respostas = []func() (*brain.ChatResponse, error){responde("oi!")}
+	m := msg("c-10", "bom dia")
+	m.MsgID = "m-1"
+
+	e.HandleMensagem(context.Background(), m)
+
+	if !naFila(e, "c-10") {
+		t.Fatal("mensagem de texto devia abrir a fila da conversa")
 	}
 	if !esperarCerebro(br, 1) {
-		t.Fatal("cérebro devia ter sido chamado para a caixa do bot")
+		t.Fatal("cérebro devia ter sido chamado")
+	}
+	if got := esperarMensagens(tr, "c-10", 1); len(got) != 1 || got[0] != "oi!" {
+		t.Fatalf("resposta não chegou ao transporte: %q", got)
+	}
+}
+
+// TestMensagemVaziaSemMidiaNaoEntraNaFila: sem texto e sem mídia, nada a fazer.
+func TestMensagemVaziaSemMidiaNaoEntraNaFila(t *testing.T) {
+	e, _, _, _ := engineCompleta(t)
+	e.HandleMensagem(context.Background(), msg("c-11", "   "))
+	if naFila(e, "c-11") {
+		t.Fatal("mensagem vazia sem mídia não entra na fila")
+	}
+	e.HandleMensagem(context.Background(), Inbound{Texto: "sem conversa"})
+	if naFila(e, "") {
+		t.Fatal("mensagem sem conversation_id não entra na fila")
+	}
+}
+
+// TestMensagemDuplicadaPorMsgIDIgnorada (F10): a MESMA mensagem reentregue
+// com outro id de entrega não vira segundo turno.
+func TestMensagemDuplicadaPorMsgIDIgnorada(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	m := msg("c-12", "oi")
+	m.MsgID = "msg-dup"
+	e.HandleMensagem(context.Background(), m)
+	e.HandleMensagem(context.Background(), m)
+	if !esperarCerebro(br, 1) {
+		t.Fatal("primeira entrega devia chegar ao cérebro")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if br.total() != 1 {
+		t.Fatalf("mensagem duplicada não pode virar segundo turno; chamadas=%d", br.total())
+	}
+}
+
+// TestMensagemAntigaDescartada (F10): mais velha que EVENTO_IDADE_MAX não
+// gera resposta-fantasma.
+func TestMensagemAntigaDescartada(t *testing.T) {
+	e, _, _, _ := engineCompleta(t)
+	e.cfg.EventoIdadeMax = 10 * time.Minute
+	rel := comRelogioFalso(e)
+	m := msg("c-13", "oi")
+	m.CriadoEm = rel.now().Add(-11 * time.Minute)
+	e.HandleMensagem(context.Background(), m)
+	if naFila(e, "c-13") {
+		t.Fatal("mensagem antiga não entra na fila")
+	}
+	m.ConversationID, m.CriadoEm = "c-14", rel.now().Add(-9*time.Minute)
+	e.HandleMensagem(context.Background(), m)
+	if !naFila(e, "c-14") {
+		t.Fatal("mensagem dentro da idade máxima entra na fila")
+	}
+}
+
+// TestEncerrarEpisodioLimpaPropostaNoCerebro (ZB-1): o fim da conversa chama
+// EncerrarEpisodio no cérebro com o id da conversa; cérebro fora não explode.
+func TestEncerrarEpisodioLimpaPropostaNoCerebro(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	ctx := context.Background()
+	e.EncerrarEpisodio(ctx, "uuid-45")
+	br.encerrarErr = errors.New("cérebro fora")
+	e.EncerrarEpisodio(ctx, "uuid-46")
+	if got := br.episodiosEncerrados(); len(got) != 2 || got[0] != "uuid-45" || got[1] != "uuid-46" {
+		t.Fatalf("esperava EncerrarEpisodio para uuid-45 e uuid-46, veio %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ZC-3: transferência única e silenciosa
+// ---------------------------------------------------------------------------
+
+// TestCerebroFalhandoTransfereSilenciosamente: falha definitiva do cérebro
+// (402 do OpenRouter) → mensagem neutra ao cliente, departamento humano e
+// registro em `falhas` com o MESMO ID do cérebro. Nenhuma mensagem de erro
+// técnico ao cliente.
+func TestCerebroFalhandoTransfereSilenciosamente(t *testing.T) {
+	e, st, tr, br := engineCompleta(t)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(&brain.Erro{
+		Classe: brain.ClasseDefinitiva, IDOcorrencia: "SOF-20261002-0911-55",
+		Causa: "saldo do OpenRouter insuficiente (402)", Status: 500,
+	})}
+	ctx := context.Background()
+
+	e.processarLote(ctx, []Inbound{msg("c-60", "como rastreio a NF?")})
+
+	publicas := tr.mensagens("c-60")
+	if len(publicas) != 1 || publicas[0] != FormatWhatsApp(MsgTransferencia) {
+		t.Fatalf("esperava só a mensagem neutra de transferência, veio %q", publicas)
+	}
+	for _, m := range publicas {
+		if strings.Contains(strings.ToLower(m), "problema técnico") || strings.Contains(m, "402") || strings.Contains(m, "SOF-") {
+			t.Fatalf("erro técnico vazou ao cliente: %q", m)
+		}
+	}
+	if got := tr.transferida("c-60"); len(got) != 1 || got[0] != deptHumano {
+		t.Fatalf("esperava transferência para o departamento humano padrão, veio %v", got)
+	}
+	f, err := st.UltimaFalha(ctx, "c-60")
+	if err != nil || f == nil {
+		t.Fatalf("falha não registrada: %+v err=%v", f, err)
+	}
+	if f.ID != "SOF-20261002-0911-55" || f.Origem != OrigemCerebro || f.Classe != brain.ClasseDefinitiva {
+		t.Fatalf("registro em falhas inesperado: %+v", f)
+	}
+	if !strings.Contains(f.Causa, "402") {
+		t.Fatalf("causa do cérebro devia ir ao registro: %+v", f)
+	}
+}
+
+// TestTransferenciaGeraIDQuandoCerebroNaoManda: cérebro caiu sem corpo (sem
+// ID) → o gateway gera o ID no formato SOF-AAAAMMDD-HHMM-NN e o registra.
+func TestTransferenciaGeraIDQuandoCerebroNaoManda(t *testing.T) {
+	e, st, _, br := engineCompleta(t)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(&brain.Erro{
+		Classe: brain.ClasseDefinitiva, Causa: "erro não tratado no cérebro (status 500)", Status: 500,
+	})}
+	ctx := context.Background()
+	e.processarLote(ctx, []Inbound{msg("c-61", "oi")})
+
+	f, _ := st.UltimaFalha(ctx, "c-61")
+	if f == nil || !reIDOcorrencia.MatchString(f.ID) {
+		t.Fatalf("registro devia ter ID gerado no formato SOF-: %+v", f)
+	}
+}
+
+// TestTransferenciaSemDepartamentoAindaAvisaERegistra: sem
+// DEPARTAMENTO_HUMANO_PADRAO o cliente é avisado e a ocorrência registrada;
+// só a movimentação no canal fica de fora (e vai para o log).
+func TestTransferenciaSemDepartamentoAindaAvisaERegistra(t *testing.T) {
+	e, st, tr, br := engineCompleta(t)
+	e.cfg.DepartamentoHumanoPadrao = ""
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+	ctx := context.Background()
+	e.processarLote(ctx, []Inbound{msg("c-62", "oi")})
+	if got := tr.mensagens("c-62"); len(got) != 1 {
+		t.Fatalf("cliente devia ser avisado mesmo sem departamento: %q", got)
+	}
+	if got := tr.transferida("c-62"); len(got) != 0 {
+		t.Fatalf("sem departamento não há o que transferir no canal: %v", got)
+	}
+	if f, _ := st.UltimaFalha(ctx, "c-62"); f == nil {
+		t.Fatal("ocorrência devia ser registrada")
+	}
+}
+
+// TestFalhaNoTransporteNaoImpedeRegistro: o canal fora do ar na transferência
+// não apaga a ocorrência nem derruba o turno.
+func TestFalhaNoTransporteNaoImpedeRegistro(t *testing.T) {
+	e, st, tr, br := engineCompleta(t)
+	tr.enviarErr, tr.transferirErr = errors.New("canal fora"), errors.New("canal fora")
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+	ctx := context.Background()
+	e.processarLote(ctx, []Inbound{msg("c-66", "oi")})
+	if f, _ := st.UltimaFalha(ctx, "c-66"); f == nil || f.Origem != OrigemCerebro {
+		t.Fatalf("ocorrência devia ser registrada apesar do canal fora: %+v", f)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ZC-5: nova tentativa só para falha transitória + teto do turno + disjuntor
+// ---------------------------------------------------------------------------
+
+// TestTransitoriaRepeteEDepoisTransfere: 3 chamadas (1 + 2 novas tentativas,
+// esperas de 2 s e 5 s), então transferência silenciosa.
+func TestTransitoriaRepeteEDepoisTransfere(t *testing.T) {
+	e, st, tr, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio())}
+
+	turno(e, "c-70", rel.now())
+
+	if br.total() != 3 {
+		t.Fatalf("esperava 3 chamadas ao cérebro (1 + 2 novas tentativas), veio %d", br.total())
+	}
+	if len(rel.esperas) != 2 || rel.esperas[0] != 2*time.Second || rel.esperas[1] != 5*time.Second {
+		t.Fatalf("esperas: queria [2s 5s], veio %v", rel.esperas)
+	}
+	if got := tr.mensagens("c-70"); len(got) != 1 || got[0] != FormatWhatsApp(MsgTransferencia) {
+		t.Fatalf("esperava só a mensagem neutra, veio %q", got)
+	}
+	f, _ := st.UltimaFalha(context.Background(), "c-70")
+	if f == nil || f.Classe != brain.ClasseTransitoria || !strings.Contains(f.Causa, "3 tentativas") {
+		t.Fatalf("registro da transferência inesperado: %+v", f)
+	}
+}
+
+// TestTransitoriaRecuperaNaNovaTentativa: a 2ª tentativa dá certo → resposta
+// entregue, sem transferência.
+func TestTransitoriaRecuperaNaNovaTentativa(t *testing.T) {
+	e, st, tr, br := engineCompleta(t)
+	comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio()), responde("tudo certo!")}
+
+	turno(e, "c-71", e.agora())
+
+	if br.total() != 2 {
+		t.Fatalf("esperava 2 chamadas, veio %d", br.total())
+	}
+	if got := tr.mensagens("c-71"); len(got) != 1 || got[0] != "tudo certo!" {
+		t.Fatalf("resposta da nova tentativa não chegou: %q", got)
+	}
+	if f, _ := st.UltimaFalha(context.Background(), "c-71"); f != nil {
+		t.Fatalf("recuperou: não devia registrar falha: %+v", f)
+	}
+}
+
+// TestDefinitivaNaoRepete: 402 → uma única chamada e transferência.
+func TestDefinitivaNaoRepete(t *testing.T) {
+	e, _, tr, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+
+	turno(e, "c-72", rel.now())
+
+	if br.total() != 1 || len(rel.esperas) != 0 {
+		t.Fatalf("definitiva não repete: chamadas=%d esperas=%v", br.total(), rel.esperas)
+	}
+	if got := tr.transferida("c-72"); len(got) != 1 || got[0] != deptHumano {
+		t.Fatalf("esperava transferência ao departamento humano, veio %v", got)
+	}
+}
+
+// TestTetoDoTurnoImpedeNovaTentativa: mensagem recebida há 44 s (rajada +
+// cérebro lento) → sem tempo para esperar 2 s dentro do teto de 45 s: não
+// repete, transfere.
+func TestTetoDoTurnoImpedeNovaTentativa(t *testing.T) {
+	e, st, _, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio())}
+
+	turno(e, "c-73", rel.now().Add(-44*time.Second))
+
+	if br.total() != 1 || len(rel.esperas) != 0 {
+		t.Fatalf("fora do teto não repete: chamadas=%d esperas=%v", br.total(), rel.esperas)
+	}
+	if f, _ := st.UltimaFalha(context.Background(), "c-73"); f == nil || !strings.Contains(f.Causa, "teto") {
+		t.Fatalf("causa devia citar o teto: %+v", f)
+	}
+}
+
+func conv(n int) string { return fmt.Sprintf("c-%d", n) }
+
+// TestDisjuntorAbreNaTerceiraEFechaAposTeste: 3 falhas definitivas iguais em
+// 5 min abrem o disjuntor (10 min sem chamar o cérebro, transferência direta);
+// vencido o prazo, UMA chamada de teste bem-sucedida fecha.
+func TestDisjuntorAbreNaTerceiraEFechaAposTeste(t *testing.T) {
+	e, st, tr, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+
+	for n := 80; n < 83; n++ {
+		turno(e, conv(n), rel.now())
+		rel.avancar(30 * time.Second)
+	}
+	if br.total() != 3 {
+		t.Fatalf("3 falhas → 3 chamadas, veio %d", br.total())
+	}
+	if aberto, _ := e.disjuntor.estado(); !aberto {
+		t.Fatal("3ª falha definitiva igual devia abrir o disjuntor")
+	}
+
+	// Aberto: a 4ª conversa nem chama o cérebro e é transferida direto.
+	turno(e, "c-83", rel.now())
+	if br.total() != 3 {
+		t.Fatalf("disjuntor aberto não pode chamar o cérebro; chamadas=%d", br.total())
+	}
+	f, _ := st.UltimaFalha(context.Background(), "c-83")
+	if f == nil || f.Origem != OrigemDisjuntor || !strings.Contains(f.Causa, "402") {
+		t.Fatalf("transferência pelo disjuntor inesperada: %+v", f)
+	}
+	if got := tr.mensagens("c-83"); len(got) != 1 || got[0] != FormatWhatsApp(MsgTransferencia) {
+		t.Fatalf("cliente devia receber só a mensagem neutra: %q", got)
+	}
+
+	// Ainda dentro dos 10 min: continua fechado para o cérebro.
+	rel.avancar(9 * time.Minute)
+	turno(e, "c-84", rel.now())
+	if br.total() != 3 {
+		t.Fatalf("antes de 10 min o disjuntor segue aberto; chamadas=%d", br.total())
+	}
+
+	// Passaram 10 min e o cérebro voltou: a chamada de teste passa e fecha.
+	rel.avancar(2 * time.Minute)
+	br.respostas = []func() (*brain.ChatResponse, error){responde("voltei")}
+	turno(e, "c-85", rel.now())
+	if br.total() != 4 {
+		t.Fatalf("após 10 min devia liberar a chamada de teste; chamadas=%d", br.total())
+	}
+	if got := tr.mensagens("c-85"); len(got) != 1 || got[0] != "voltei" {
+		t.Fatalf("resposta da chamada de teste não chegou: %q", got)
+	}
+	if aberto, _ := e.disjuntor.estado(); aberto {
+		t.Fatal("chamada de teste bem-sucedida devia fechar o disjuntor")
+	}
+	turno(e, "c-86", rel.now())
+	if br.total() != 5 {
+		t.Fatalf("fechado: toda conversa volta a chamar o cérebro; chamadas=%d", br.total())
+	}
+}
+
+// TestDisjuntorReabreSeTesteFalha: a chamada de teste falha definitiva → mais
+// 10 min fechado, sem chamar o cérebro.
+func TestDisjuntorReabreSeTesteFalha(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+	for n := 90; n < 93; n++ {
+		turno(e, conv(n), rel.now())
+	}
+	rel.avancar(11 * time.Minute)
+	turno(e, "c-93", rel.now()) // chamada de teste: falha de novo
+	if br.total() != 4 {
+		t.Fatalf("esperava a chamada de teste (4ª), veio %d", br.total())
+	}
+	turno(e, "c-94", rel.now())
+	if br.total() != 4 {
+		t.Fatalf("teste falhou: disjuntor reaberto, não chama; chamadas=%d", br.total())
+	}
+}
+
+// TestFalhasDefinitivasDiferentesNaoAbremDisjuntor: 2 de um tipo + 1 de outro
+// em 5 min não são "3 falhas iguais".
+func TestFalhasDefinitivasDiferentesNaoAbremDisjuntor(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	outra := &brain.Erro{Classe: brain.ClasseDefinitiva, Causa: "chave do OpenRouter inválida (401)", Status: 500}
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402()), sempre(erro402()), sempre(outra)}
+	for n := 95; n < 98; n++ {
+		turno(e, conv(n), rel.now())
+	}
+	if aberto, _ := e.disjuntor.estado(); aberto {
+		t.Fatal("falhas de chaves diferentes não abrem o disjuntor")
+	}
+}
+
+// TestFalhasForaDaJanelaNaoAbremDisjuntor: 3 falhas iguais espalhadas por mais
+// de 5 min não abrem.
+func TestFalhasForaDaJanelaNaoAbremDisjuntor(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+	for n := 100; n < 103; n++ {
+		turno(e, conv(n), rel.now())
+		rel.avancar(3 * time.Minute)
+	}
+	if aberto, _ := e.disjuntor.estado(); aberto {
+		t.Fatal("3 falhas em 6 min (janela de 5) não abrem o disjuntor")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ZC-7: alertas ao responsável
+// ---------------------------------------------------------------------------
+
+// TestFalhaDefinitivaDoCerebroAlerta: 402 → um alerta `falha_definitiva` com o
+// ID da ocorrência e a conversa; nada de alerta no caminho feliz.
+func TestFalhaDefinitivaDoCerebroAlerta(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	comRelogioFalso(e)
+	n := comNotificadorFalso(e)
+
+	br.respostas = []func() (*brain.ChatResponse, error){responde("ok")}
+	turno(e, "c-120", e.agora())
+	if len(n.alertas) != 0 {
+		t.Fatalf("caminho feliz não alerta: %+v", n.alertas)
+	}
+
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(&brain.Erro{
+		Classe: brain.ClasseDefinitiva, IDOcorrencia: "SOF-20261002-0911-55", Causa: "saldo do OpenRouter insuficiente (402)", Status: 500,
+	})}
+	turno(e, "c-121", e.agora())
+	al := n.doTipo(alerta.TipoFalhaDefinitiva)
+	if len(al) != 1 || al[0].IDOcorrencia != "SOF-20261002-0911-55" || al[0].ConversationID != "c-121" {
+		t.Fatalf("esperava 1 alerta de falha definitiva com o ID do cérebro: %+v", n.alertas)
+	}
+	if !strings.Contains(al[0].Texto, "402") {
+		t.Fatalf("alerta devia trazer a causa: %+v", al[0])
+	}
+}
+
+// TestTransitoriaEsgotadaContaNaTaxa: transitória não gera alerta de
+// definitiva; 3 turnos com falha em 15 min geram o de taxa.
+func TestTransitoriaEsgotadaContaNaTaxa(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	comRelogioFalso(e)
+	n := comNotificadorFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erroTransitorio())}
+	for i := 130; i < 133; i++ {
+		turno(e, conv(i), e.agora())
+	}
+	if len(n.doTipo(alerta.TipoFalhaDefinitiva)) != 0 {
+		t.Fatalf("transitória não é falha definitiva: %+v", n.alertas)
+	}
+	if len(n.doTipo(alerta.TipoTaxaDeFalhas)) != 1 {
+		t.Fatalf("3 turnos falhos em 15 min deviam gerar 1 alerta de taxa: %+v", n.alertas)
+	}
+}
+
+// TestDisjuntorAbertoAlertaUmaVez: a 3ª falha igual abre o disjuntor e alerta.
+func TestDisjuntorAbertoAlertaUmaVez(t *testing.T) {
+	e, _, _, br := engineCompleta(t)
+	comRelogioFalso(e)
+	n := comNotificadorFalso(e)
+	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
+	for i := 140; i < 144; i++ { // a 4ª já cai no disjuntor
+		turno(e, conv(i), e.agora())
+	}
+	if al := n.doTipo(alerta.TipoDisjuntorAberto); len(al) != 1 || !strings.Contains(al[0].Texto, "402") {
+		t.Fatalf("esperava exatamente 1 alerta de disjuntor aberto: %+v", n.alertas)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pedido explícito de atendente (origem cliente)
+// ---------------------------------------------------------------------------
+
+// TestPedidoDeAtendentePassaPelaTransferenciaUnica: "quero falar com
+// atendente" → sem chamada ao cérebro, mensagem da persona, departamento
+// humano e registro com origem cliente.
+func TestPedidoDeAtendentePassaPelaTransferenciaUnica(t *testing.T) {
+	e, st, tr, br := engineCompleta(t)
+	comRelogioFalso(e)
+	e.processarLote(context.Background(), []Inbound{msg("c-153", "quero falar com atendente")})
+	if br.total() != 0 {
+		t.Fatalf("pedido de atendente não vai ao cérebro; chamadas=%d", br.total())
+	}
+	if got := tr.transferida("c-153"); len(got) != 1 || got[0] != deptHumano {
+		t.Fatalf("esperava transferência ao departamento humano, veio %v", got)
+	}
+	if f, _ := st.UltimaFalha(context.Background(), "c-153"); f == nil || f.Origem != OrigemCliente {
+		t.Fatalf("registro com origem cliente esperado: %+v", f)
+	}
+	if got := tr.mensagens("c-153"); len(got) != 1 || !strings.Contains(got[0], "encaminhar") {
+		t.Fatalf("cliente devia receber a confirmação do encaminhamento: %q", got)
+	}
+}
+
+// TestPedeAtendente: palavra inteira; relato longo sem pedido não dispara.
+func TestPedeAtendente(t *testing.T) {
+	sim := []string{
+		"atendente", "quero falar com atendente", "Me passa pra um humano", "tem algum atendente aí?",
+		"quero uma pessoa de verdade",
+		"preciso falar com uma pessoa de verdade, um atendente humano, porque o app não abre desde ontem e já reinstalei duas vezes",
+		// Hipótese de trabalho declarada em PedeAtendente: negação/pergunta
+		// curtas transferem (falso positivo barato).
+		"não quero atendente, me responde você", "você é um atendente virtual?",
+	}
+	nao := []string{
+		"oi", "10596693664", "o boleto não abre",
+		"o atendente me disse ontem que o boleto ia atualizar sozinho depois da sincronização, mas até agora continua em aberto na tela",
+		"desumano esse trânsito, mas enfim: a fatura 123 não aparece no app", // "desumano" não é a palavra inteira
+	}
+	for _, m := range sim {
+		if !PedeAtendente(m) {
+			t.Errorf("devia detectar pedido de atendente: %q", m)
+		}
+	}
+	for _, m := range nao {
+		if PedeAtendente(m) {
+			t.Errorf("não devia detectar pedido de atendente: %q", m)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Mídia avisa e transfere
+// ---------------------------------------------------------------------------
+
+// TestMensagemSoComMidiaAvisaETransfere: áudio/imagem sem texto → o cliente
+// recebe o aviso (não fica em silêncio), a conversa vai ao departamento
+// humano com registro de origem anexo, e o cérebro NÃO é chamado.
+func TestMensagemSoComMidiaAvisaETransfere(t *testing.T) {
+	e, st, tr, br := engineCompleta(t)
+	ctx := context.Background()
+
+	e.processarLote(ctx, []Inbound{{ConversationID: "c-170", Telefone: telefoneCliente, TemMidia: true}})
+
+	if br.total() != 0 {
+		t.Fatalf("mídia não vai ao cérebro; chamadas=%d", br.total())
+	}
+	publicas := tr.mensagens("c-170")
+	if len(publicas) != 1 || publicas[0] != FormatWhatsApp(MsgMidia) {
+		t.Fatalf("esperava só o aviso de mídia ao cliente, veio %q", publicas)
+	}
+	if !strings.Contains(publicas[0], "áudio") || !strings.Contains(publicas[0], "atendente") {
+		t.Fatalf("aviso devia citar a mídia e o encaminhamento: %q", publicas[0])
+	}
+	if got := tr.transferida("c-170"); len(got) != 1 || got[0] != deptHumano {
+		t.Fatalf("esperava transferência ao departamento humano, veio %v", got)
+	}
+	if f, _ := st.UltimaFalha(ctx, "c-170"); f == nil || f.Origem != OrigemAnexo || !reIDOcorrencia.MatchString(f.ID) {
+		t.Fatalf("registro com origem anexo e ID esperado: %+v", f)
+	}
+}
+
+// TestMidiaComLegendaTambemTransfere: imagem com legenda ("segue o print") —
+// o bot não vê a imagem, então a legenda sozinha não vai ao cérebro.
+func TestMidiaComLegendaTambemTransfere(t *testing.T) {
+	e, _, tr, br := engineCompleta(t)
+	legenda := msg("c-171", "segue o print do erro")
+	legenda.TemMidia = true
+	e.processarLote(context.Background(), []Inbound{msg("c-171", "oi"), legenda})
+	if br.total() != 0 {
+		t.Fatalf("rajada com mídia não vai ao cérebro; chamadas=%d", br.total())
+	}
+	if got := tr.mensagens("c-171"); len(got) != 1 || got[0] != FormatWhatsApp(MsgMidia) {
+		t.Fatalf("esperava o aviso de mídia, veio %q", got)
+	}
+}
+
+// TestMensagemSoComMidiaEntraNaFila: na borda, mensagem sem texto e com mídia
+// NÃO é descartada (era a causa das mensagens sem resposta): entra na fila e
+// o worker avisa + transfere.
+func TestMensagemSoComMidiaEntraNaFila(t *testing.T) {
+	e, _, tr, br := engineCompleta(t)
+	m := Inbound{ConversationID: "c-172", Telefone: telefoneCliente, TemMidia: true, MsgID: "m-172"}
+
+	e.HandleMensagem(context.Background(), m)
+
+	if !naFila(e, "c-172") {
+		t.Fatal("mensagem só com mídia devia entrar na fila da conversa (não ser descartada)")
+	}
+	if got := esperarMensagens(tr, "c-172", 1); len(got) != 1 || !strings.Contains(got[0], "áudio") {
+		t.Fatalf("cliente devia receber o aviso de mídia: %q", got)
+	}
+	if br.total() != 0 {
+		t.Fatalf("mídia não vai ao cérebro; chamadas=%d", br.total())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Persona
+// ---------------------------------------------------------------------------
+
+// contarEmojis conta runas de símbolo (categoria So — onde vivem os emojis)
+// fora do ASCII; modificadores/ZWJ não contam, o que basta para "≤ 1".
+func contarEmojis(s string) int {
+	n := 0
+	for _, r := range s {
+		if r > 0x7f && unicode.Is(unicode.So, r) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestMensagensDaPersona: pt-BR informal ("você"), no máximo 1 emoji, sem
+// prometer prazo e sem o nome do produto antigo.
+func TestMensagensDaPersona(t *testing.T) {
+	proibidos := []string{"instante", "minuto", "logo", "em breve", "já já", "Boníssim"}
+	for nome, m := range map[string]string{
+		"transferencia": MsgTransferencia, "pedido": MsgPedidoAtendente, "midia": MsgMidia, "sem_resposta": MsgSemResposta,
+	} {
+		if n := contarEmojis(m); n > 1 {
+			t.Errorf("%s: mais de um emoji (%d): %q", nome, n, m)
+		}
+		for _, p := range proibidos {
+			if strings.Contains(strings.ToLower(m), strings.ToLower(p)) {
+				t.Errorf("%s: promete prazo ou usa tom antigo (%q): %q", nome, p, m)
+			}
+		}
+	}
+	if nomeAssistente != "Sofia" {
+		t.Fatalf("persona: esperava Sofia, veio %q", nomeAssistente)
+	}
+	if !strings.HasPrefix(NovoIDOcorrencia(time.Now()), "SOF-") {
+		t.Fatal("ID de ocorrência devia começar com SOF-")
 	}
 }

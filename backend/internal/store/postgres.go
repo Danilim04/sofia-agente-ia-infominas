@@ -18,6 +18,10 @@ type PostgresStore struct {
 	db *sql.DB
 }
 
+// pgSchema é idempotente. `falhas.conversation_id` virou TEXT (o Infodesk usa
+// uuid); um banco criado pelo domínio antigo (BIGINT) é convertido no boot.
+// As tabelas do gate de identidade (gate_state, identities) são apagadas:
+// não há mais login (ADR 0003).
 const pgSchema = `
 CREATE SCHEMA IF NOT EXISTS gateway;
 
@@ -26,31 +30,21 @@ CREATE TABLE IF NOT EXISTS gateway.processed_events (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS gateway.gate_state (
-    conversation_id BIGINT PRIMARY KEY,
-    state           TEXT NOT NULL DEFAULT '',
-    data            TEXT NOT NULL DEFAULT '',
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS gateway.identities (
-    phone      TEXT PRIMARY KEY,
-    login      TEXT NOT NULL,
-    perfil     TEXT NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS gateway.falhas (
     seq             BIGSERIAL PRIMARY KEY,
     id              TEXT   NOT NULL,
-    conversation_id BIGINT NOT NULL,
+    conversation_id TEXT   NOT NULL,
     origem          TEXT   NOT NULL DEFAULT '',
     classe          TEXT   NOT NULL DEFAULT '',
     causa           TEXT   NOT NULL DEFAULT '',
     detalhe         TEXT   NOT NULL DEFAULT '',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE gateway.falhas ALTER COLUMN conversation_id TYPE TEXT USING conversation_id::text;
 CREATE INDEX IF NOT EXISTS falhas_conversa ON gateway.falhas (conversation_id, seq);
+
+DROP TABLE IF EXISTS gateway.gate_state;
+DROP TABLE IF EXISTS gateway.identities;
 `
 
 // NewPostgres abre o pool, valida a conexão (fail-fast no boot) e aplica o
@@ -104,69 +98,6 @@ func (s *PostgresStore) MarkProcessed(ctx context.Context, deliveryID string) (b
 	return n > 0, nil
 }
 
-func (s *PostgresStore) GetGate(ctx context.Context, convID int64) (*GateState, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT conversation_id, state, data, updated_at
-		   FROM gateway.gate_state WHERE conversation_id = $1`, convID)
-
-	var gs GateState
-	err := row.Scan(&gs.ConversationID, &gs.State, &gs.Data, &gs.UpdatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &gs, nil
-}
-
-func (s *PostgresStore) SetGate(ctx context.Context, gs *GateState) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO gateway.gate_state (conversation_id, state, data, updated_at)
-		 VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (conversation_id) DO UPDATE SET
-		     state      = EXCLUDED.state,
-		     data       = EXCLUDED.data,
-		     updated_at = EXCLUDED.updated_at`,
-		gs.ConversationID, gs.State, gs.Data, time.Now())
-	return err
-}
-
-func (s *PostgresStore) DeleteGate(ctx context.Context, convID int64) error {
-	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM gateway.gate_state WHERE conversation_id = $1`, convID)
-	return err
-}
-
-func (s *PostgresStore) GetIdentity(ctx context.Context, phone string) (*CachedIdentity, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT phone, login, perfil, expires_at
-		   FROM gateway.identities WHERE phone = $1 AND expires_at > $2`,
-		phone, time.Now())
-
-	var ci CachedIdentity
-	err := row.Scan(&ci.Phone, &ci.Login, &ci.Perfil, &ci.ExpiresAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &ci, nil
-}
-
-func (s *PostgresStore) PutIdentity(ctx context.Context, ci *CachedIdentity) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO gateway.identities (phone, login, perfil, expires_at)
-		 VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (phone) DO UPDATE SET
-		     login      = EXCLUDED.login,
-		     perfil     = EXCLUDED.perfil,
-		     expires_at = EXCLUDED.expires_at`,
-		ci.Phone, ci.Login, ci.Perfil, ci.ExpiresAt)
-	return err
-}
-
 func (s *PostgresStore) RegistrarFalha(ctx context.Context, f *Falha) error {
 	quando := f.CreatedAt
 	if quando.IsZero() {
@@ -179,7 +110,7 @@ func (s *PostgresStore) RegistrarFalha(ctx context.Context, f *Falha) error {
 	return err
 }
 
-func (s *PostgresStore) UltimaFalha(ctx context.Context, convID int64) (*Falha, error) {
+func (s *PostgresStore) UltimaFalha(ctx context.Context, convID string) (*Falha, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, conversation_id, origem, classe, causa, detalhe, created_at
 		   FROM gateway.falhas WHERE conversation_id = $1 ORDER BY seq DESC LIMIT 1`, convID)

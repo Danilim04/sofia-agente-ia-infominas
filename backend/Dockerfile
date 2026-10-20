@@ -1,7 +1,7 @@
 # ==============================================================================
-# Gateway Go (transporte Chatwoot + gate de identidade). Binário estático
-# (CGO off — o sqlite é modernc, Go puro) sobre Alpine: o wget do busybox
-# serve o HEALTHCHECK do compose e o ca-certificates fala TLS com o Mongo/SAC.
+# Gateway Go da Sofia (transporte Infodesk). Binário estático (CGO off — o
+# sqlite é modernc, Go puro) sobre Alpine: o wget do busybox serve o
+# HEALTHCHECK do compose e o ca-certificates fala TLS com o Infodesk.
 # ==============================================================================
 FROM golang:1.26-alpine AS build
 

@@ -1,12 +1,12 @@
-// Package config carrega a configuração da aplicação a partir de variáveis de
-// ambiente (com suporte opcional a um arquivo .env).
+// Package config carrega a configuração do gateway a partir de variáveis de
+// ambiente (com suporte opcional a um arquivo .env). Variáveis e defaults:
+// docs/plano/01-ferramentas.md (seção B) e .env.example na raiz.
 package config
 
 import (
 	"bufio"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -17,49 +17,30 @@ type Config struct {
 	LogLevel      string // debug | info | warn | error
 	PublicBaseURL string // URL pública (só para montar a URL do webhook nos logs)
 
-	ChatwootBaseURL   string
-	ChatwootPublicURL string // URL que um humano abre no navegador (links de alerta); vazio = ChatwootBaseURL
-	ChatwootAccountID string
-	ChatwootAPIToken  string
-	WebhookSecret     string
-	WebhookToken      string // token na query da URL do webhook (?token=...)
+	// Infodesk (docs/infodesk/, skill infodesk-api). BaseURL e APIKey são
+	// obrigatórias; o resto é opcional.
+	InfodeskBaseURL        string        // raiz da API de integração (…/api/integration/v1)
+	InfodeskAPIKey         string        // Bearer
+	InfodeskWebhookSecret  string        // HMAC-SHA256 do corpo cru do webhook; vazio = sem verificação (só dev)
+	InfodeskOrganizationID string        // se preenchido, webhook de outra organização é recusado
+	InfodeskTimeout        time.Duration // timeout das chamadas HTTP ao Infodesk (default 15s)
+	// ReferenciaCacheTTL: validade do cache de mesas/departamentos/atendentes
+	// (GET /desks, /departments, /users). Default 10 min.
+	ReferenciaCacheTTL time.Duration
+	// DepartamentoHumanoPadrao: departamento do Infodesk que recebe a
+	// conversa transferida pelo bot quando a taxonomia não aponta outro.
+	// Vazio = a transferência avisa o cliente e registra a ocorrência, mas não
+	// move a conversa no canal (erro no log).
+	DepartamentoHumanoPadrao string
+	// WebhookToken: segredo opcional na query da URL do webhook (?token=...),
+	// além do HMAC.
+	WebhookToken string
 
-	// Persistência do gateway (dedup, estado do gate, cache telefone→perfil).
-	// PGURL preenchido = Postgres (o MESMO do RAG/pgvector, schema `gateway`);
-	// vazio = SQLite em DBPath (dev/local).
+	// Persistência do gateway (dedup, ocorrências; E2.1: conversas, contatos,
+	// tickets). PGURL preenchido = Postgres (o MESMO do RAG/pgvector, schema
+	// `gateway`); vazio = SQLite em DBPath (dev/local).
 	DBPath string
 	PGURL  string
-
-	// LabelBot: só processa conversas com esta etiqueta (gate de borda). Vazio =
-	// processa toda mensagem de entrada do contato. LabelHumano: fila para onde a
-	// conversa é roteada quando a identificação falha.
-	LabelBot    string
-	LabelHumano string
-	// LabelReportar: etiqueta que o atendente aplica para reportar um problema
-	// do bot (ZC-8); o gateway avisa o responsável com o ID da ocorrência, a
-	// causa e o link da conversa. Vazio = desligado.
-	LabelReportar string
-	// TeamHumanoID: equipe do Chatwoot que recebe a conversa transferida pelo
-	// bot (ZC-3); 0 = não atribui equipe (só troca a etiqueta).
-	TeamHumanoID int64
-	// InboxID: caixa de entrada do bot. Conversas NOVAS dela ganham a LabelBot
-	// no conversation_created (o bot mesmo etiqueta — sem automation rule no
-	// Chatwoot, que o omni-route não gerencia) e SÓ mensagens dela são
-	// atendidas (ZD-2). 0 = todas as caixas — aceitável só em dev; o deploy de
-	// produção (deploy/env/render-env.sh) exige um id > 0.
-	InboxID int64
-	// BotUserID: id do usuário do Chatwoot que o gateway usa (o "Zapin").
-	// Conversa cujo responsável (assignee) é OUTRO usuário está com um
-	// atendente humano e o bot não responde (ZD-1). 0 = descobrir no boot
-	// pelo próprio token (GET /api/v1/profile); se a descoberta falhar,
-	// QUALQUER responsável é tratado como humano.
-	BotUserID int64
-
-	// Mongo da Azapfy (lookup de usuário por login — a 1ª "tool").
-	MongoURI        string
-	MongoDB         string
-	MongoCollection string
-	MongoTimeout    time.Duration
 
 	// Brain: serviço Python que roda o agente (Contrato A, POST /chat).
 	BrainBaseURL string
@@ -70,15 +51,9 @@ type Config struct {
 	TurnoTeto time.Duration
 
 	// Alertas ao responsável (ZC-7): a decisão de QUANDO alertar é do pacote
-	// alerta; o destino é o log `zapin_alerta` + este webhook opcional
+	// alerta; o destino é o log `sofia_alerta` + este webhook opcional
 	// (POST JSON {"text": ...}). Vazio = só log.
 	AlertaWebhookURL string
-
-	// Identidade / gate.
-	ConfirmField  string        // dado pedido na confirmação: "email" (default) | "nome"
-	MaxTentativas int           // erros de identificação (login + confirmação, acumulados) antes de rotear p/ humano
-	IdentityTTL   time.Duration // validade do cache telefone→perfil (base própria)
-	GateFalhaTTL  time.Duration // após esse tempo, GateFalha expira e a identificação recomeça (F1)
 
 	// Robustez de transporte (laudo 2026-08-27).
 	DebounceJanela time.Duration // silêncio que fecha uma rajada de mensagens (coalescência, F11)
@@ -87,16 +62,9 @@ type Config struct {
 	ReplyMaxChars  int           // tamanho-alvo de cada mensagem enviada ao WhatsApp (F12); 0 = sem quebra
 	BolhaPausa     time.Duration // pausa entre bolhas consecutivas do mesmo turno (ritmo humano); 0 = sem pausa
 
-	// SAC (atendimento/chamados): tools de dados que o cérebro chama via toolsapi.
-	// Tudo opcional — sem SAC_BASE_URL a API de tools não é exposta.
-	SACBaseURL    string        // raiz do backend SAC (PHP)
-	SACPortalURL  string        // raiz do portal p/ montar o link do chamado
-	SACServiceCod string        // login privilegiado p/ definir prioridade (editar)
-	SACGrupoEmp   string        // equipe/desk do SAC onde os chamados são abertos (ex.: AZAPERS); a empresa do chamado é a do cliente (perfil) — sem valor fixo
-	SACTimezone   string        // ex.: America/Sao_Paulo
-	SACAPIToken   string        // bearer opcional do backend SAC
-	SACConfigTTL  time.Duration // validade do cache de configuração (categorias/ocorrências)
-	ToolsAPIToken string        // segredo compartilhado cérebro↔gateway (X-Tools-Token)
+	// ToolsAPIToken: segredo compartilhado cérebro↔gateway (X-Tools-Token).
+	// Vazio = a API /tools/infodesk/* não é exposta.
+	ToolsAPIToken string
 }
 
 // Load lê o .env (se existir) e em seguida o ambiente, validando os obrigatórios.
@@ -104,89 +72,51 @@ func Load() (*Config, error) {
 	_ = loadDotEnv(".env")
 
 	cfg := &Config{
-		Port:              getenv("PORT", "8080"),
-		LogLevel:          strings.ToLower(getenv("LOG_LEVEL", "info")),
-		PublicBaseURL:     strings.TrimRight(getenv("PUBLIC_BASE_URL", ""), "/"),
-		ChatwootBaseURL:   strings.TrimRight(getenv("CHATWOOT_BASE_URL", ""), "/"),
-		ChatwootPublicURL: strings.TrimRight(getenv("CHATWOOT_PUBLIC_URL", ""), "/"),
-		AlertaWebhookURL:  strings.TrimSpace(getenv("ALERTA_WEBHOOK_URL", "")),
-		ChatwootAccountID: getenv("CHATWOOT_ACCOUNT_ID", ""),
-		ChatwootAPIToken:  getenv("CHATWOOT_API_TOKEN", ""),
-		WebhookSecret:     getenv("WEBHOOK_SECRET", ""),
-		WebhookToken:      getenv("WEBHOOK_TOKEN", ""),
-		DBPath:            getenv("DB_PATH", "gateway.db"),
-		PGURL:             strings.TrimSpace(getenv("PG_URL", "")),
-		LabelBot:          getenv("LABEL_BOT", "fila-bot"),
-		LabelHumano:       getenv("LABEL_HUMANO", "fila-humano"),
-		LabelReportar:     getenv("LABEL_REPORTAR", "reportar-zapin"),
-		MongoURI:          getenv("MONGO_URI", ""),
-		MongoDB:           getenv("MONGO_DB", "azapfy"),
-		MongoCollection:   getenv("MONGO_COLLECTION", "users"),
-		BrainBaseURL:      strings.TrimRight(getenv("BRAIN_BASE_URL", "http://localhost:8001"), "/"),
-		ConfirmField:      strings.ToLower(getenv("CONFIRM_FIELD", "email")),
-		TeamHumanoID:      int64(getenvInt("TEAM_HUMANO_ID", 0)),
-		BotUserID:         int64(getenvInt("BOT_USER_ID", 0)),
-		MaxTentativas:     getenvInt("MAX_TENTATIVAS", 3),
-		SACBaseURL:        strings.TrimRight(getenv("SAC_BASE_URL", ""), "/"),
-		SACPortalURL:      strings.TrimRight(getenv("SAC_PORTAL_URL", "https://atendimento.azapfy.com.br"), "/"),
-		SACServiceCod:     getenv("SAC_SERVICE_COD", ""),
-		SACGrupoEmp:       getenv("SAC_GRUPO_EMP", "AZAPERS"),
-		SACTimezone:       getenv("SAC_TIMEZONE", "America/Sao_Paulo"),
-		SACAPIToken:       getenv("SAC_API_TOKEN", ""),
-		ToolsAPIToken:     getenv("TOOLS_API_TOKEN", ""),
-		ReplyMaxChars:     getenvInt("REPLY_MAX_CHARS", 900),
+		Port:                     getenv("PORT", "8080"),
+		LogLevel:                 strings.ToLower(getenv("LOG_LEVEL", "info")),
+		PublicBaseURL:            strings.TrimRight(getenv("PUBLIC_BASE_URL", ""), "/"),
+		InfodeskBaseURL:          strings.TrimRight(strings.TrimSpace(getenv("INFODESK_BASE_URL", "")), "/"),
+		InfodeskAPIKey:           strings.TrimSpace(getenv("INFODESK_API_KEY", "")),
+		InfodeskWebhookSecret:    getenv("INFODESK_WEBHOOK_SECRET", ""),
+		InfodeskOrganizationID:   strings.TrimSpace(getenv("INFODESK_ORGANIZATION_ID", "")),
+		DepartamentoHumanoPadrao: strings.TrimSpace(getenv("DEPARTAMENTO_HUMANO_PADRAO", "")),
+		WebhookToken:             getenv("WEBHOOK_TOKEN", ""),
+		AlertaWebhookURL:         strings.TrimSpace(getenv("ALERTA_WEBHOOK_URL", "")),
+		DBPath:                   getenv("DB_PATH", "gateway.db"),
+		PGURL:                    strings.TrimSpace(getenv("PG_URL", "")),
+		BrainBaseURL:             strings.TrimRight(getenv("BRAIN_BASE_URL", "http://localhost:8001"), "/"),
+		ToolsAPIToken:            getenv("TOOLS_API_TOKEN", ""),
+		ReplyMaxChars:            getenvInt("REPLY_MAX_CHARS", 900),
 	}
 
-	var err error
-	// INBOX_ID é lido ESTRITO (ZD-2): valor malformado — inclusive o placeholder
-	// "${INBOX_ID}" de um template que escapou da renderização — não pode virar
-	// 0 em silêncio, porque 0 é atender TODAS as caixas da conta.
-	if cfg.InboxID, err = parseInboxID(getenv("INBOX_ID", "")); err != nil {
-		return nil, err
+	duracoes := []struct {
+		dst *time.Duration
+		env string
+		def string
+	}{
+		{&cfg.InfodeskTimeout, "INFODESK_TIMEOUT", "15s"},
+		{&cfg.ReferenciaCacheTTL, "REFERENCIA_CACHE_TTL", "10m"},
+		{&cfg.BrainTimeout, "BRAIN_TIMEOUT", "60s"},
+		{&cfg.TurnoTeto, "TURNO_TETO", "45s"},
+		{&cfg.DebounceJanela, "DEBOUNCE_JANELA", "8s"},
+		{&cfg.DebounceTeto, "DEBOUNCE_TETO", "20s"},
+		{&cfg.EventoIdadeMax, "EVENTO_IDADE_MAX", "10m"},
+		{&cfg.BolhaPausa, "BOLHA_PAUSA", "1500ms"},
 	}
-	if cfg.MongoTimeout, err = parseDuration(getenv("MONGO_TIMEOUT", "8s")); err != nil {
-		return nil, fmt.Errorf("MONGO_TIMEOUT inválido: %w", err)
-	}
-	if cfg.BrainTimeout, err = parseDuration(getenv("BRAIN_TIMEOUT", "60s")); err != nil {
-		return nil, fmt.Errorf("BRAIN_TIMEOUT inválido: %w", err)
-	}
-	if cfg.TurnoTeto, err = parseDuration(getenv("TURNO_TETO", "45s")); err != nil {
-		return nil, fmt.Errorf("TURNO_TETO inválido: %w", err)
-	}
-	if cfg.IdentityTTL, err = parseDuration(getenv("IDENTITY_TTL", "24h")); err != nil {
-		return nil, fmt.Errorf("IDENTITY_TTL inválido: %w", err)
-	}
-	if cfg.SACConfigTTL, err = parseDuration(getenv("SAC_CONFIG_TTL", "10m")); err != nil {
-		return nil, fmt.Errorf("SAC_CONFIG_TTL inválido: %w", err)
-	}
-	if cfg.GateFalhaTTL, err = parseDuration(getenv("GATE_FALHA_TTL", "1h")); err != nil {
-		return nil, fmt.Errorf("GATE_FALHA_TTL inválido: %w", err)
-	}
-	if cfg.DebounceJanela, err = parseDuration(getenv("DEBOUNCE_JANELA", "8s")); err != nil {
-		return nil, fmt.Errorf("DEBOUNCE_JANELA inválido: %w", err)
-	}
-	if cfg.DebounceTeto, err = parseDuration(getenv("DEBOUNCE_TETO", "20s")); err != nil {
-		return nil, fmt.Errorf("DEBOUNCE_TETO inválido: %w", err)
-	}
-	if cfg.EventoIdadeMax, err = parseDuration(getenv("EVENTO_IDADE_MAX", "10m")); err != nil {
-		return nil, fmt.Errorf("EVENTO_IDADE_MAX inválido: %w", err)
-	}
-	if cfg.BolhaPausa, err = parseDuration(getenv("BOLHA_PAUSA", "1500ms")); err != nil {
-		return nil, fmt.Errorf("BOLHA_PAUSA inválido: %w", err)
+	for _, d := range duracoes {
+		v, err := parseDuration(getenv(d.env, d.def))
+		if err != nil {
+			return nil, fmt.Errorf("%s inválido: %w", d.env, err)
+		}
+		*d.dst = v
 	}
 
 	var missing []string
-	if cfg.ChatwootBaseURL == "" {
-		missing = append(missing, "CHATWOOT_BASE_URL")
+	if cfg.InfodeskBaseURL == "" {
+		missing = append(missing, "INFODESK_BASE_URL")
 	}
-	if cfg.ChatwootAccountID == "" {
-		missing = append(missing, "CHATWOOT_ACCOUNT_ID")
-	}
-	if cfg.ChatwootAPIToken == "" {
-		missing = append(missing, "CHATWOOT_API_TOKEN")
-	}
-	if cfg.MongoURI == "" {
-		missing = append(missing, "MONGO_URI")
+	if cfg.InfodeskAPIKey == "" {
+		missing = append(missing, "INFODESK_API_KEY")
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("variáveis obrigatórias ausentes: %s", strings.Join(missing, ", "))
@@ -211,25 +141,6 @@ func getenvInt(key string, def int) int {
 	}
 	return def
 }
-
-// parseInboxID aceita vazio (= 0 = todas as caixas) ou um inteiro >= 0.
-// Qualquer outro texto é erro de configuração, com a mensagem dizendo o que
-// preencher — nunca um 0 silencioso.
-func parseInboxID(s string) (int64, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, nil
-	}
-	n, err := strconv.ParseInt(s, 10, 64)
-	if err != nil || n < 0 {
-		return 0, fmt.Errorf("INBOX_ID inválido (%q): use o id numérico da caixa do Chatwoot que o bot atende (0 = todas as caixas, só em dev)", s)
-	}
-	return n, nil
-}
-
-// AtendeTodasAsCaixas informa se o gateway está sem caixa fixa (INBOX_ID=0):
-// adota conversa nova de qualquer caixa e responde em qualquer uma.
-func (c *Config) AtendeTodasAsCaixas() bool { return c.InboxID == 0 }
 
 func parseDuration(s string) (time.Duration, error) {
 	if s == "" {
