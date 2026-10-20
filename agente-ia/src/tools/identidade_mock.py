@@ -22,7 +22,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 IDENTIDADE_NAO_ENCONTRADA: dict[str, Any] = {"encontrado": False}
 
 

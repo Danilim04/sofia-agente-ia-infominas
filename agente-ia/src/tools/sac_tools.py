@@ -25,13 +25,12 @@ intenção (elas custam tokens e guiam o comportamento).
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 import httpx
 from langchain_core.tools import InjectedToolArg, tool
 
 from src.config import get_settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +43,10 @@ def _post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     safe_payload = {k: v for k, v in payload.items() if k != "telefone"}
     logger.info("sac_tool_call path=%s payload=%s", path, safe_payload)
     try:
-        resp = httpx.post(
-            url, json=payload, headers=headers, timeout=settings.sac_tools_timeout
-        )
+        resp = httpx.post(url, json=payload, headers=headers, timeout=settings.sac_tools_timeout)
         resp.raise_for_status()
         data = resp.json()
-    except Exception as exc:  # noqa: BLE001 — devolvemos a falha pro agente decidir
+    except Exception as exc:
         logger.warning("sac_tool_falhou path=%s erro=%s", path, exc)
         return {"status": False, "erro": "o sistema de chamados está indisponível agora"}
     logger.info("sac_tool_result path=%s status=%s", path, data.get("status"))
@@ -149,7 +146,7 @@ def preparar_abertura_chamado(
 
 @tool
 def abrir_chamado_suporte(
-    proposta: Annotated[Optional[dict], InjectedToolArg] = None,
+    proposta: Annotated[dict | None, InjectedToolArg] = None,
     telefone: Annotated[str, InjectedToolArg] = "",
     conversation_id: Annotated[str, InjectedToolArg] = "",
 ) -> dict[str, Any]:

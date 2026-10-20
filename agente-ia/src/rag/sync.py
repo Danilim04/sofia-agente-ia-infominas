@@ -33,7 +33,7 @@ import argparse
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from src.rag.fonte import (
     DocumentoFonte,
@@ -63,7 +63,7 @@ class IndiceVetorial(Protocol):
 
     def preparar_esquema(self, embedding_model: str, dim: int) -> None: ...
 
-    def modelo_registrado(self) -> Optional[str]: ...
+    def modelo_registrado(self) -> str | None: ...
 
     def limpar_tudo(self, embedding_model: str, dim: int) -> None: ...
 
@@ -73,7 +73,7 @@ class IndiceVetorial(Protocol):
         self,
         item: ItemListagem,
         hash_listagem: str,
-        chunks: "list[Document]",
+        chunks: list[Document],
         vetores: list[list[float]],
     ) -> None: ...
 
@@ -82,9 +82,7 @@ class IndiceVetorial(Protocol):
 
 def hash_listagem(item: ItemListagem) -> str:
     """Hash determinístico dos metadados da listagem (o sinal de mudança)."""
-    base = "\x1f".join(
-        [item.titulo, item.categoria, item.updated_at, "1" if item.deleted else "0"]
-    )
+    base = "\x1f".join([item.titulo, item.categoria, item.updated_at, "1" if item.deleted else "0"])
     return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
 
@@ -143,16 +141,12 @@ def planejar(
             plano.inalterados += 1
 
     vivos_nao_listados = [
-        doc_id
-        for doc_id, reg in estado.items()
-        if not reg.deleted and doc_id not in ids_listados
+        doc_id for doc_id, reg in estado.items() if not reg.deleted and doc_id not in ids_listados
     ]
     if remover_ausentes:
         for doc_id in vivos_nao_listados:
             plano.remover.append(
-                ItemListagem(
-                    id=doc_id, titulo="", categoria="", updated_at="", deleted=True
-                )
+                ItemListagem(id=doc_id, titulo="", categoria="", updated_at="", deleted=True)
             )
     else:
         plano.ausentes = vivos_nao_listados
@@ -188,7 +182,7 @@ def _checar_travas(
 def executar_sync(
     fonte: FonteDocumentacao,
     indice: IndiceVetorial,
-    embeddings: "Embeddings",
+    embeddings: Embeddings,
     *,
     embedding_model: str,
     chunk_size: int = 800,
@@ -223,7 +217,8 @@ def executar_sync(
         # --full): o índice inteiro é refeito no novo espaço vetorial.
         logger.warning(
             "sync_modelo_trocado de=%s para=%s — reconstruindo o índice inteiro",
-            registrado, embedding_model,
+            registrado,
+            embedding_model,
         )
         full = True
         if not dry_run:
@@ -254,7 +249,7 @@ def executar_sync(
         era_novo = item.id not in estado
         try:
             _processar_documento(fonte, indice, embeddings, item, chunk_size, chunk_overlap)
-        except Exception as exc:  # noqa: BLE001 — fail-soft por doc; reexecução converge
+        except Exception as exc:
             logger.error("sync_doc_falhou id=%s erro=%s", item.id, exc)
             resultado.falhas += 1
             continue
@@ -266,7 +261,7 @@ def executar_sync(
     for item in plano.remover:
         try:
             indice.remover_documento(item.id, hash_listagem(item))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("sync_remocao_falhou id=%s erro=%s", item.id, exc)
             resultado.falhas += 1
             continue
@@ -279,7 +274,7 @@ def executar_sync(
 def _processar_documento(
     fonte: FonteDocumentacao,
     indice: IndiceVetorial,
-    embeddings: "Embeddings",
+    embeddings: Embeddings,
     item: ItemListagem,
     chunk_size: int,
     chunk_overlap: int,
@@ -301,13 +296,20 @@ def _log_resumo(r: ResultadoSync) -> None:
     logger.info(
         "sync_resumo novos=%d alterados=%d removidos=%d inalterados=%d "
         "falhas=%d ausentes=%d dry_run=%s",
-        r.novos, r.alterados, r.removidos, r.inalterados, r.falhas, r.ausentes, r.dry_run,
+        r.novos,
+        r.alterados,
+        r.removidos,
+        r.inalterados,
+        r.falhas,
+        r.ausentes,
+        r.dry_run,
     )
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def _montar_fonte(nome: str, args: argparse.Namespace) -> FonteDocumentacao:
     from src.config import get_settings
@@ -347,17 +349,21 @@ def _preflight_api(fonte: FonteDocumentacao) -> None:
     for esp in diag.espacos:
         logger.info(
             "docs_api_espaco nome=%r utilizavel=%s%s",
-            esp.nome, esp.utilizavel,
+            esp.nome,
+            esp.utilizavel,
             "" if esp.utilizavel else f" motivo={esp.motivo_bloqueio!r}",
         )
     if not diag.pronto:
-        logger.error("sync_abortado motivo=API sem espaço utilizável: %s",
-                     "; ".join(diag.problemas()))
+        logger.error(
+            "sync_abortado motivo=API sem espaço utilizável: %s", "; ".join(diag.problemas())
+        )
         raise SystemExit(1)
     logger.info(
         "docs_api_ok usuario=%r espacos_utilizaveis=%d contrato=%s retencao_tombstone_dias=%s",
-        diag.usuario, sum(1 for e in diag.espacos if e.utilizavel),
-        diag.contrato_versao, diag.retencao_tombstone_dias,
+        diag.usuario,
+        sum(1 for e in diag.espacos if e.utilizavel),
+        diag.contrato_versao,
+        diag.retencao_tombstone_dias,
     )
 
 
@@ -365,9 +371,7 @@ def _cli() -> None:
     from src.config import get_settings
     from src.rag.retriever import get_embeddings
 
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     settings = get_settings()
 
     parser = argparse.ArgumentParser(
@@ -376,19 +380,38 @@ def _cli() -> None:
     parser.add_argument("--fonte", choices=["local", "api"], default="local")
     from pathlib import Path as _Path
 
-    parser.add_argument("--docs-dir", type=_Path, default=None,
-                        help="Diretório dos .md (só fonte=local; default: DOCS_DIR).")
-    parser.add_argument("--full", action="store_true",
-                        help="Reprocessa tudo (primeira carga, troca de modelo/chunking).")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Mostra o plano (novos/alterados/removidos) sem gravar nada.")
-    parser.add_argument("--remover-ausentes", action="store_true",
-                        help="Trata ausência na listagem como remoção (só fonte local).")
-    parser.add_argument("--permitir-remocao-em-massa", action="store_true",
-                        help="Libera um ciclo com remoções acima do limiar (confirmação humana).")
-    parser.add_argument("--reconstruir-se-modelo-mudou", action="store_true",
-                        help="Se EMBEDDINGS_MODEL difere do registrado no índice, refaz tudo "
-                             "(em vez de abortar). Usado pelo deploy; o cron segue estrito.")
+    parser.add_argument(
+        "--docs-dir",
+        type=_Path,
+        default=None,
+        help="Diretório dos .md (só fonte=local; default: DOCS_DIR).",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Reprocessa tudo (primeira carga, troca de modelo/chunking).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Mostra o plano (novos/alterados/removidos) sem gravar nada.",
+    )
+    parser.add_argument(
+        "--remover-ausentes",
+        action="store_true",
+        help="Trata ausência na listagem como remoção (só fonte local).",
+    )
+    parser.add_argument(
+        "--permitir-remocao-em-massa",
+        action="store_true",
+        help="Libera um ciclo com remoções acima do limiar (confirmação humana).",
+    )
+    parser.add_argument(
+        "--reconstruir-se-modelo-mudou",
+        action="store_true",
+        help="Se EMBEDDINGS_MODEL difere do registrado no índice, refaz tudo "
+        "(em vez de abortar). Usado pelo deploy; o cron segue estrito.",
+    )
     args = parser.parse_args()
 
     if not settings.pgvector_url:
@@ -401,8 +424,11 @@ def _cli() -> None:
         _preflight_api(fonte)
     indice = PgIndice.conectar(settings.pgvector_url)
     embeddings = get_embeddings()
-    logger.info("sync_embeddings provider=%s modelo=%s",
-                settings.embeddings_provider, settings.embeddings_model)
+    logger.info(
+        "sync_embeddings provider=%s modelo=%s",
+        settings.embeddings_provider,
+        settings.embeddings_model,
+    )
 
     try:
         resultado = executar_sync(

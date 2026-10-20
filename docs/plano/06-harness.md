@@ -121,6 +121,14 @@ num clone antigo rode `git ls-files -z | xargs -0 sed -i 's/\r$//'` uma vez.
 Os hooks normalizam caminhos `C:\...` e `/c/...` (`posix()` em `_lib.sh`),
 porque o Claude Code pode mandar qualquer um dos dois.
 
+**venv (E0.1).** Só há Python 3.14 na máquina; o venv foi criado com
+`uv venv venv --python 3.12` (uv baixa o 3.12; na primeira tentativa ele falha
+com "Missing expected target directory" e passa na segunda). `chromadb 0.5`
+dependia de `chroma-hnswlib`, que não tem wheel para Windows/3.12 e exige o
+MSVC — por isso `requirements.txt` subiu para `chromadb>=1.0` +
+`langchain-chroma>=0.2` (wheels nativos; os 300+ testes legados continuaram
+verdes). O Chroma segue sendo só backend de dev; produção usa pgvector.
+
 ## Manutenção do harness
 
 - Nova tarefa recorrente → nova skill (curta, com `description` que dispare

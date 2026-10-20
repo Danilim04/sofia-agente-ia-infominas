@@ -27,10 +27,10 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Callable, Literal, Optional
+from collections.abc import Callable
+from typing import Literal
 
 from pydantic import BaseModel, Field
-
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ JAILBREAK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
-def heuristica_rapida(texto: str) -> Optional[dict]:
+def heuristica_rapida(texto: str) -> dict | None:
     """Retorna dict de bloqueio se algum padrão casar, ou None caso contrário."""
     if not isinstance(texto, str) or not texto.strip():
         return None
@@ -149,7 +149,7 @@ class ClassificacaoSeguranca(BaseModel):
     motivo: str = Field(default="", description="Justificativa em uma frase curta.")
 
 
-def _montar_conteudo_classificador(texto: str, contexto: Optional[str]) -> str:
+def _montar_conteudo_classificador(texto: str, contexto: str | None) -> str:
     """Monta o conteúdo enviado ao classificador, incluindo o contexto recente.
 
     Sem contexto, devolve só o texto (compatível com o comportamento antigo);
@@ -166,7 +166,7 @@ def _montar_conteudo_classificador(texto: str, contexto: Optional[str]) -> str:
     )
 
 
-def _classificar_via_llm(texto: str, contexto: Optional[str] = None) -> dict:
+def _classificar_via_llm(texto: str, contexto: str | None = None) -> dict:
     """Roda o classificador LLM via OpenRouter (modelo barato)."""
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -181,7 +181,7 @@ def _classificar_via_llm(texto: str, contexto: Optional[str] = None) -> dict:
                 HumanMessage(content=_montar_conteudo_classificador(texto, contexto)),
             ]
         )
-    except Exception as exc:  # noqa: BLE001 — fail-open com log
+    except Exception as exc:
         logger.warning(
             "classificador_indisponivel erro=%s — passando como 'suporte' (fail-open)",
             exc,
@@ -207,8 +207,8 @@ def _classificar_via_llm(texto: str, contexto: Optional[str] = None) -> dict:
 def avaliar_entrada(
     texto: str,
     *,
-    contexto: Optional[str] = None,
-    classificador: Optional[Callable[..., dict]] = None,
+    contexto: str | None = None,
+    classificador: Callable[..., dict] | None = None,
     pular_classificador: bool = False,
 ) -> dict:
     """Pipeline completo: heurística rápida → classificador LLM.

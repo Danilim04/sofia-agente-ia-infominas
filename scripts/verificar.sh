@@ -66,7 +66,9 @@ python_rapido() {
   else pular "mypy" "pip install -r agente-ia/requirements-dev.txt"; fi
 
   if py_mod importlinter && grep -q 'tool.importlinter' "$A/pyproject.toml" 2>/dev/null; then
-    etapa "import-linter" "$A" "$PY" -m importlinter.cli lint
+    # o pacote não tem __main__: usa o console script ao lado do python do venv
+    LI="$(dirname "$PY")/lint-imports"; [ -x "$LI" ] || [ -x "$LI.exe" ] || LI=lint-imports
+    etapa "import-linter" "$A" "$LI"
   else pular "import-linter" "pip install import-linter (+ [tool.importlinter] no pyproject)"; fi
 
   if py_mod pytest; then etapa "pytest (unit + arquitetura)" "$A" "$PY" -m pytest -q

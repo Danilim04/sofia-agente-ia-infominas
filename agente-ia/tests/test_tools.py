@@ -14,7 +14,6 @@ from src.tools.crm_mocks import (
     verificar_chamados_abertos,
 )
 
-
 # ---------------------------------------------------------------------------
 # buscar_cliente_por_telefone
 # ---------------------------------------------------------------------------
@@ -30,9 +29,7 @@ def test_buscar_cliente_telefone_conhecido_retorna_schema_completo():
 
 
 def test_buscar_cliente_aceita_telefone_com_mascara():
-    resultado = buscar_cliente_por_telefone.invoke(
-        {"telefone": "(11) 99999-0002"}
-    )
+    resultado = buscar_cliente_por_telefone.invoke({"telefone": "(11) 99999-0002"})
     assert resultado["encontrado"] is True
     assert resultado["id_cliente"] == "CLI-1002"
 
@@ -86,9 +83,7 @@ def test_verificar_chamados_cliente_com_multiplos_tickets():
         ("PEREIRA CARGAS", "NF-3001", "entregue", "rejeitada"),
     ],
 )
-def test_rastrear_nota_fiscal_variacoes_no_ciclo(
-    grupo_emp, numero_nota, etapa, comprovacao
-):
+def test_rastrear_nota_fiscal_variacoes_no_ciclo(grupo_emp, numero_nota, etapa, comprovacao):
     resultado = rastrear_nota_fiscal.invoke(
         {"numero_nota": numero_nota, "grupos_emp_sessao": [grupo_emp]}
     )
@@ -124,9 +119,7 @@ def test_rastrear_nota_fiscal_nao_vaza_nf_de_outro_grupo():
 
 def test_rastrear_nota_fiscal_sem_escopo_falha_fechada():
     # Sessão sem grupos (não identificado/telefone desconhecido) → nada sai.
-    resultado = rastrear_nota_fiscal.invoke(
-        {"numero_nota": "NF-1042", "grupos_emp_sessao": []}
-    )
+    resultado = rastrear_nota_fiscal.invoke({"numero_nota": "NF-1042", "grupos_emp_sessao": []})
     assert resultado["encontrado"] is False
 
 
@@ -157,17 +150,13 @@ def test_abrir_novo_chamado_retorna_ticket_aberto():
 
 def test_abrir_novo_chamado_sanitiza_resumo_longo_e_quebras():
     resumo = "  linha 1\n\n   linha 2  " + ("x" * 400)
-    resultado = abrir_novo_chamado.invoke(
-        {"id_cliente": "CLI-1001", "resumo": resumo}
-    )
+    resultado = abrir_novo_chamado.invoke({"id_cliente": "CLI-1001", "resumo": resumo})
     assert "\n" not in resultado["assunto"]
     assert len(resultado["assunto"]) <= 280
 
 
 def test_abrir_novo_chamado_resumo_vazio_e_rejeitado():
-    resultado = abrir_novo_chamado.invoke(
-        {"id_cliente": "CLI-1001", "resumo": "   "}
-    )
+    resultado = abrir_novo_chamado.invoke({"id_cliente": "CLI-1001", "resumo": "   "})
     assert resultado["status"] == "rejeitado"
     assert resultado["ticket_id"] is None
 

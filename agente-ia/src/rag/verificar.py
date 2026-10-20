@@ -79,12 +79,21 @@ def _cli() -> None:
     parser = argparse.ArgumentParser(
         description="Compara respostas do Chroma e do pgvector para as mesmas consultas."
     )
-    parser.add_argument("--consultas", type=Path, default=None,
-                        help="Arquivo com uma consulta por linha (default: lista embutida).")
-    parser.add_argument("--k", type=int, default=None,
-                        help="Top-k por consulta (default: RAG_TOP_K).")
-    parser.add_argument("--limiar", type=float, default=0.6,
-                        help="Sobreposição média mínima para passar (default: 0.6).")
+    parser.add_argument(
+        "--consultas",
+        type=Path,
+        default=None,
+        help="Arquivo com uma consulta por linha (default: lista embutida).",
+    )
+    parser.add_argument(
+        "--k", type=int, default=None, help="Top-k por consulta (default: RAG_TOP_K)."
+    )
+    parser.add_argument(
+        "--limiar",
+        type=float,
+        default=0.6,
+        help="Sobreposição média mínima para passar (default: 0.6).",
+    )
     args = parser.parse_args()
 
     settings = get_settings()

@@ -1,0 +1,125 @@
+# Configuração de ferramentas do cérebro Python (E0.1 — docs/plano/04-esteira-qualidade.md).
+# As dependências continuam em requirements.txt / requirements-dev.txt (instalação por pip/uv).
+
+[project]
+name = "sofia-agente-ia"
+version = "0.1.0"
+description = "Cérebro Python da Sofia (agente de atendimento WhatsApp da Infominas)"
+requires-python = ">=3.12"
+
+# ----------------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["venv", ".venv", "chroma_db", "data", "evals/bruto", "evals/relatorios"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "N", "PL", "RUF"]
+ignore = [
+  "E501",    # comprimento de linha: o formatador cuida; docstrings/prompts longos são legítimos
+  "PLR0913", # muitos argumentos: fábricas de nós e tools recebem dependências por parâmetro
+  "PLR2004", # "número mágico": limiares nomeados vivem em config; nos demais casos o contexto basta
+  "RUF001", "RUF002", "RUF003",  # caracteres unicode ambíguos em texto pt-BR (aspas, travessão)
+  "B008",    # chamada em default de argumento (padrão do FastAPI/LangChain)
+  "PLC0415", # import dentro de função: padrão da casa para imports tardios (RAG, fakes de teste)
+  "N818",    # exceções nomeadas em pt-BR sem sufixo Error (ErroDeFonte, TravaRemocaoMassa)
+  "PLR0911", "PLR0912", "PLR0915", "PLR0917",  # complexidade: nós do grafo e política são longos por desenho
+  "RUF005",  # [a] + b em vez de [a, *b]: estilo, sem ganho
+  "PLW2901", # reatribuir variável de loop (normalização de texto)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S324", "E402", "N802", "N806"]  # assert, "senhas"/hash de teste, imports por seção, nomes ÊNFASE
+"evals/**" = ["S101", "S105", "S106"]
+"app.py" = ["S101"]
+# Legado do Zapin que sai/muda em E1.3/E3.2 — não vale corrigir agora:
+"src/rag/**" = ["S110", "S324", "B905"]   # except-pass no close, md5 como id de chunk, zip sem strict
+"src/agent/falhas.py" = ["S311"]          # random no sufixo do ID de ocorrência (não é segredo)
+
+[tool.ruff.lint.isort]
+known-first-party = ["src", "server", "app", "evals"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ----------------------------------------------------------------------- mypy
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "server.py"]
+exclude = ["venv", ".venv", "evals/bruto"]
+ignore_missing_imports = true
+warn_unused_ignores = false
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = false
+
+# Legado que a tipagem dos stubs atuais rejeita (kwargs por alias do ChatOpenAI,
+# redefinição de Vector no fallback do pgvector). Sai em E1.3/E3.2 — não corrigir aqui.
+[[tool.mypy.overrides]]
+module = ["src.agent.llm", "src.rag.indice_pg"]
+ignore_errors = true
+
+# Módulos novos nascem tipados (criados nas Ondas 2–3). Entrada antecipada para
+# o padrão valer desde o primeiro arquivo.
+[[tool.mypy.overrides]]
+module = ["src.classificacao.*", "src.identity.*", "src.tools.infodesk_tools", "src.tools.efeitos", "src.agent.tool_policy"]
+disallow_untyped_defs = true
+check_untyped_defs = true
+
+# ---------------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "rede: precisa de rede/serviço externo real (excluído por default)",
+  "jev: chama o JEV real (TYPESAFE_API_KEY; excluído por default)",
+  "llm_real: chama o LLM real via OpenRouter (excluído por default)",
+  "e2e: sobe a stack com mock-infodesk (excluído por default)",
+  "evals_pr: evals determinísticos que bloqueiam merge (rodar com: pytest -m evals_pr evals/)",
+  "contrato: testes de contrato Go <-> Python sobre contratos/",
+]
+addopts = "-m 'not rede and not jev and not llm_real and not e2e'"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+# --------------------------------------------------------------- import-linter
+# Camadas do cérebro (docs/plano/04, Camada 1). Módulo de cima pode importar o
+# de baixo; nunca o contrário. Módulos não listados não são restringidos.
+[tool.importlinter]
+root_packages = ["src"]
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+name = "camadas do cérebro"
+type = "layers"
+layers = [
+  "src.agent.graph",
+  "src.agent.nodes",
+  "src.agent.tool_policy",
+  "src.tools",
+  "src.classificacao | src.identity | src.security | src.rag",
+  "src.agent.llm | src.agent.prompts | src.agent.state | src.agent.falhas",
+  "src.config",
+]
+
+[[tool.importlinter.contracts]]
+name = "classificação não conhece o agente nem as tools"
+type = "forbidden"
+source_modules = ["src.classificacao"]
+forbidden_modules = ["src.agent", "src.tools", "src.rag"]
+
+[[tool.importlinter.contracts]]
+name = "tools não conhecem o grafo"
+type = "forbidden"
+source_modules = ["src.tools"]
+forbidden_modules = ["src.agent.nodes", "src.agent.graph"]
+
+[[tool.importlinter.contracts]]
+name = "guardrails não conhecem tools nem RAG"
+type = "forbidden"
+source_modules = ["src.security"]
+forbidden_modules = ["src.tools", "src.rag"]
+
+[[tool.importlinter.contracts]]
+name = "RAG só entra pelo retrieve e pela tool legada"
+type = "forbidden"
+source_modules = ["src.agent.tool_policy", "src.agent.state", "src.agent.prompts", "src.identity", "src.security", "src.classificacao"]
+forbidden_modules = ["src.rag"]

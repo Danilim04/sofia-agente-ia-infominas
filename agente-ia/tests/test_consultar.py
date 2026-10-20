@@ -7,8 +7,10 @@ from src.rag.consultar import formatar
 
 def test_formatar_lista_fontes_secoes_e_trechos_curtos():
     docs = [
-        Document(page_content="Texto   com\nquebras " + "x" * 300,
-                 metadata={"source": "Azapfy Motorista (aplicativo)", "secao": "Login › Senha"}),
+        Document(
+            page_content="Texto   com\nquebras " + "x" * 300,
+            metadata={"source": "Azapfy Motorista (aplicativo)", "secao": "Login › Senha"},
+        ),
         Document(page_content="Sem seção.", metadata={"source": "Glossário"}),
     ]
     saida = formatar("como faço login?", docs, chars=40)

@@ -23,7 +23,8 @@ Uso:
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import MemorySaver
@@ -63,10 +64,10 @@ def get_default_tools() -> list[BaseTool]:
 
 
 def build_graph(
-    llm: Optional[Any] = None,
-    tools: Optional[list[BaseTool]] = None,
-    checkpointer: Optional[Any] = None,
-    buscar_chunks: Optional[Callable[[str], dict]] = None,
+    llm: Any | None = None,
+    tools: list[BaseTool] | None = None,
+    checkpointer: Any | None = None,
+    buscar_chunks: Callable[[str], dict] | None = None,
 ):
     """Compila o grafo. Defaults de produção podem ser sobrescritos para testes."""
     if llm is None:

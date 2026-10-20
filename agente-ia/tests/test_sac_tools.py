@@ -22,7 +22,6 @@ from src.tools.sac_tools import (
     preparar_abertura_chamado,
 )
 
-
 _PROPOSTA = {
     "resumo": "App travando",
     "descricao": "Trava ao bipar",
@@ -51,7 +50,7 @@ def captura(monkeypatch):
     chamadas: list[dict] = []
     estado = {"resposta": {"status": True}}
 
-    def fake_post(url, json=None, headers=None, timeout=None):  # noqa: A002
+    def fake_post(url, json=None, headers=None, timeout=None):
         chamadas.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
         return _FakeResp(estado["resposta"])
 
@@ -91,9 +90,7 @@ def test_abrir_executa_a_proposta_injetada(captura):
         "protocolo": "ZPRS25207690",
         "link": "https://atendimento.azapfy.com.br/chat/x/AZAPERS/ZPRS25207690",
     }
-    out = abrir_chamado_suporte.invoke(
-        {"proposta": dict(_PROPOSTA), "telefone": "5531983857490"}
-    )
+    out = abrir_chamado_suporte.invoke({"proposta": dict(_PROPOSTA), "telefone": "5531983857490"})
     assert out["protocolo"] == "ZPRS25207690"
     enviado = chamadas[-1]
     assert enviado["url"].endswith("/tools/sac/criar")
@@ -277,7 +274,14 @@ def test_preparar_envia_novo_chamado_false_por_padrao(captura):
     )
     assert chamadas[-1]["json"]["novo_chamado"] is False
     preparar_abertura_chamado.invoke(
-        {"resumo": "r", "descricao": "d", "categoria": "c", "ocorrencia": "o", "novo_chamado": True, "telefone": "1"}
+        {
+            "resumo": "r",
+            "descricao": "d",
+            "categoria": "c",
+            "ocorrencia": "o",
+            "novo_chamado": True,
+            "telefone": "1",
+        }
     )
     assert chamadas[-1]["json"]["novo_chamado"] is True
 
@@ -307,7 +311,13 @@ def test_tools_node_novo_chamado_sem_pedido_do_cliente_nao_chega_ao_gateway(capt
             {
                 "name": "preparar_abertura_chamado",
                 "id": "call-1",
-                "args": {"resumo": "r", "descricao": "d", "categoria": "c", "ocorrencia": "o", "novo_chamado": True},
+                "args": {
+                    "resumo": "r",
+                    "descricao": "d",
+                    "categoria": "c",
+                    "ocorrencia": "o",
+                    "novo_chamado": True,
+                },
             }
         ],
     )

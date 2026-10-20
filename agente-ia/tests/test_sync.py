@@ -25,7 +25,6 @@ from src.rag.sync import (
     planejar,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fakes (mesma interface dos reais; ver protocolos em src/rag/sync.py)
 # ---------------------------------------------------------------------------
@@ -123,9 +122,13 @@ class FakeIndice:
         self.controle[doc_id] = RegistroDoc(hash_listagem=hash_l, deleted=True)
 
 
-def _doc(titulo="Cadastro de veículos", categoria="Frotas", updated_at="v1",
-         conteudo="# Cadastro de veículos\n\nPasso a passo do cadastro.",
-         deleted=False):
+def _doc(
+    titulo="Cadastro de veículos",
+    categoria="Frotas",
+    updated_at="v1",
+    conteudo="# Cadastro de veículos\n\nPasso a passo do cadastro.",
+    deleted=False,
+):
     return {
         "titulo": titulo,
         "categoria": categoria,
@@ -144,6 +147,7 @@ def _sync(fonte, indice, embeddings=None, **kwargs):
 # Hash de listagem — o sinal de mudança
 # ---------------------------------------------------------------------------
 
+
 def test_hash_listagem_inclui_updated_at_titulo_categoria_e_deleted():
     base = ItemListagem(id="a", titulo="T", categoria="C", updated_at="v1")
     assert hash_listagem(base) == hash_listagem(base)
@@ -160,6 +164,7 @@ def test_hash_listagem_inclui_updated_at_titulo_categoria_e_deleted():
 # ---------------------------------------------------------------------------
 # Cenários 1–5: novo, alterado, metadado, sem mudança, save sem mudança real
 # ---------------------------------------------------------------------------
+
 
 def test_cenario1_documento_novo_e_indexado():
     fonte = FakeFonte({"a.md": _doc()})
@@ -227,6 +232,7 @@ def test_cenario5_save_sem_mudanca_real_reprocessa_mesmo_assim():
 # Cenários 6–8: deletado, restaurado, renomeado
 # ---------------------------------------------------------------------------
 
+
 def test_cenario6_tombstone_remove_documento():
     fonte = FakeFonte({"a.md": _doc(), "b.md": _doc(titulo="Avisos RNTRC")})
     indice = FakeIndice()
@@ -277,6 +283,7 @@ def test_cenario8_renomeado_tombstone_antigo_mais_novo():
 # ---------------------------------------------------------------------------
 # Cenários 9–11 + anomalias: falha da fonte, massa, listagem vazia, ausência
 # ---------------------------------------------------------------------------
+
 
 def test_cenario9_falha_da_fonte_aborta_com_indice_intacto():
     fonte = FakeFonte({"a.md": _doc()})
@@ -358,6 +365,7 @@ def test_remover_ausentes_explicito_para_fonte_local():
 # Robustez: falha parcial, doc vazio, modelo trocado, dry-run, primeira carga
 # ---------------------------------------------------------------------------
 
+
 def test_falha_em_um_doc_nao_derruba_ciclo_e_reexecucao_converge():
     fonte = FakeFonte({"a.md": _doc(), "b.md": _doc(titulo="Avisos RNTRC")})
     indice = FakeIndice()
@@ -406,17 +414,26 @@ def test_modelo_trocado_reconstroi_sozinho_quando_o_deploy_pede():
     indice = FakeIndice()
     _sync(fonte, indice)
 
-    r = _sync(fonte, indice, embedding_model="openai/text-embedding-3-small",
-              reconstruir_se_modelo_mudou=True)
+    r = _sync(
+        fonte,
+        indice,
+        embedding_model="openai/text-embedding-3-small",
+        reconstruir_se_modelo_mudou=True,
+    )
     assert indice.limpezas == 1 and indice.modelo == "openai/text-embedding-3-small"
     assert r.novos == 2 and r.falhas == 0
 
-    r = _sync(fonte, indice, embedding_model="openai/text-embedding-3-small",
-              reconstruir_se_modelo_mudou=True)
+    r = _sync(
+        fonte,
+        indice,
+        embedding_model="openai/text-embedding-3-small",
+        reconstruir_se_modelo_mudou=True,
+    )
     assert indice.limpezas == 1 and r.inalterados == 2  # sem troca: incremental
 
     # dry-run com troca: avisa o plano, mas não limpa nada
-    indice2 = FakeIndice(); _sync(fonte, indice2)
+    indice2 = FakeIndice()
+    _sync(fonte, indice2)
     r = _sync(fonte, indice2, embedding_model="x", reconstruir_se_modelo_mudou=True, dry_run=True)
     assert indice2.limpezas == 0 and r.dry_run and r.novos == 0 and r.alterados == 2
 
@@ -434,9 +451,9 @@ def test_dry_run_planeja_sem_mutar_nada():
     r = _sync(fonte, indice, dry_run=True)
     assert r.dry_run
     assert r.novos == 1 and r.alterados == 1 and r.removidos == 1
-    assert fonte.obter_chamados == []            # não baixou conteúdo
-    assert "c.md" not in indice.chunks           # não gravou nada
-    assert not indice.controle["b.md"].deleted   # não removeu nada
+    assert fonte.obter_chamados == []  # não baixou conteúdo
+    assert "c.md" not in indice.chunks  # não gravou nada
+    assert not indice.controle["b.md"].deleted  # não removeu nada
 
 
 def test_primeira_carga_e_incremental_vendo_tudo_como_novo():

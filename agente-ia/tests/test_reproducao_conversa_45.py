@@ -26,7 +26,7 @@ As barreiras exercitadas (todas em código, nenhuma no modelo):
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -219,10 +219,16 @@ def test_conversa_45_proposta_pendente_protocolo_e_esse_nao_abrem_chamado(gatewa
             _tc("abrir_chamado_suporte", id_="tc-abrir-1"),
             AIMessage(content="Entendi, você está falando do seu chamado em aberto."),
             _tc("abrir_chamado_suporte", id_="tc-abrir-2"),
-            AIMessage(content="Esse chamado continua em andamento: https://sac/chat/x/MEARIM/ZPRS25208011"),
+            AIMessage(
+                content="Esse chamado continua em andamento: https://sac/chat/x/MEARIM/ZPRS25208011"
+            ),
         ]
     )
-    g = build_graph(llm=fake, tools=SAC_TOOLS, buscar_chunks=lambda q: {"encontrado": False, "total": 0, "chunks": []})
+    g = build_graph(
+        llm=fake,
+        tools=SAC_TOOLS,
+        buscar_chunks=lambda q: {"encontrado": False, "total": 0, "chunks": []},
+    )
 
     out1 = _ep1_proposta_pendente(g, gateway)
     assert out1["proposta_chamado"] is not None  # proposta pendente, como na #45
@@ -255,10 +261,14 @@ def test_conversa_45_proposta_de_outro_episodio_venceu(gateway):
             AIMessage(content="Ele segue em andamento."),
         ]
     )
-    g = build_graph(llm=fake, tools=SAC_TOOLS, buscar_chunks=lambda q: {"encontrado": False, "total": 0, "chunks": []})
+    g = build_graph(
+        llm=fake,
+        tools=SAC_TOOLS,
+        buscar_chunks=lambda q: {"encontrado": False, "total": 0, "chunks": []},
+    )
     antiga = {
         **_PROPOSTA_ANTIGA,
-        "criada_em": (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(),
+        "criada_em": (datetime.now(UTC) - timedelta(hours=5)).isoformat(),
         "turno": 1,
     }
     # Estado herdado do episódio anterior (histórico + proposta pendente).
@@ -302,7 +312,11 @@ def test_conversa_45_resolvida_entre_episodios_limpa_a_proposta(gateway):
             AIMessage(content="Ele segue em andamento."),
         ]
     )
-    g = build_graph(llm=fake, tools=SAC_TOOLS, buscar_chunks=lambda q: {"encontrado": False, "total": 0, "chunks": []})
+    g = build_graph(
+        llm=fake,
+        tools=SAC_TOOLS,
+        buscar_chunks=lambda q: {"encontrado": False, "total": 0, "chunks": []},
+    )
 
     out1 = _ep1_proposta_pendente(g, gateway)
     assert out1["proposta_chamado"] is not None
@@ -343,7 +357,11 @@ def test_conversa_45_protocolo_citado_nao_vira_chamado_novo(gateway):
             AIMessage(content="Certo, esse chamado segue em andamento pelo link acima."),
         ]
     )
-    g = build_graph(llm=fake, tools=SAC_TOOLS, buscar_chunks=lambda q: {"encontrado": False, "total": 0, "chunks": []})
+    g = build_graph(
+        llm=fake,
+        tools=SAC_TOOLS,
+        buscar_chunks=lambda q: {"encontrado": False, "total": 0, "chunks": []},
+    )
     g.update_state(
         _CFG,
         {"telefone": "5531999990000", "identidade": _IDENTIDADE, "conversation_id": CONVERSA},
@@ -377,7 +395,11 @@ def test_conversa_45_gateway_recusa_preparar_com_chamado_aberto(gateway):
             AIMessage(content="Você já tem o chamado ZPRS25208011 em aberto. É sobre ele?"),
         ]
     )
-    g = build_graph(llm=fake, tools=SAC_TOOLS, buscar_chunks=lambda q: {"encontrado": False, "total": 0, "chunks": []})
+    g = build_graph(
+        llm=fake,
+        tools=SAC_TOOLS,
+        buscar_chunks=lambda q: {"encontrado": False, "total": 0, "chunks": []},
+    )
     out = g.invoke(
         {
             "telefone": "5531999990000",

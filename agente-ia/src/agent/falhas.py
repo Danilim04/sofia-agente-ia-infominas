@@ -75,7 +75,7 @@ def gerar_id_ocorrencia(agora: datetime | None = None) -> str:
     if agora is None:
         try:
             agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
-        except Exception:  # noqa: BLE001 — sem tzdata, hora local
+        except Exception:
             agora = datetime.now(UTC).astimezone()
     return f"ZPF-{agora:%Y%m%d}-{agora:%H%M}-{random.randint(0, 99):02d}"
 

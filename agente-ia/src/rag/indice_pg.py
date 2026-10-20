@@ -22,7 +22,7 @@ do `buscar_chunks`).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from src.rag.fonte import ItemListagem, RegistroDoc
 
@@ -69,13 +69,13 @@ class PgIndice:
         self._conn = conn
 
     @classmethod
-    def conectar(cls, url: str) -> "PgIndice":
+    def conectar(cls, url: str) -> PgIndice:
         return cls(_conectar(url, criar_extensao=True))
 
     def fechar(self) -> None:
         try:
             self._conn.close()
-        except Exception:  # noqa: BLE001 — fechar nunca mascara o erro real
+        except Exception:
             pass
 
     # -- esquema -----------------------------------------------------------
@@ -96,9 +96,7 @@ class PgIndice:
             )
             """
         )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS rag_chunks_doc_idx ON rag_chunks (doc_id)"
-        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS rag_chunks_doc_idx ON rag_chunks (doc_id)")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS rag_chunks_hnsw_idx ON rag_chunks "
             "USING hnsw (embedding vector_cosine_ops)"
@@ -142,7 +140,7 @@ class PgIndice:
                 (str(int(dim)),),
             )
 
-    def modelo_registrado(self) -> Optional[str]:
+    def modelo_registrado(self) -> str | None:
         row = self._conn.execute(
             "SELECT valor FROM rag_meta WHERE chave = 'embedding_model'"
         ).fetchone()
@@ -178,7 +176,7 @@ class PgIndice:
         self,
         item: ItemListagem,
         hash_listagem: str,
-        chunks: "list[Document]",
+        chunks: list[Document],
         vetores: list[list[float]],
     ) -> None:
         with self._conn.transaction():
@@ -217,8 +215,7 @@ class PgIndice:
                     chunk_count = EXCLUDED.chunk_count,
                     ingested_at = now()
                 """,
-                (item.id, hash_listagem, item.titulo, item.categoria,
-                 item.updated_at, len(chunks)),
+                (item.id, hash_listagem, item.titulo, item.categoria, item.updated_at, len(chunks)),
             )
 
     def remover_documento(self, doc_id: str, hash_listagem: str) -> None:
@@ -255,12 +252,12 @@ class PgIndice:
 class PgRetriever:
     """Leitura top-k por cosseno, com a interface que `buscar_chunks` espera."""
 
-    def __init__(self, url: str, embeddings: "Embeddings", k: int = 4):
+    def __init__(self, url: str, embeddings: Embeddings, k: int = 4):
         self._url = url
         self._embeddings = embeddings
         self._k = k
 
-    def invoke(self, pergunta: str) -> "list[Document]":
+    def invoke(self, pergunta: str) -> list[Document]:
         from langchain_core.documents import Document
 
         vetor = self._embeddings.embed_query(pergunta)

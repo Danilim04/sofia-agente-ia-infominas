@@ -8,7 +8,7 @@ apenas re-exporta `get_embeddings` para manter o caminho histórico
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from src.agent.llm import get_embeddings, get_local_embeddings
 from src.rag.ingest import CHROMA_EMBEDDINGS_MODEL, COLLECTION_NAME
@@ -16,16 +16,15 @@ from src.rag.ingest import CHROMA_EMBEDDINGS_MODEL, COLLECTION_NAME
 if TYPE_CHECKING:
     from langchain_chroma import Chroma
     from langchain_core.embeddings import Embeddings
-    from langchain_core.vectorstores import VectorStoreRetriever
 
 
-__all__ = ["get_embeddings", "get_vector_store", "get_retriever"]
+__all__ = ["get_embeddings", "get_retriever", "get_vector_store"]
 
 
 def get_vector_store(
-    persist_dir: Optional[Path] = None,
-    embeddings: Optional["Embeddings"] = None,
-) -> "Chroma":
+    persist_dir: Path | None = None,
+    embeddings: Embeddings | None = None,
+) -> Chroma:
     """Reabre o ChromaDB persistido (sem reingerir).
 
     O Chroma é o índice de ROLLBACK, gerado no build da imagem com o modelo
@@ -51,8 +50,8 @@ def get_vector_store(
 
 def get_retriever(
     k: int = 4,
-    persist_dir: Optional[Path] = None,
-    embeddings: Optional["Embeddings"] = None,
+    persist_dir: Path | None = None,
+    embeddings: Embeddings | None = None,
 ):
     """Retorna um retriever top-k pronto para `.invoke(pergunta)`.
 
@@ -67,8 +66,6 @@ def get_retriever(
     if settings.vector_backend == "pgvector":
         from src.rag.indice_pg import PgRetriever
 
-        return PgRetriever(
-            settings.pgvector_url, embeddings or get_embeddings(), k=k
-        )
+        return PgRetriever(settings.pgvector_url, embeddings or get_embeddings(), k=k)
     store = get_vector_store(persist_dir, embeddings)
     return store.as_retriever(search_kwargs={"k": k})

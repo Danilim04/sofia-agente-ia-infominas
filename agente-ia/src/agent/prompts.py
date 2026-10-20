@@ -17,7 +17,6 @@ alinhados. Referência completa: doc de persona (extração de ~23k mensagens).
 
 from __future__ import annotations
 
-
 RESPOSTA_OFF_TOPIC = (
     "Opa! Eu sou o Zapin, do Suporte Azapfy — te ajudo com assuntos da "
     "plataforma. Me conta: qual dúvida ou dificuldade você está tendo por lá? 🧡"

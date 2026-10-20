@@ -1,0 +1,8 @@
+# Ferramentas de desenvolvimento (camada 1 da esteira). Instalar junto com requirements.txt:
+#   pip install -r requirements.txt -r requirements-dev.txt
+ruff>=0.14,<1.0
+mypy>=1.19,<2.0
+import-linter>=2.5,<3.0
+pytest-cov>=7.0,<8.0
+types-PyYAML>=6.0
+PyYAML>=6.0,<7.0

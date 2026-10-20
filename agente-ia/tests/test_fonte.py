@@ -17,10 +17,10 @@ from src.rag.fonte import (
     FonteDocsLocais,
 )
 
-
 # ---------------------------------------------------------------------------
 # Chunking — contrato de metadados das citações
 # ---------------------------------------------------------------------------
+
 
 def test_chunkear_documento_gera_metadados_citaveis():
     doc = DocumentoFonte(
@@ -32,8 +32,8 @@ def test_chunkear_documento_gera_metadados_citaveis():
     chunks = chunkear_documento(doc)
     assert chunks
     meta = chunks[-1].metadata
-    assert meta["source"] == "Cadastro de veículos"      # rótulo citável
-    assert "Documentos obrigatórios" in meta["secao"]     # caminho de seção
+    assert meta["source"] == "Cadastro de veículos"  # rótulo citável
+    assert "Documentos obrigatórios" in meta["secao"]  # caminho de seção
     assert meta["categoria"] == "Frotas"
     assert meta["doc_id"] == "documentacao/frotas/cadastro-veiculos.md"
 
@@ -46,6 +46,7 @@ def test_chunkear_documento_vazio_retorna_lista_vazia():
 # ---------------------------------------------------------------------------
 # Fonte local (docs/*.md)
 # ---------------------------------------------------------------------------
+
 
 def test_fonte_local_lista_e_obtem(tmp_path):
     (tmp_path / "a.md").write_text("# Doc A\n\nConteúdo A.", encoding="utf-8")
@@ -87,6 +88,7 @@ def test_fonte_local_nao_sai_do_diretorio(tmp_path):
 BASE = "http://fonte.teste/api/v1/integrations/docs"
 COLECAO = "/api/v1/integrations/docs"
 
+
 def _item(i, **extra):
     return {
         "id": f"documentacao/frotas/doc-{i}.md",
@@ -108,9 +110,13 @@ def _fonte_com(handler) -> FonteAPIDocumentacao:
 
 def _me(**sobrescreve):
     espaco = {
-        "id": "5f2", "nome": "Zapin - Base de Conhecimento",
-        "escopos": ["DOCS_LIST", "DOCS_READ"], "ativo": True,
-        "apiHabilitada": True, "espacoArquivado": False, "donoTemAcesso": True,
+        "id": "5f2",
+        "nome": "Zapin - Base de Conhecimento",
+        "escopos": ["DOCS_LIST", "DOCS_READ"],
+        "ativo": True,
+        "apiHabilitada": True,
+        "espacoArquivado": False,
+        "donoTemAcesso": True,
     }
     espaco.update(sobrescreve.pop("espaco", {}))
     base = {
@@ -132,10 +138,13 @@ def test_fonte_api_listagem_paginada_e_tombstone():
         assert request.url.params.get("limit") == "500"
         cursor = request.url.params.get("cursor")
         if cursor is None:
-            return httpx.Response(200, json={
-                "itens": [_item(1), _item(2, deleted=True, deleted_at="2026-08-28T09:10:00Z")],
-                "next_cursor": "p2",
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "itens": [_item(1), _item(2, deleted=True, deleted_at="2026-08-28T09:10:00Z")],
+                    "next_cursor": "p2",
+                },
+            )
         assert cursor == "p2"
         return httpx.Response(200, json={"itens": [_item(3)], "next_cursor": None})
 
@@ -153,6 +162,7 @@ def test_fonte_api_5xx_vira_erro_de_fonte():
 
 def test_fonte_api_item_sem_campo_obrigatorio_aborta():
     """§4.2 do contrato: resposta fora do contrato aborta — nunca 'aproveitar'."""
+
     def handler(request):
         quebrado = {k: v for k, v in _item(1).items() if k != "updated_at"}
         return httpx.Response(200, json={"itens": [quebrado], "next_cursor": None})
@@ -162,8 +172,11 @@ def test_fonte_api_item_sem_campo_obrigatorio_aborta():
 
 
 def test_fonte_api_401_aborta_com_status_legivel():
-    fonte = _fonte_com(lambda req: httpx.Response(401, json={
-        "message": 'Envie a chave em "X-API-Key: azk_..."', "statusCode": 401}))
+    fonte = _fonte_com(
+        lambda req: httpx.Response(
+            401, json={"message": 'Envie a chave em "X-API-Key: azk_..."', "statusCode": 401}
+        )
+    )
     with pytest.raises(ErroDeFonte, match="401"):
         fonte.listar()
 
@@ -173,11 +186,17 @@ def test_fonte_api_obter_bate_no_id_sob_a_colecao():
 
     def handler(request: httpx.Request) -> httpx.Response:
         visto["path"] = request.url.path
-        return httpx.Response(200, json={
-            "id": "8c1e", "titulo": "Cadastro de veículos", "categoria": "Frotas",
-            "conteudo": "# Cadastro de veículos\n\n## Documentos obrigatórios\n…",
-            "updated_at": "2026-08-30T14:22:00.000Z", "deleted": False,
-        })
+        return httpx.Response(
+            200,
+            json={
+                "id": "8c1e",
+                "titulo": "Cadastro de veículos",
+                "categoria": "Frotas",
+                "conteudo": "# Cadastro de veículos\n\n## Documentos obrigatórios\n…",
+                "updated_at": "2026-08-30T14:22:00.000Z",
+                "deleted": False,
+            },
+        )
 
     doc = _fonte_com(handler).obter("8c1e")
     assert visto["path"] == COLECAO + "/8c1e"
@@ -214,15 +233,18 @@ def test_fonte_api_diagnostico_me_pronto():
     assert diag.espacos[0].nome == "Zapin - Base de Conhecimento"
 
 
-@pytest.mark.parametrize("sobrescreve, trecho", [
-    ({"espaco": {"apiHabilitada": False}}, "API desabilitada"),
-    ({"espaco": {"donoTemAcesso": False}}, "sem acesso"),
-    ({"espaco": {"ativo": False}}, "inativo"),
-    ({"espaco": {"espacoArquivado": True}}, "arquivado"),
-    ({"espaco": {"escopos": ["DOCS_LIST"]}}, "DOCS_READ"),
-    ({"apiKey": {"id": "k1", "scopes": ["DOCS_LIST"]}}, "chave sem os escopos"),
-    ({"espacos": []}, "nenhum espaço"),
-])
+@pytest.mark.parametrize(
+    "sobrescreve, trecho",
+    [
+        ({"espaco": {"apiHabilitada": False}}, "API desabilitada"),
+        ({"espaco": {"donoTemAcesso": False}}, "sem acesso"),
+        ({"espaco": {"ativo": False}}, "inativo"),
+        ({"espaco": {"espacoArquivado": True}}, "arquivado"),
+        ({"espaco": {"escopos": ["DOCS_LIST"]}}, "DOCS_READ"),
+        ({"apiKey": {"id": "k1", "scopes": ["DOCS_LIST"]}}, "chave sem os escopos"),
+        ({"espacos": []}, "nenhum espaço"),
+    ],
+)
 def test_fonte_api_diagnostico_aponta_a_condicao_que_caiu(sobrescreve, trecho):
     diag = _fonte_com(lambda req: httpx.Response(200, json=_me(**sobrescreve))).diagnosticar()
     assert not diag.pronto
@@ -234,14 +256,17 @@ def test_fonte_api_obter_codifica_id_com_barras():
 
     def handler(request: httpx.Request) -> httpx.Response:
         visto["path"] = request.url.raw_path.decode()
-        return httpx.Response(200, json={
-            "id": "documentacao/frotas/doc-1.md",
-            "titulo": "Doc 1",
-            "categoria": "Frotas",
-            "conteudo": "# Doc 1\n\nTexto.",
-            "updated_at": "2026-08-30T14:22:00Z",
-            "deleted": False,
-        })
+        return httpx.Response(
+            200,
+            json={
+                "id": "documentacao/frotas/doc-1.md",
+                "titulo": "Doc 1",
+                "categoria": "Frotas",
+                "conteudo": "# Doc 1\n\nTexto.",
+                "updated_at": "2026-08-30T14:22:00Z",
+                "deleted": False,
+            },
+        )
 
     doc = _fonte_com(handler).obter("documentacao/frotas/doc-1.md")
     assert doc.conteudo.startswith("# Doc 1")

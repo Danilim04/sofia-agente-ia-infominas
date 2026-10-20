@@ -170,14 +170,12 @@ def test_get_embeddings_constroi_huggingface_com_settings(monkeypatch):
         def __init__(self, **kwargs):
             capturado.update(kwargs)
 
-    import src.agent.llm as llm_mod
-
     # Precisamos interceptar o import tardio dentro de get_embeddings.
     import langchain_huggingface
 
-    monkeypatch.setattr(
-        langchain_huggingface, "HuggingFaceEmbeddings", FakeHFEmbeddings
-    )
+    import src.agent.llm as llm_mod
+
+    monkeypatch.setattr(langchain_huggingface, "HuggingFaceEmbeddings", FakeHFEmbeddings)
 
     out = llm_mod.get_embeddings()
     assert isinstance(out, FakeHFEmbeddings)
