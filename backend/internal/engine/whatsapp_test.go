@@ -6,28 +6,13 @@ import (
 	"unicode"
 )
 
-func TestStripAssinatura(t *testing.T) {
-	casos := []struct{ in, want string }{
-		{"**Claude:**\n105.966.936.64", "105.966.936.64"},
-		{"*Fulano de Tal:*\nmeu email é x@y.com", "meu email é x@y.com"},
-		{"sem assinatura nenhuma", "sem assinatura nenhuma"},
-		{"**negrito** no meio não é assinatura", "**negrito** no meio não é assinatura"},
-		{"  **Bot:**  \noi", "oi"},
-	}
-	for _, c := range casos {
-		if got := StripAssinatura(c.in); got != c.want {
-			t.Errorf("StripAssinatura(%q) = %q, esperava %q", c.in, got, c.want)
-		}
-	}
-}
-
-// TestFormatWhatsApp: a saída é o dialeto do Chatwoot — o que a Evolution
-// converte para WhatsApp limpo (ver simularEntrega). Negrito sai `**x**`.
+// TestFormatWhatsApp: a saída é o dialeto do relay — o que a Evolution
+// convertia para WhatsApp limpo (ver simularEntrega). Negrito sai `**x**`.
 func TestFormatWhatsApp(t *testing.T) {
 	casos := []struct{ nome, in, want string }{
 		// Negrito (ZF-1): `**x**` fica; `*x*` simples (sintaxe do WhatsApp, a que
 		// o prompt pede) vira `**x**` — senão a Evolution o entregava como itálico.
-		{"negrito markdown mantido", "**Zapin (bot):** resposta", "**Zapin (bot):** resposta"},
+		{"negrito markdown mantido", "**Sofia (bot):** resposta", "**Sofia (bot):** resposta"},
 		{"negrito simples vira duplo", "clique em *Configurações* e salve", "clique em **Configurações** e salve"},
 		{"vários negritos simples", "*Nome:* Ana\n*Login:* ana.silva", "**Nome:** Ana\n**Login:** ana.silva"},
 		{"negrito triplo", "***urgente***", "**urgente**"},
@@ -41,13 +26,13 @@ func TestFormatWhatsApp(t *testing.T) {
 		{"link com texto", "veja [o chamado](https://x.com/t/1)", "veja o chamado: https://x.com/t/1"},
 		{"link cujo texto é a url", "[https://x.com](https://x.com)", "https://x.com"},
 		{"link cujo texto é a url sem esquema", "[x.com/ajuda](https://x.com/ajuda/)", "https://x.com/ajuda/"},
-		{"mailto com texto igual", "escreva para [suporte@azapfy.com.br](mailto:suporte@azapfy.com.br)", "escreva para suporte@azapfy.com.br"},
-		{"mailto com texto diferente", "[nosso e-mail](mailto:suporte@azapfy.com.br)", "nosso e-mail: suporte@azapfy.com.br"},
-		{"mailto solto", "e-mail: mailto:suporte@azapfy.com.br ok", "e-mail: suporte@azapfy.com.br ok"},
-		{"autolink url", "acesse <https://app.azapfy.com.br/login>", "acesse https://app.azapfy.com.br/login"},
-		{"autolink e-mail", "fale com <suporte@azapfy.com.br>", "fale com suporte@azapfy.com.br"},
+		{"mailto com texto igual", "escreva para [suporte@infominas.net](mailto:suporte@infominas.net)", "escreva para suporte@infominas.net"},
+		{"mailto com texto diferente", "[nosso e-mail](mailto:suporte@infominas.net)", "nosso e-mail: suporte@infominas.net"},
+		{"mailto solto", "e-mail: mailto:suporte@infominas.net ok", "e-mail: suporte@infominas.net ok"},
+		{"autolink url", "acesse <https://app.infominas.net/login>", "acesse https://app.infominas.net/login"},
+		{"autolink e-mail", "fale com <suporte@infominas.net>", "fale com suporte@infominas.net"},
 		{"autolink mailto", "<mailto:a@b.co>", "a@b.co"},
-		{"link com título", `[Portal](https://x.com "Portal Azapfy")`, "Portal: https://x.com"},
+		{"link com título", `[Portal](https://x.com "Portal Infominas")`, "Portal: https://x.com"},
 		{"link com destino entre <>", "[Portal](<https://x.com/a>)", "Portal: https://x.com/a"},
 		{"link de referência", "veja [a documentação][docs] hoje\n\n[docs]: https://x.com/docs \"Docs\"\n", "veja a documentação: https://x.com/docs hoje"},
 		{"link de referência colapsado", "[https://x.com][]\n[https://x.com]: https://x.com", "https://x.com"},
@@ -215,15 +200,16 @@ func TestQuebrarMensagemLimiteMinusculo(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Teste de ouro: o que chega ao WhatsApp do cliente.
 //
-// simularEntrega reproduz, fora deste repositório, o caminho Chatwoot →
-// Evolution. É uma SIMULAÇÃO copiada do código de cada um, nas versões
-// fixadas abaixo; se a versão mudar, confira os trechos de novo:
+// simularEntrega reproduz, fora deste repositório, o caminho painel de
+// atendimento → relay Evolution usado até a Onda 0. É uma SIMULAÇÃO copiada
+// do código de cada um, nas versões fixadas abaixo (TODO(E2.1): trocar pela
+// entrega do Infodesk quando C7 for respondido):
 //
-//  1. Chatwoot v4.15.1 — `Messages::WebhookContentNormalizer.normalize`
+//  1. Painel v4.15.1 — `Messages::WebhookContentNormalizer.normalize`
 //     (conteúdo do webhook para o canal):
 //     text.gsub(/\\\r?\n/, "\n").sub(/(\r?\n)+\z/, '')
-//  2. Evolution API v2.3.6 — `chatwoot.service.ts`, `receiveWebhook`
-//     ("Chatwoot to Whatsapp"), as quatro regex nesta ordem:
+//  2. Evolution API v2.3.6 — `receiveWebhook` (painel → WhatsApp), as quatro
+//     regex nesta ordem:
 //     .replaceAll(/(?<!\*)\*((?!\s)([^\n*]+?)(?<!\s))\*(?!\*)/g, '_$1_')   // * vira _
 //     .replaceAll(/\*{2}((?!\s)([^\n*]+?)(?<!\s))\*{2}/g, '*$1*')           // ** vira *
 //     .replaceAll(/~{2}((?!\s)([^\n*]+?)(?<!\s))~{2}/g, '~$1~')             // ~~ vira ~
@@ -235,7 +221,7 @@ func TestQuebrarMensagemLimiteMinusculo(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func simularEntrega(s string) string {
-	s = normalizarChatwoot(s)
+	s = normalizarRelay(s)
 	s = regexItalicoEvolution(s)
 	s = regexParEvolution(s, '*', "*")
 	s = regexParEvolution(s, '~', "~")
@@ -246,8 +232,8 @@ func simularEntrega(s string) string {
 // a simulação não depender do código testado).
 func espacoJSTeste(r rune) bool { return unicode.IsSpace(r) || r == '\uFEFF' }
 
-// normalizarChatwoot: `\` antes da quebra de linha some; quebras no fim somem.
-func normalizarChatwoot(s string) string {
+// normalizarRelay: `\` antes da quebra de linha some; quebras no fim somem.
+func normalizarRelay(s string) string {
 	r := []rune(s)
 	var out []rune
 	for i := 0; i < len(r); i++ {
@@ -370,7 +356,7 @@ func TestSimularEntregaConfereComRegexReais(t *testing.T) {
 	casos := []struct{ in, want string }{
 		{"**x**", "*x*"}, {"*x*", "_x_"}, {"***x***", "**x**"}, {"**a *b* c**", "*a _b_ c*"},
 		{"*a**b*", "*a**b*"}, {"** x **", "** x **"}, {"**a\nb**", "**a\nb**"}, {"`x`", "```x```"},
-		{"~~x~~", "~x~"}, {"**a**b", "*a*b"}, {"x**y**", "x*y*"}, {"*Zapin:* oi", "_Zapin:_ oi"},
+		{"~~x~~", "~x~"}, {"**a**b", "*a*b"}, {"x**y**", "x*y*"}, {"*Sofia:* oi", "_Sofia:_ oi"},
 		{"5*3*2", "5_3_2"}, {"a * b * c", "a * b * c"}, {"**R$ 10,00**", "*R$ 10,00*"},
 		{"*\u00a0x\u00a0*", "*\u00a0x\u00a0*"}, {"**x**\n", "*x*"}, {"a\\\nb", "a\nb"},
 		{"**a**\n**b**", "*a*\n*b*"}, {"_x_", "_x_"}, {"**_x_**", "*_x_*"}, {"*_x_*", "__x__"},
@@ -402,7 +388,7 @@ func restosMarkdown(s string) []string {
 	return restos
 }
 
-// TestOuroEntregaNoWhatsApp (ZF-1): respostas como o LLM/gate as escrevem,
+// TestOuroEntregaNoWhatsApp (ZF-1): respostas como o LLM/gateway as escrevem,
 // passadas pelo caminho real de envio (bolhas → FormatWhatsApp → quebra) e
 // pela simulação da Evolution — o que chega não tem `\`, `**` sobrando nem
 // `](`, e o negrito chega NEGRITO (`*x*`), não itálico (`_x_`).
@@ -414,7 +400,7 @@ func TestOuroEntregaNoWhatsApp(t *testing.T) {
 	}{
 		{
 			nome:     "negrito simples (sintaxe do prompt) chega negrito",
-			resposta: "Boníssima tarde, Ana! 🧡\n---\nAbra *Configurações* > *Usuários* e clique em *Novo*.",
+			resposta: "Boa tarde, Ana! 🧡\n---\nAbra *Configurações* > *Usuários* e clique em *Novo*.",
 			contem:   []string{"*Configurações*", "*Usuários*", "*Novo*"},
 		},
 		{
@@ -425,8 +411,8 @@ func TestOuroEntregaNoWhatsApp(t *testing.T) {
 		},
 		{
 			nome:     "e-mail e links chegam nus",
-			resposta: "Escreva para [suporte@azapfy.com.br](mailto:suporte@azapfy.com.br) ou veja <https://ajuda.azapfy.com.br/senha>.\n---\nManual: [aqui](https://x.com/m \"Manual\") e [docs][d]\n\n[d]: https://x.com/docs",
-			contem:   []string{"suporte@azapfy.com.br", "https://ajuda.azapfy.com.br/senha", "aqui: https://x.com/m", "docs: https://x.com/docs"},
+			resposta: "Escreva para [suporte@infominas.net](mailto:suporte@infominas.net) ou veja <https://ajuda.infominas.net/senha>.\n---\nManual: [aqui](https://x.com/m \"Manual\") e [docs][d]\n\n[d]: https://x.com/docs",
+			contem:   []string{"suporte@infominas.net", "https://ajuda.infominas.net/senha", "aqui: https://x.com/m", "docs: https://x.com/docs"},
 		},
 		{
 			nome:     "escape markdown não chega",

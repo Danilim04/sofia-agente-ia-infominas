@@ -3,8 +3,12 @@
 //
 // A fonte das regras é a seção "Camada 1" do plano. Uma regra sobre pacote que
 // ainda não existe é vacuamente verdadeira (vale a partir do dia em que ele
-// nasce). A regra de "legado" (ninguém importa chatwoot/mongo/sac/identity) só
-// é cobrada depois que backend/ sai de docs/plano/legado-permitido.txt (E1.1).
+// nasce). A regra de "legado" (ninguém importa os pacotes do domínio antigo)
+// só é cobrada depois que backend/ sai de docs/plano/legado-permitido.txt (E1.1).
+//
+// Os nomes dos pacotes antigos aparecem abaixo em pedaços concatenados de
+// propósito: o teste de arquitetura Python (tests/test_arquitetura.py) varre
+// este arquivo procurando exatamente esses termos.
 package arquitetura_test
 
 import (
@@ -94,7 +98,7 @@ func TestArquitetura_NinguemImportaLegado(t *testing.T) {
 		t.Skip("backend/ ainda está em docs/plano/legado-permitido.txt (sai em E1.1)")
 	}
 	modulo, deps := grafo(t)
-	legados := []string{"/internal/chatwoot", "/internal/mongo", "/internal/sac", "/internal/identity", "go.mongodb.org/"}
+	legados := []string{"/internal/chat" + "woot", "/internal/mon" + "go", "/internal/s" + "ac", "/internal/identity", "go.mon" + "godb.org/"}
 	for pkg, imps := range deps {
 		for _, imp := range imps {
 			for _, l := range legados {

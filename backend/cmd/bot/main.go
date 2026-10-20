@@ -1,7 +1,7 @@
-// Command bot é o gateway Chatwoot da Azapfy: recebe os webhooks, resolve a
-// identidade do usuário (gate) e encaminha as mensagens já autenticadas ao
-// cérebro Python (Contrato A). As tools de dados (MCP) ficam para a fase
-// seguinte.
+// Command bot é o gateway da Sofia: recebe os webhooks do Infodesk, enfileira
+// e coalesce as mensagens por conversa, encaminha ao cérebro Python
+// (Contrato A) e responde pelo transporte. Expõe também a API interna de
+// tools (/tools/infodesk/*) que o cérebro chama.
 package main
 
 import (
@@ -17,12 +17,8 @@ import (
 	"time"
 
 	"bot-infominas/internal/brain"
-	"bot-infominas/internal/chatwoot"
 	"bot-infominas/internal/config"
 	"bot-infominas/internal/engine"
-	"bot-infominas/internal/identity"
-	"bot-infominas/internal/mongo"
-	"bot-infominas/internal/sac"
 	"bot-infominas/internal/store"
 	"bot-infominas/internal/toolsapi"
 	"bot-infominas/internal/webhook"
@@ -51,36 +47,25 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	repo, err := mongo.NewRepo(ctx, cfg.MongoURI, cfg.MongoDB, cfg.MongoCollection, cfg.MongoTimeout)
-	if err != nil {
-		log.Error("conectar ao Mongo", "err", err)
-		os.Exit(1) //nolint:gocritic // exitAfterDefer: o boot aborta; não há nada a liberar ainda
+	// TODO(E2.1): trocar pelo cliente do Infodesk (internal/infodesk), que
+	// satisfaz engine.Transporte. Até lá nada sai para o cliente.
+	var transporte engine.Transporte = &transporteNulo{log: log}
+	log.Warn("transporte NULO: mensagens e transferências vão só para o log até E2.1",
+		"infodesk_base_url", cfg.InfodeskBaseURL)
+	if cfg.DepartamentoHumanoPadrao == "" {
+		log.Warn("DEPARTAMENTO_HUMANO_PADRAO vazio: transferências avisam o cliente mas não movem a conversa")
 	}
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = repo.Close(shutdownCtx)
-	}()
 
-	if cfg.AtendeTodasAsCaixas() {
-		log.Warn("INBOX_ID=0: o gateway atende TODAS as caixas da conta — em produção defina a caixa do bot (ZD-2)")
-	} else {
-		log.Info("caixa do bot fixada", "inbox_id", cfg.InboxID)
-	}
-	cw := chatwoot.NewClient(cfg.ChatwootBaseURL, cfg.ChatwootAccountID, cfg.ChatwootAPIToken)
-	descobrirUsuarioDoBot(ctx, cfg, cw, log)
 	brainClient := brain.NewClient(cfg.BrainBaseURL, cfg.BrainTimeout)
-	// brainClient também extrai o login de frases livres (fallback do gate).
-	gate := identity.New(st, repo, cfg.ConfirmField, cfg.MaxTentativas, cfg.IdentityTTL, cfg.GateFalhaTTL, brainClient, log)
-	eng := engine.New(cfg, cw, gate, brainClient, st, log)
+	eng := engine.New(cfg, transporte, brainClient, st, log)
 	// Contexto-raiz dos workers de conversa (coalescência/fila por conversa).
 	eng.Start(ctx)
 
-	if cfg.WebhookSecret == "" && cfg.WebhookToken == "" {
-		log.Warn("webhook SEM autenticação: defina WEBHOOK_TOKEN (?token=...) ou WEBHOOK_SECRET")
+	if cfg.InfodeskWebhookSecret == "" && cfg.WebhookToken == "" {
+		log.Warn("webhook SEM autenticação: defina INFODESK_WEBHOOK_SECRET (HMAC) ou WEBHOOK_TOKEN (?token=...)")
 	}
-	log.Info("configure este URL no webhook do Chatwoot", "url", webhookURL(cfg), "brain", cfg.BrainBaseURL)
-	srv := webhook.NewServer(cfg.WebhookSecret, cfg.WebhookToken, st, eng, log, 4, 256)
+	log.Info("configure este URL no webhook do Infodesk", "url", webhookURL(cfg), "brain", cfg.BrainBaseURL)
+	srv := webhook.NewServer(cfg.InfodeskWebhookSecret, cfg.WebhookToken, st, eng, log, 4, 256)
 	go srv.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -90,22 +75,13 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	// API interna de tools de dados (abrir/listar chamados no SAC) que o cérebro
-	// Python chama durante o loop do agente. Opcional: só sobe com SAC_BASE_URL +
-	// TOOLS_API_TOKEN. O relator vem da identidade do gate, nunca do LLM.
-	if cfg.SACBaseURL != "" {
-		sacClient := sac.New(sac.Options{
-			BaseURL: cfg.SACBaseURL, PortalURL: cfg.SACPortalURL, ServiceCod: cfg.SACServiceCod,
-			GrupoEmp: cfg.SACGrupoEmp, Timezone: cfg.SACTimezone,
-			APIToken: cfg.SACAPIToken, ConfigTTL: cfg.SACConfigTTL,
-		})
-		if cfg.ToolsAPIToken == "" {
-			log.Warn("SAC configurado, mas TOOLS_API_TOKEN vazio: API de tools NÃO exposta")
-		} else {
-			toolsapi.New(st, sacClient, cfg.ToolsAPIToken, log).Register(mux)
-			log.Info("API de tools SAC habilitada", "grupo_emp", cfg.SACGrupoEmp,
-				"conta_servico_prioridade", sacClient.TemContaServico())
-		}
+	// API interna de tools que o cérebro Python chama durante o loop do
+	// agente. Só sobe com TOOLS_API_TOKEN (segredo compartilhado).
+	if cfg.ToolsAPIToken == "" {
+		log.Warn("TOOLS_API_TOKEN vazio: API de tools (/tools/infodesk/*) NÃO exposta")
+	} else {
+		toolsapi.New(cfg.ToolsAPIToken, log).Register(mux)
+		log.Info("API de tools habilitada", "rota", "/tools/infodesk/*")
 	}
 
 	httpServer := &http.Server{
@@ -132,28 +108,22 @@ func main() {
 	}
 }
 
-// descobrirUsuarioDoBot preenche cfg.BotUserID pelo dono do token do Chatwoot
-// (GET /api/v1/profile) quando BOT_USER_ID não foi configurado (ZD-1). O id
-// é o que separa "conversa atribuída ao próprio Zapin" de "conversa com
-// atendente humano". Falha não derruba o boot: fica 0 e a engine trata
-// QUALQUER responsável como humano (não fala por cima de atendente) — por
-// isso o aviso é alto.
-func descobrirUsuarioDoBot(ctx context.Context, cfg *config.Config, cw *chatwoot.Client, log *slog.Logger) {
-	if cfg.BotUserID != 0 {
-		log.Info("usuário do bot no Chatwoot (BOT_USER_ID)", "user_id", cfg.BotUserID)
-		return
-	}
-	bootCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	u, err := cw.Profile(bootCtx)
-	if err != nil {
-		log.Warn("não consegui descobrir o usuário do bot no Chatwoot (GET /api/v1/profile): "+
-			"toda conversa com responsável será tratada como de atendente humano; defina BOT_USER_ID",
-			"err", err)
-		return
-	}
-	cfg.BotUserID = u.ID
-	log.Info("usuário do bot no Chatwoot descoberto pelo token", "user_id", u.ID, "nome", u.Name)
+// transporteNulo satisfaz engine.Transporte sem falar com ninguém: loga o
+// que seria enviado. Fica até E2.1 ligar o cliente do Infodesk.
+type transporteNulo struct{ log *slog.Logger }
+
+func (t *transporteNulo) EnviarMensagem(_ context.Context, convID, body string) error {
+	t.log.Info("transporte nulo: mensagem NÃO enviada", "conversation_id", convID, "chars", len(body))
+	return nil
+}
+
+func (t *transporteNulo) TransferirDepartamento(_ context.Context, convID, deptID string) error {
+	t.log.Info("transporte nulo: transferência NÃO executada", "conversation_id", convID, "departamento", deptID)
+	return nil
+}
+
+func (t *transporteNulo) LerConversa(_ context.Context, convID string) (map[string]any, error) {
+	return map[string]any{"id": convID}, nil
 }
 
 // abrirStore escolhe a persistência do gateway: Postgres quando PG_URL está
@@ -175,7 +145,7 @@ func abrirStore(cfg *config.Config, log *slog.Logger) (store.Store, error) {
 	return st, nil
 }
 
-// webhookURL monta a URL a cadastrar no webhook do Chatwoot, incluindo o token.
+// webhookURL monta a URL a cadastrar no webhook do Infodesk, incluindo o token.
 func webhookURL(cfg *config.Config) string {
 	base := cfg.PublicBaseURL
 	if base == "" {

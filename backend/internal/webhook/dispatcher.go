@@ -2,16 +2,16 @@ package webhook
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"time"
-
-	"bot-infominas/internal/chatwoot"
 )
 
-// jobTimeout limita o tempo de processamento de cada evento (inclui o lookup no
-// Mongo e a chamada ao cérebro Python).
-const jobTimeout = 90 * time.Second
+// Eventos do Infodesk (docs/infodesk/05-webhooks.md).
+const (
+	EventoMensagemRecebida   = "message.received"
+	EventoConversaIniciada   = "conversation.started"
+	EventoConversaFinalizada = "conversation.finished"
+)
 
 // Start sobe o pool de workers e bloqueia até ctx ser cancelado.
 func (s *Server) Start(ctx context.Context) {
@@ -32,18 +32,18 @@ func (s *Server) worker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case j := <-s.jobs:
-			s.process(ctx, j)
+			s.process(j)
 		}
 	}
 }
 
-func (s *Server) process(parent context.Context, j job) {
-	ctx, cancel := context.WithTimeout(parent, jobTimeout)
-	defer cancel()
-
+// process roteia o evento. O payload do Infodesk ainda não é decodificado:
+// TODO(E2.1) montar engine.Inbound a partir de `data` e chamar
+// s.engine.HandleMensagem / s.engine.EncerrarEpisodio (com timeout por job).
+// Até lá os eventos só são logados — o gateway sobe, autentica e deduplica,
+// mas não responde.
+func (s *Server) process(j job) {
 	start := time.Now()
-	s.log.Info("job iniciado", "event", j.event)
-
 	defer func() {
 		if rec := recover(); rec != nil {
 			s.log.Error("panic no processamento do webhook", "event", j.event, "recover", rec)
@@ -52,38 +52,11 @@ func (s *Server) process(parent context.Context, j job) {
 	}()
 
 	switch j.event {
-	case "message_created":
-		var msg chatwoot.MessageCreated
-		if err := json.Unmarshal(j.body, &msg); err != nil {
-			s.log.Error("unmarshal message_created", "err", err)
-			return
-		}
-		s.engine.HandleMessageCreated(ctx, &msg)
-
-	case "conversation_updated":
-		var ev chatwoot.ConversationUpdated
-		if err := json.Unmarshal(j.body, &ev); err != nil {
-			s.log.Error("unmarshal conversation_updated", "err", err)
-			return
-		}
-		s.engine.HandleConversationUpdated(ctx, &ev)
-
-	case "conversation_created":
-		var ev chatwoot.ConversationCreated
-		if err := json.Unmarshal(j.body, &ev); err != nil {
-			s.log.Error("unmarshal conversation_created", "err", err)
-			return
-		}
-		s.engine.HandleConversationCreated(ctx, &ev)
-
-	case "conversation_status_changed":
-		var ev chatwoot.ConversationStatusChanged
-		if err := json.Unmarshal(j.body, &ev); err != nil {
-			s.log.Error("unmarshal conversation_status_changed", "err", err)
-			return
-		}
-		s.engine.HandleConversationStatusChanged(ctx, &ev)
-
+	case EventoMensagemRecebida, EventoConversaFinalizada:
+		s.log.Warn("evento recebido sem tratamento (entra em E2.1)",
+			"event", j.event, "bytes", len(j.body), "engine_ligada", s.engine != nil)
+	case EventoConversaIniciada:
+		s.log.Info("conversa iniciada no canal", "event", j.event)
 	default:
 		s.log.Debug("evento sem handler, ignorado", "event", j.event)
 	}
