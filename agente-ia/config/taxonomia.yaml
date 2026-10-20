@@ -1,0 +1,109 @@
+# Taxonomia de atendimento da Sofia — formato definido em docs/plano/02-classificacao.md.
+#
+# PLACEHOLDER até o export do Infodesk (P1): categorias, mesas e departamentos
+# abaixo são hipóteses de trabalho plausíveis para um provedor de internet.
+# Enquanto `placeholder: true`, o boot do gateway avisa e os evals de categoria
+# são informativos (xfail). Ao receber o export real: substituir as categorias,
+# preencher `prioridades` com os UUIDs (P4), confirmar `mesa_triagem` e
+# `departamento_humano_padrao` (P11) e REMOVER a linha `placeholder`.
+#
+# Regras do formato (validadas por src/classificacao/taxonomia.py em E2.2):
+# - nomes de categoria únicos, snake_case, sem acento (viram nomes de Choice no JEV);
+# - `descricao`, `mesa` e `departamento` obrigatórios; `exemplos`/`nao_e` viram
+#   `examples`/`not_for` nos criteria do JEV; `prioridade_minima` é regra de
+#   código (vence o Score do JEV quando for mais alta);
+# - `indefinida` sempre presente (destino: mesa de triagem).
+placeholder: true          # TODO(P1): remover quando vier o export do Infodesk
+versao: 2026-10-20
+mesa_triagem: "Triagem"    # TODO(P11): destino de 'indefinida'
+departamento_humano_padrao: "Atendimento"   # TODO(P11)
+
+categorias:
+  sem_conexao:
+    descricao: "Internet totalmente sem funcionar: sem sinal, luz vermelha/apagada no modem, nenhum site abre"
+    exemplos: ["minha internet caiu", "sem sinal desde ontem", "a luz do modem tá vermelha", "não abre nada aqui"]
+    nao_e: ["lentidão com conexão ativa", "quedas intermitentes que voltam sozinhas"]
+    mesa: "Suporte Técnico"
+    departamento: "Suporte"
+    prioridade_minima: alta
+
+  lentidao:
+    descricao: "Conexão funciona, mas abaixo da velocidade contratada: vídeo travando, download lento, ping alto"
+    exemplos: ["a net tá muito lenta", "não chega nem 10 mega", "youtube só carrega em 144p", "ping alto no jogo"]
+    nao_e: ["conexão totalmente fora", "quedas frequentes com retorno"]
+    mesa: "Suporte Técnico"
+    departamento: "Suporte"
+
+  instabilidade:
+    descricao: "Conexão cai e volta sozinha várias vezes ao dia, oscilação, desconexões curtas"
+    exemplos: ["cai toda hora", "oscila o dia inteiro", "derruba a call de 5 em 5 minutos", "fica caindo e voltando"]
+    nao_e: ["fora o tempo todo sem voltar", "lenta mas sem cair"]
+    mesa: "Suporte Técnico"
+    departamento: "Suporte"
+    prioridade_minima: media
+
+  cobranca:
+    descricao: "Fatura com valor errado, cobrança duplicada ou indevida, multa, desconto não aplicado, negativação"
+    exemplos: ["vieram duas cobranças", "o valor veio maior que o combinado", "me cobraram um serviço que não pedi", "meu nome foi pro SPC"]
+    nao_e: ["só quer o boleto/2ª via", "dúvida sobre preço de plano novo"]
+    mesa: "Financeiro"
+    departamento: "Financeiro"
+
+  segunda_via:
+    descricao: "Pedido de boleto, código de barras, PIX ou 2ª via da fatura; data de vencimento; comprovante"
+    exemplos: ["manda o boleto desse mês", "perdi a fatura", "qual o código pix", "cadê minha conta"]
+    nao_e: ["contesta valor ou cobrança duplicada", "pede mudança de vencimento permanente com reclamação"]
+    mesa: "Financeiro"
+    departamento: "Financeiro"
+    prioridade_minima: baixa
+
+  mudanca_endereco:
+    descricao: "Mudança de endereço de instalação, transferência de titularidade, viabilidade em novo endereço"
+    exemplos: ["vou mudar de casa, como faço", "quero transferir a internet pro novo ap", "tem cobertura no bairro X"]
+    nao_e: ["cancelar por mudança sem levar o serviço", "visita técnica no endereço atual"]
+    mesa: "Comercial"
+    departamento: "Comercial"
+
+  cancelamento:
+    descricao: "Pede explicitamente para cancelar o contrato ou um serviço, ou pergunta sobre fidelidade/multa de rescisão"
+    exemplos: ["quero cancelar", "como faço pra cancelar", "vou pra concorrente", "quanto é a multa pra sair"]
+    nao_e: ["reclama do serviço e só ameaça cancelar se não resolver (classifique o problema)", "pede redução de plano"]
+    mesa: "Retenção"
+    departamento: "Comercial"
+    prioridade_minima: media
+
+  equipamento:
+    descricao: "Problema físico com modem/roteador/ONU/cabo: queimou, não liga, luz piscando, troca de equipamento, senha do wi-fi"
+    exemplos: ["o modem não liga mais", "o roteador queimou com a chuva", "quero trocar a senha do wifi", "o cabo rompeu"]
+    nao_e: ["sem conexão com equipamento ligado e normal", "lentidão sem indício de defeito"]
+    mesa: "Suporte Técnico"
+    departamento: "Suporte"
+
+  visita_tecnica:
+    descricao: "Agendar, reagendar, cobrar ou cancelar visita de técnico; técnico não apareceu; instalação pendente"
+    exemplos: ["o técnico não veio", "quero remarcar a visita", "quando vão instalar", "preciso de um técnico aqui"]
+    nao_e: ["problema técnico sem pedido de visita", "status de chamado sem visita marcada"]
+    mesa: "Campo"
+    departamento: "Suporte"
+    prioridade_minima: media
+
+  duvida_planos:
+    descricao: "Pergunta sobre planos, preços, velocidade, upgrade/downgrade, promoções, combos, TV/telefone"
+    exemplos: ["quanto tá o plano de 500 mega", "quero aumentar a velocidade", "tem combo com tv", "qual a diferença dos planos"]
+    nao_e: ["contesta valor cobrado", "pede cancelamento"]
+    mesa: "Comercial"
+    departamento: "Comercial"
+    prioridade_minima: baixa
+
+  indefinida:
+    descricao: "Não foi possível determinar: mensagem vaga, só saudação, áudio/imagem sem texto, assunto fora da lista"
+    exemplos: ["oi", "preciso de ajuda", "tô com um problema", "[áudio]"]
+    nao_e: []
+    mesa: "Triagem"
+    departamento: "Atendimento"
+
+prioridades:                # nome → UUID do Infodesk (P4); null = omitir priorityId
+  baixa: null
+  media: null
+  alta: null
+  urgente: null

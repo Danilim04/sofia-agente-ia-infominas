@@ -1,0 +1,9 @@
+# Exemplo de lista de nomes para `python -m evals.anonimizar --nomes ...`.
+# Um nome por linha (nome completo ou só o primeiro); casa palavra inteira, sem
+# distinção de caixa. A lista REAL vai em agente-ia/config/nomes.txt (gitignored).
+Maria Souza
+Maria
+João Pereira
+Carlos Lima
+Ana Costa
+Pedro Alves
