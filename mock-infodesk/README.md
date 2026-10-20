@@ -45,7 +45,7 @@ Flags equivalentes às variáveis principais: `--port`, `--host`,
 
 | Variável | Default | Para quê |
 |---|---|---|
-| `MOCK_PORT` / `MOCK_HOST` | `9000` / `0.0.0.0` | porta/interface do servidor |
+| `MOCK_PORT` / `MOCK_HOST` | `9000` / `127.0.0.1` | porta/interface do servidor (`0.0.0.0` para docker; os endpoints `/mock/*` não têm autenticação) |
 | `MOCK_API_KEY` | `ik_test_mock` | chave aceita em `Authorization: Bearer` **ou** `X-Api-Key` (01). Sem/errada → `401` |
 | `MOCK_ESCOPOS` | os 4 (`tickets:read,tickets:write,conversations:read,conversations:write`) | escopos da chave; rota com escopo faltando → `403 {"statusCode":403,"message":"Escopo insuficiente. Necessário: tickets:write."}` (formato literal do PDF) |
 | `MOCK_429_A_CADA` | `0` (nunca) | a cada N requisições autenticadas devolve `429` com `Retry-After: 1` — testa backoff do cliente |
@@ -58,8 +58,8 @@ Flags equivalentes às variáveis principais: `--port`, `--host`,
 | `MOCK_FINISH_EMITE_WEBHOOK` | `1` | `POST /finish` dispara `conversation.finished` para o parceiro (hipótese C5) |
 | `MOCK_REFERENCIA_EXIGE_ESCOPO` | `0` | `1` faz `/desks`, `/users`, `/departments` exigirem escopo (hipótese A3) |
 
-Cada requisição vira uma linha no stdout (`[mock] POST /api/integration/v1/tickets → 201`);
-telefones aparecem só mascarados (`***0001`).
+Cada requisição vira uma linha no stdout (`[mock] POST /api/integration/v1/tickets → 201`),
+sem query string; telefones aparecem só mascarados (`***0001`).
 
 ## Rotas
 
@@ -142,9 +142,13 @@ arquivo e use `--data-binary @arquivo.json`.
 | **W1** | payload de `started`/`finished` = `data.{conversationId, channel, contact}` | `montar_payload` |
 | **W3** | áudio/mídia = `message.received` com `body: ""` | botão 🎤 / `/mock/cliente/audio` |
 | **T1** | `POST /tickets` → `201` com `{id, number, title, description, status:"OPEN", deskId, channel, clientId, requesterId, contactPhone, priorityId, createdAt, updatedAt, replies}`; `number` numérico (ou string com `MOCK_NUMBER_COMO_STRING=1`) | `criar_ticket` |
-| **A3** | `/desks`, `/users`, `/departments` não exigem escopo | `MOCK_REFERENCIA_EXIGE_ESCOPO=1` |
+| **A3** | `/desks`, `/users`, `/departments` não exigem escopo; com `MOCK_REFERENCIA_EXIGE_ESCOPO=1`, `/desks` exige `tickets:read` e `/users`, `/departments` exigem `conversations:read` | `MOCK_REFERENCIA_EXIGE_ESCOPO=1` |
 | **A4** / 06 | `429` traz `Retry-After: 1` | `contar_para_429` |
+| 03 / 06 | `deskId` que não existe em `/desks` → `400` (o 06 só diz "4xx de validação"; poderia ser `404`) | `criar_ticket` |
+| 03 / 04 | **códigos e corpos de sucesso** não documentados: `POST /tickets`, `/reply`, `/messages` → `201` + recurso criado; `/assign`, `/department`, `/finish` → `200` + conversa | `Handler._rota_api` |
+| 06 | método errado numa rota conhecida → `405` (o PDF não cita 405; o real pode devolver `404`) | `Handler._rota_api` |
 | 04 | `assign` com `userId: null` desatribui | `atribuir` |
+| — | teto de 1 MB por corpo (`400` acima disso); `Transfer-Encoding: chunked` não suportado | `CORPO_MAX_BYTES` |
 
 `clientId`, `requesterId` e `priorityId` são aceitos e ecoados sem validação
 (não há rota para obtê-los — T3/T4).
@@ -171,8 +175,9 @@ resposta chega como bolha do bot; abra um ticket por curl e ele aparece em
 "Tickets criados":
 
 ```bash
+KEY=ik_test_mock   # = MOCK_API_KEY
 curl -s -X POST http://localhost:9000/api/integration/v1/tickets \
-  -H "Authorization: Bearer ik_test_mock" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"deskId":"11111111-1111-4111-8111-111111111101","title":"Impressora não imprime","contactPhone":"+5531990000001"}'
 ```
 

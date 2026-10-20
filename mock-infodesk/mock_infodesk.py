@@ -59,6 +59,9 @@ ESCOPOS_TODOS = ("tickets:read", "tickets:write", "conversations:read", "convers
 # só conveniência para curl.
 PREFIXOS = ("/api/integration/v1", "/integration/v1")
 
+# Teto do corpo de uma requisição (o Infodesk real não documenta; evita estourar memória no mock).
+CORPO_MAX_BYTES = 1_000_000
+
 # Timeout de entrega do webhook (docs/infodesk/05: 8 s, best-effort, sem reentrega).
 WEBHOOK_TIMEOUT_S = 8.0
 
@@ -82,7 +85,8 @@ def config_do_ambiente() -> dict[str, Any]:
     escopos = os.environ.get("MOCK_ESCOPOS", ",".join(ESCOPOS_TODOS))
     return {
         "port": int(os.environ.get("MOCK_PORT", "9000")),
-        "host": os.environ.get("MOCK_HOST", "0.0.0.0"),  # noqa: S104 — mock de dev, escuta em todas as interfaces por padrão
+        # Os endpoints /mock/* não têm autenticação: só loopback por padrão (MOCK_HOST=0.0.0.0 para docker).
+        "host": os.environ.get("MOCK_HOST", "127.0.0.1"),
         "api_key": os.environ.get("MOCK_API_KEY", "ik_test_mock"),
         "escopos": sorted({e.strip() for e in escopos.split(",") if e.strip()}),
         "a_cada_429": int(os.environ.get("MOCK_429_A_CADA", "0")),
@@ -229,6 +233,7 @@ class MockInfodesk:
         if not isinstance(title, str) or not title.strip():
             raise ErroApi(400, "Campo obrigatório ausente: title.")
         if self._acha("desks", desk_id) is None:
+            # Hipótese (06 só diz "4xx de validação"): 400 e não 404 para mesa inexistente.
             raise ErroApi(400, f"deskId inválido: mesa não encontrada ({desk_id}).")
         priority_id = corpo.get("priorityId")
         for campo in (
@@ -665,10 +670,24 @@ class Handler(BaseHTTPRequestHandler):
     def _drenar_corpo(self) -> None:
         """Lê o corpo inteiro ANTES de responder: com keep-alive (cliente Go) um corpo
         não lido ficaria no socket e corromperia a próxima requisição da conexão."""
-        length = int(self.headers.get("Content-Length") or 0)
+        # Transfer-Encoding: chunked não é suportado (o cliente Go manda Content-Length).
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0 or length > CORPO_MAX_BYTES:
+            self._corpo_bruto = b""
+            self._corpo_invalido = True
+            return
+        self._corpo_invalido = False
         self._corpo_bruto = self.rfile.read(length) if length > 0 else b""
 
     def _ler_json(self) -> dict[str, Any]:
+        if self._corpo_invalido:
+            raise ErroApi(
+                400,
+                f"Corpo inválido: Content-Length ausente, inválido ou acima de {CORPO_MAX_BYTES} bytes.",
+            )
         raw = self._corpo_bruto
         if not raw.strip():
             return {}
@@ -681,9 +700,14 @@ class Handler(BaseHTTPRequestHandler):
         return dados
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        # Uma linha por requisição no stdout (caminho não contém PII; telefones ficam no corpo).
+        # Uma linha por requisição no stdout. Só o caminho, SEM query string
+        # (/mock/estado?telefone=... tem PII — CLAUDE.md regra 5), e qualquer
+        # sequência longa de dígitos no caminho é mascarada por garantia.
+        caminho = re.sub(
+            r"\d{5,}", lambda m: mascarar_telefone(m.group(0)), urlparse(self.path).path
+        )
         self.server.mock.log(
-            f"[mock] {self.command} {self.path} → {args[1] if len(args) > 1 else '?'}"
+            f"[mock] {self.command} {caminho} → {args[1] if len(args) > 1 else '?'}"
         )
 
     # --- despacho -----------------------------------------------------------
@@ -715,7 +739,8 @@ class Handler(BaseHTTPRequestHandler):
         except ErroApi as exc:
             self._erro(exc.status, exc.message, exc.headers)
         except Exception as exc:
-            mock.log(f"[mock] ERRO interno em {metodo} {path}: {exc!r}")
+            # Só o tipo: a mensagem da exceção pode ecoar trechos do corpo (PII).
+            mock.log(f"[mock] ERRO interno em {metodo} {path}: {type(exc).__name__}")
             self._erro(500, "Erro interno do mock.")
 
     def _rota_api(self, metodo: str, sub: str, query: dict[str, str]) -> None:
@@ -727,14 +752,18 @@ class Handler(BaseHTTPRequestHandler):
             if not match:
                 continue
             if m != metodo:
+                # Hipótese: o PDF não documenta 405 (o Infodesk real pode devolver 404).
                 raise ErroApi(405, f"Método não permitido: {metodo}.")
             if nome in ROTAS_REFERENCIA:
+                # Hipótese A3 (opt-in): /desks com tickets:read; /users e /departments com conversations:read.
                 if mock.config["referencia_exige_escopo"]:
                     mock.exigir_escopo("tickets:read" if nome == "desks" else "conversations:read")
                 self._json(mock.referencia[nome])
                 return
             mock.exigir_escopo(escopo)
             args = match.groups()
+            # Códigos/corpos de sucesso são HIPÓTESE (03/04: "resposta não documentada"):
+            # 201 + recurso criado em POST que cria (ticket, reply, message); 200 + conversa nos demais.
             if nome == "criar_ticket":
                 self._json(mock.criar_ticket(self._ler_json()), 201)
             elif nome == "consultar_ticket":

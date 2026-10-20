@@ -434,6 +434,8 @@ class TestMockInfodesk(unittest.TestCase):
             self.assertEqual(
                 e["json"]["data"]["contact"], {"name": "Maria", "phone": "+5531990000001"}
             )
+        # W1: started/finished não levam `message`.
+        self.assertEqual(set(entregas[0]["json"]["data"]), {"conversationId", "channel", "contact"})
         recebida = entregas[1]["json"]
         self.assertEqual(set(recebida), {"id", "event", "createdAt", "organizationId", "data"})
         self.assertEqual(set(recebida["data"]), {"conversationId", "channel", "contact", "message"})
@@ -544,13 +546,72 @@ class TestMockInfodesk(unittest.TestCase):
             404,
         )
 
+    def test_log_nao_expoe_telefone_nem_query_string(self) -> None:
+        linhas: list[str] = []
+        self.mock.log = linhas.append
+        try:
+            self.cliente_escreve("+5531998877665", texto="oi")
+            chamar(self.base, "GET", "/mock/estado?telefone=%2B5531998877665", chave=None)
+            chamar(self.api, "GET", "/conversations?departmentId=5531998877665")
+        finally:
+            self.mock.log = lambda *_a, **_k: None
+        texto = "\n".join(linhas)
+        self.assertIn("[mock] GET /mock/estado → 200", texto)
+        self.assertNotIn("telefone=", texto)
+        self.assertNotRegex(texto, r"\d{8,}")
+        self.assertIn("***7665", texto)
+
+    def test_405_metodo_errado_em_rota_conhecida(self) -> None:
+        self.assert_erro(chamar(self.api, "GET", "/tickets"), 405)
+        self.assert_erro(chamar(self.api, "POST", "/desks", {}), 405)
+
+    def test_referencia_exige_escopo_quando_configurado(self) -> None:
+        self.mock.config["referencia_exige_escopo"] = True
+        try:
+            self.mock.config["escopos"] = ["tickets:read"]
+            self.assertEqual(chamar(self.api, "GET", "/desks").status, 200)
+            self.assert_erro(chamar(self.api, "GET", "/users"), 403)
+            self.assert_erro(chamar(self.api, "GET", "/departments"), 403)
+        finally:
+            self.mock.config["referencia_exige_escopo"] = False
+
+    def test_finish_sem_webhook_quando_configurado(self) -> None:
+        conv = self.cliente_escreve()["conversationId"]
+        self.gateway.esperar(2)
+        self.gateway.limpar()
+        self.mock.config["finish_emite_webhook"] = False
+        try:
+            self.assertEqual(
+                chamar(self.api, "POST", f"/conversations/{conv}/finish").json["status"], "FINISHED"
+            )
+            self.assertEqual(self.gateway.esperar(1, timeout=0.3), [])
+        finally:
+            self.mock.config["finish_emite_webhook"] = True
+
+    def test_mock_config_nao_expoe_segredos(self) -> None:
+        cfg = chamar(self.base, "GET", "/mock/config", chave=None).json
+        self.assertNotIn("api_key", cfg)
+        self.assertNotIn("webhook_secret", cfg)
+        self.assertNotIn(CHAVE, json.dumps(cfg))
+        self.assertNotIn(SEGREDO, json.dumps(cfg))
+        self.assertEqual(cfg["gateway_webhook_url"], self.gateway.url)
+
     def test_corpo_invalido_e_cliente_sem_telefone(self) -> None:
         req = urllib.request.Request(self.api + "/tickets", data=b"{nao e json", method="POST")  # noqa: S310
         req.add_header("Authorization", f"Bearer {CHAVE}")
         req.add_header("Content-Type", "application/json")
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(req, timeout=5)  # noqa: S310
-        self.assertEqual(ctx.exception.code, 400)
+        with ctx.exception:
+            self.assertEqual(ctx.exception.code, 400)
+        # Content-Length inválido não derruba a conexão: 400 no formato de erro.
+        req = urllib.request.Request(self.api + "/tickets", data=b"{}", method="POST")  # noqa: S310
+        req.add_header("Authorization", f"Bearer {CHAVE}")
+        req.add_header("Content-Length", "abc")
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req, timeout=5)  # noqa: S310
+        with ctx.exception:
+            self.assertEqual(ctx.exception.code, 400)
         self.assert_erro(
             chamar(self.base, "POST", "/mock/cliente/mensagem", {"texto": "oi"}, chave=None), 400
         )

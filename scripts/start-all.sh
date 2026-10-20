@@ -13,8 +13,10 @@
 #   GATEWAY_WEBHOOK_URL     = http://localhost:$BACKEND_PORT/webhook
 #
 # ATENÇÃO (Onda 1): o gateway só passa a falar com o mock a partir da etapa
-# E2.1 (webhook do Infodesk + cliente ligados). Até lá, o mock sobe e emite os
-# webhooks, mas o gateway devolve 404 e a UI do mock mostra a falha no painel.
+# E2.1 (webhook do Infodesk + cliente ligados). Até lá o passo 3 tende a
+# FALHAR (o gateway ainda exige variáveis do domínio antigo); o script avisa e
+# segue com mock + cérebro no ar — a UI do mock mostra as entregas falhando.
+# A partir de E2.1, exporte GATEWAY_OBRIGATORIO=1 para abortar se ele não subir.
 #
 # Uso:
 #   scripts/start-all.sh            # sobe tudo e segue logando até Ctrl+C
@@ -135,7 +137,7 @@ start_service() {
 }
 
 # port_open <porta>  -> 0 se aceitando conexão em 127.0.0.1
-port_open() { curl -fsS -o /dev/null "http://127.0.0.1:$1/" >/dev/null 2>&1 || (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1; }
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1 || curl -sS -o /dev/null "http://127.0.0.1:$1/" >/dev/null 2>&1; }
 
 # wait_ready <nome> <pid> <timeout_s> <check-cmd...>
 wait_ready() {
@@ -210,8 +212,10 @@ start_service "gateway" "
   export INFODESK_ORGANIZATION_ID='$MOCK_ORG_ID'
   exec go run ./cmd/bot
 "
-wait_ready "gateway" "${PIDS[-1]}" 120 port_open "$BACKEND_PORT" \
-  || { err "gateway não subiu (veja o log acima). Abortando."; exit 1; }
+if ! wait_ready "gateway" "${PIDS[-1]}" 120 port_open "$BACKEND_PORT"; then
+  if [[ "${GATEWAY_OBRIGATORIO:-0}" == "1" ]]; then err "gateway não subiu (veja o log acima). Abortando."; exit 1; fi
+  warn "gateway não subiu — esperado até E2.1. Mock e cérebro seguem no ar; os webhooks do mock vão falhar (visível na UI)."
+fi
 
 # --------------------------------------------------------------------------
 # Pronto
