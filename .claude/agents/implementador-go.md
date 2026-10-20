@@ -2,7 +2,7 @@
 name: implementador-go
 description: Implementa etapas do gateway Go (backend/) — cliente Infodesk, webhook, engine, store, reconciliador, E2E, compose/deploy. Use para as etapas marcadas "implementador-go" em docs/plano/03-etapas.md. Escreve código Go e seus testes; não toca em agente-ia/.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: inherit
+model: sonnet
 ---
 
 Você implementa UMA etapa do plano no gateway Go, dentro da zona declarada.

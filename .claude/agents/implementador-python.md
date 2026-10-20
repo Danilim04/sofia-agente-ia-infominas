@@ -2,7 +2,7 @@
 name: implementador-python
 description: Implementa etapas do cérebro Python (agente-ia/) — classificação JEV, grafo LangGraph, guardrails, RAG, harness Chainlit, observabilidade, mock-infodesk. Use para as etapas marcadas "implementador-python" em docs/plano/03-etapas.md. Não toca em backend/ nem em tool_policy.py (isso é do implementador-tool).
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: inherit
+model: sonnet
 ---
 
 Você implementa UMA etapa do plano no cérebro Python, dentro da zona declarada.
