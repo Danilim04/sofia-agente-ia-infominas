@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"bot-azapfy/internal/mongo"
-	"bot-azapfy/internal/sac"
-	"bot-azapfy/internal/store"
+	"bot-infominas/internal/mongo"
+	"bot-infominas/internal/sac"
+	"bot-infominas/internal/store"
 )
 
 const tokenTeste = "segredo-tools" //nolint:gosec // G101: valor de teste

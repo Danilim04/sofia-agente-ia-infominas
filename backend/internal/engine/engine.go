@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"bot-azapfy/internal/alerta"
-	"bot-azapfy/internal/brain"
-	"bot-azapfy/internal/chatwoot"
-	"bot-azapfy/internal/config"
-	"bot-azapfy/internal/identity"
-	"bot-azapfy/internal/store"
+	"bot-infominas/internal/alerta"
+	"bot-infominas/internal/brain"
+	"bot-infominas/internal/chatwoot"
+	"bot-infominas/internal/config"
+	"bot-infominas/internal/identity"
+	"bot-infominas/internal/store"
 )
 
 // ChatwootAPI é o que a engine usa do cliente Chatwoot (satisfeito por

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"bot-azapfy/internal/mongo"
-	"bot-azapfy/internal/store"
+	"bot-infominas/internal/mongo"
+	"bot-infominas/internal/store"
 )
 
 type fakeRepo struct {

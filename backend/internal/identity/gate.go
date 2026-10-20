@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"bot-azapfy/internal/mongo"
-	"bot-azapfy/internal/store"
+	"bot-infominas/internal/mongo"
+	"bot-infominas/internal/store"
 )
 
 // UserRepo é a dependência de lookup no Mongo (satisfeita por *mongo.Repo).

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"bot-azapfy/internal/chatwoot"
-	"bot-azapfy/internal/store"
+	"bot-infominas/internal/chatwoot"
+	"bot-infominas/internal/store"
 )
 
 // engineNoop satisfaz Engine sem processar nada: os testes olham só a borda

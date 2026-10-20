@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"bot-azapfy/internal/chatwoot"
+	"bot-infominas/internal/chatwoot"
 )
 
 // jobTimeout limita o tempo de processamento de cada evento (inclui o lookup no

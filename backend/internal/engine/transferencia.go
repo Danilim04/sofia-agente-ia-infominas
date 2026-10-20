@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"bot-azapfy/internal/alerta"
-	"bot-azapfy/internal/brain"
-	"bot-azapfy/internal/chatwoot"
-	"bot-azapfy/internal/store"
+	"bot-infominas/internal/alerta"
+	"bot-infominas/internal/brain"
+	"bot-infominas/internal/chatwoot"
+	"bot-infominas/internal/store"
 )
 
 // Origens de uma transferência para a fila humana (campo `origem` da tabela

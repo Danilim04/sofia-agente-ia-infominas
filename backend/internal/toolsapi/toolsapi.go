@@ -22,9 +22,9 @@ import (
 	"strings"
 	"unicode"
 
-	"bot-azapfy/internal/mongo"
-	"bot-azapfy/internal/sac"
-	"bot-azapfy/internal/store"
+	"bot-infominas/internal/mongo"
+	"bot-infominas/internal/sac"
+	"bot-infominas/internal/store"
 )
 
 // SACClient é o subconjunto do cliente SAC usado aqui (interface p/ testar).

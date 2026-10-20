@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"bot-azapfy/internal/mongo"
+	"bot-infominas/internal/mongo"
 )
 
 // Classes de falha do cérebro (mesmos valores de agente-ia/src/agent/falhas.py).
