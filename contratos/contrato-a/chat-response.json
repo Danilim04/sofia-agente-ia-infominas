@@ -1,0 +1,19 @@
+{
+  "reply": "Poxa, Maria, imagino o transtorno de ficar sem internet desde ontem. Já anotei que você reiniciou o roteador e as luzes continuam vermelhas.\n---\nVou te passar para um atendente agora, que vai seguir com você a partir daqui.",
+  "acoes": [
+    {
+      "tipo": "transferir",
+      "origem": "frustracao",
+      "motivo": "frustração 3/3 com confiança 0.82 após resposta empática"
+    }
+  ],
+  "classificacao": {
+    "intencao": "reclamacao_problema",
+    "categoria": "sem_conexao",
+    "prioridade": "alta",
+    "confianca": 0.91,
+    "origem": "jev"
+  },
+  "fontes": [],
+  "erro": null
+}

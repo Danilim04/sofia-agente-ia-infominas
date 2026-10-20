@@ -1,0 +1,13 @@
+{
+  "status": false,
+  "erro": "já existe um chamado aberto para este assunto; pergunte se o cliente quer acompanhar o existente",
+  "motivo": "chamado_aberto",
+  "chamados_abertos": [
+    {
+      "numero": "48213",
+      "titulo": "Internet sem conexão desde ontem à noite",
+      "categoria": "sem_conexao",
+      "aberto_em": "2026-10-20T14:33:10-03:00"
+    }
+  ]
+}

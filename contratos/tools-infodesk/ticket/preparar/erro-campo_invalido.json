@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "título e descrição são obrigatórios (título até 120 caracteres, descrição até 4000)",
+  "motivo": "campo_invalido"
+}
