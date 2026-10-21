@@ -22,7 +22,7 @@
 #   scripts/start-all.sh            # sobe tudo e segue logando até Ctrl+C
 #   BRAIN_PORT=8001 BACKEND_PORT=8080 MOCK_PORT=9000 scripts/start-all.sh
 #   MOCK_API_KEY=outra MOCK_WEBHOOK_SECRET=outro scripts/start-all.sh
-#   MOCK_429_A_CADA=10 MOCK_NUMBER_COMO_STRING=1 scripts/start-all.sh   # erros realistas no mock
+#   MOCK_429_A_CADA=10 MOCK_SEM_REENTREGA=1 scripts/start-all.sh   # 429 periódico; sem reentrega automática de webhook
 #
 # Ctrl+C derruba os três. Windows: rode no Git Bash (sem setsid, cada serviço
 # é morto pelo pid; sobras → scripts/stop-all.sh).

@@ -96,6 +96,13 @@ bloquearia tudo). Quando entrar um segundo revisor, ligar
 `required_pull_request_reviews` (1 aprovação, dispensar aprovações antigas).
 O agente `revisor` comenta no PR, mas sua aprovação **não** substitui a humana.
 
+> **Fase de desenvolvimento (desde 2026-10-21, até a Onda 5):** por decisão
+> do Daniel, o **orquestrador** faz o merge dos PRs sem esperar a aprovação
+> humana, quando os 9 checks estão verdes e o comentário do `revisor` não tem
+> bloqueante aberto (squash, título com `[E<n>.<m>]`). A proteção da `main`
+> **não muda**: PR e checks continuam obrigatórios, sem push direto. Ao entrar
+> na Onda 5 (homologação), volta a regra acima: o merge é do humano.
+
 ## Camada 3 — o revisor
 
 Dois revisores por PR: o agente `revisor` (`.claude/agents/revisor.md`, carrega

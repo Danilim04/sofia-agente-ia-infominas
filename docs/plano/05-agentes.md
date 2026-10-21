@@ -105,6 +105,8 @@ desta conversa de planejamento**.
 2. Cada sessão termina abrindo PR e pedindo revisão (`revisor` na própria
    sessão ou numa sessão separada só com o diff).
 3. Você (humano) aprova e mergeia; quando todas as etapas de que a próxima
-   onda depende estiverem na `main`, repita.
+   onda depende estiverem na `main`, repita. **Até a Onda 5 o merge é do
+   orquestrador** (CI verde + revisor sem bloqueante), ver
+   `04-esteira-qualidade.md`, seção "O que bloqueia o merge".
 4. Pendências resolvidas no meio do caminho (P1, P3…) viram etapa nova em `03`
    (Onda 5) — não interrompa a onda corrente para absorvê-las.
