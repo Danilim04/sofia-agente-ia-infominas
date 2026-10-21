@@ -67,7 +67,7 @@ protocolo (JSON inválido, token, método) e nunca chegam ao LLM como texto.
 | `conversation_id` | `6f1c2a3e-9b4d-4e7a-8c21-5d3f0a9b7e10` | uuid fictício |
 | `telefone` | `+5531999990001` | fictício, E.164 |
 | CPF | `12345678909` → `***.***.789-**` | fictício com DV válido; em claro só em `contato/identificar/request.json` |
-| ticket `numero` | `"48213"` | string até T1 confirmar o tipo |
+| ticket `numero` | `"48213"` | texto no contrato; o Infodesk devolve `number` inteiro (T1 respondido) e o gateway converte |
 | `chave_idempotencia` | sha256 real dos campos de `ticket/abrir/request.json` | ADR 0005 |
 | mesa / departamento | `Suporte Técnico` / `Suporte` | nomes placeholder da taxonomia (P1) |
 
@@ -113,12 +113,13 @@ configurável.
 
 | Campo | Arquivos | Pendência |
 |---|---|---|
-| `atualizado_em` (`null`) e `status_ticket` (`"desconhecido"`) | `ticket/consultar/ok.json`, `ticket/listar/ok.json` | **T1** — schema de `GET /tickets/:number` não documentado; o 01 fixa `status_ticket` como string com fallback `"desconhecido"` e `null` para o resto |
-| `prioridade.id` | `ticket/preparar/ok.json`, `ticket/abrir/*.json` | **T3** — sem rota de prioridades; `priorityId` omitido no POST |
-| `cliente_id`, `nome_cadastro` | `contato/identificar/ok.json`, `contrato-a/chat-request.json` | **T4 / P2** — sem rota de busca de cliente |
-| posse (`erro-posse_nao_verificada`) | `ticket/consultar` | **P3 / T5** — sem `contactPhone` na consulta nem listagem; posse só pela tabela local |
+| `atualizado_em` (`null`) e `status_ticket` (`"desconhecido"`) | `ticket/consultar/ok.json`, `ticket/listar/ok.json` | **T1** — respondido em 2026-10-19 (`docs/infodesk/07`): `status` é objeto por mesa e `status_ticket` leva `status.name` literal; `"desconhecido"` e `null` ficam como valor de exemplo/fallback |
+| `prioridade.id` | `ticket/preparar/ok.json`, `ticket/abrir/*.json` | **T3** — respondido em 2026-10-19: UUID resolvido por mesa (`GET /desks/:id`); `null` quando a mesa não tem o nome (o `priorityId` é omitido no POST) |
+| `cliente_id`, `nome_cadastro` | `contato/identificar/ok.json`, `contrato-a/chat-request.json` | **T4 / P2** — respondido em 2026-10-19: `GET /contacts/lookup?phone=` preenche quando o telefone foi reconhecido; `null` no fallback por CPF/contrato. `contato.forma` ganhou o valor `"telefone"` (lookup) ao lado de `"cpf"` e `"contrato"` — mesma chave, valor novo |
+| posse (`erro-posse_nao_verificada`) | `ticket/consultar` | **P3 / T5** — respondido em 2026-10-19: posse por código (tabela local, `conversationId`, telefone do ticket, `requester_id`); sem prova, nenhum campo do ticket sai |
 | `identificacao` = `{forma, valor_mascarado}` | `ticket/preparar/request.json`, `ticket/consultar/request.json` | o 01 escreve o injetado como `{cpf\|contrato}`; o contrato manda a visão **mascarada** (regra 5 do CLAUDE.md) e o gateway resolve pela tabela `contatos` via `telefone` — hipótese, `TODO(E2.3)` confirmar e atualizar as linhas A2/A4 do 01 |
-| `erro-chamados_indisponiveis` | `ticket/listar` | o 01 não lista erro para `listar`; motivo herdado do `toolsapi.go` anterior como hipótese — `TODO(E3.1)` confirmar e registrar no 01 |
+| `erro-chamados_indisponiveis` | `ticket/listar` | confirmado na E3.1 (a linha A5 do 01 o lista): as duas partes da lista (Infodesk e tabela local) falharam |
+| `observacao` | `ticket/listar/ok.json` | texto fixo do gateway: `abertos no Infodesk + abertos por aqui` (ver `_notas.md`) |
 | `classificar-*` | `contrato-a/` | o 01 não fixa o JSON de `POST /classificar`; formato é hipótese para a E2.2 (`TODO(E2.2)`) |
 | `esclarecimento` | `contrato-a/classificar-response.json` | pergunta de esclarecimento gerada quando a categoria fica entre os limiares (02); `null` quando não há |
 
