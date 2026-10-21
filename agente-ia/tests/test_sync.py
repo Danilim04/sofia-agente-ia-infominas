@@ -16,7 +16,13 @@ import hashlib
 
 import pytest
 
-from src.rag.fonte import DocumentoFonte, ErroDeFonte, ItemListagem, RegistroDoc
+from src.rag.fonte import (
+    DocumentoFonte,
+    ErroDeFonte,
+    FonteDocsLocais,
+    ItemListagem,
+    RegistroDoc,
+)
 from src.rag.sync import (
     ErroModeloIncompativel,
     TravaRemocaoMassa,
@@ -468,3 +474,30 @@ def test_planejar_full_reprocessa_inalterados():
     estado = {"a": RegistroDoc(hash_listagem=hash_listagem(itens[0]), deleted=False)}
     assert planejar(itens, estado).inalterados == 1
     assert len(planejar(itens, estado, full=True).processar) == 1
+
+
+def test_sync_da_base_local_placeholder_e_idempotente():
+    fonte = FonteDocsLocais()  # agente-ia/docs/base
+    indice = FakeIndice()
+    emb = FakeEmbeddings()
+
+    r1 = _sync(fonte, indice, emb)
+    assert r1.novos == 3 and r1.falhas == 0 and r1.ok
+    assert len(indice.chunks) == 3
+    embeds = emb.textos_embedados
+
+    r2 = _sync(fonte, indice, emb)
+    assert r2.inalterados == 3 and r2.novos == 0 and r2.alterados == 0 and r2.ok
+    assert emb.textos_embedados == embeds  # nada reprocessado
+
+
+def test_cli_fonte_api_sem_config_aborta_com_mensagem_clara(monkeypatch, tmp_path):
+    import argparse
+
+    from src.rag.sync import _montar_fonte
+
+    for var in ("DOCS_API_BASE_URL", "DOCS_API_KEY", "DOCS_API_TIMEOUT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.chdir(tmp_path)  # sem .env por perto
+    with pytest.raises(SystemExit, match=r"DOCS_API_\* não configurado"):
+        _montar_fonte("api", argparse.Namespace(docs_dir=None))

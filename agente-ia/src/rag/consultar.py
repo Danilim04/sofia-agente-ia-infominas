@@ -5,8 +5,8 @@ o nó `retrieve` do grafo usa (backend de `VECTOR_BACKEND`, mesmo modelo de
 embeddings), e mostra as fontes/seções/trechos do top-k. Não custa token.
 
 Uso:
-    python -m src.rag.consultar "como funciona o aplicativo do motorista?"
-    python -m src.rag.consultar "documentos do transporte" --k 5 --chars 300
+    python -m src.rag.consultar "como redefinir minha senha de acesso?"
+    python -m src.rag.consultar "computador lento" --k 5 --chars 300
 
 Exit 0 com resultados; exit 1 sem nenhum (índice vazio ou backend errado).
 """
@@ -55,7 +55,10 @@ def _cli() -> None:
 
     settings = get_settings()
     k = args.k or settings.rag_top_k
-    print(f"backend={settings.vector_backend} k={k} embeddings={settings.embeddings_model}")
+    print(
+        f"colecao=infominas_kb backend={settings.vector_backend} k={k} "
+        f"embeddings={settings.embeddings_model}"
+    )
     docs = get_retriever(k=k).invoke(args.pergunta)
     print(formatar(args.pergunta, docs, args.chars))
     if not docs:
