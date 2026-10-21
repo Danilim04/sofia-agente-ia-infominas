@@ -15,6 +15,7 @@ import (
 	"bot-infominas/internal/alerta"
 	"bot-infominas/internal/brain"
 	"bot-infominas/internal/config"
+	"bot-infominas/internal/infodesk"
 	"bot-infominas/internal/store"
 )
 
@@ -27,46 +28,71 @@ type msgEnviada struct {
 	body string
 }
 
-// fakeTransporte satisfaz Transporte sem rede, registrando o que a engine
-// pediu ao canal.
-type fakeTransporte struct {
-	mu            sync.Mutex
-	msgs          []msgEnviada
-	departamentos map[string][]string // conversa → departamentos pedidos, em ordem
-	enviarErr     error
-	transferirErr error
+type handoffFeito struct {
+	conv string
+	dept string
+	note string
 }
 
-func novoFakeTransporte() *fakeTransporte {
-	return &fakeTransporte{departamentos: map[string][]string{}}
+// fakeInfodesk satisfaz Transporte sem rede, registrando o que a engine
+// pediu ao Infodesk (mensagens, handoffs, lookups).
+type fakeInfodesk struct {
+	mu          sync.Mutex
+	msgs        []msgEnviada
+	handoffs    []handoffFeito
+	enviarErr   error
+	handoffErr  error
+	enviarErros []error // falhas em sequência para EnviarMensagem (consumidas uma por chamada)
+	lookups     map[string]infodesk.Lookup
+	lookupErr   error
+	nLookups    int
 }
 
-func (f *fakeTransporte) EnviarMensagem(_ context.Context, convID, body string) error {
+func novoFakeInfodesk() *fakeInfodesk {
+	return &fakeInfodesk{lookups: map[string]infodesk.Lookup{}}
+}
+
+func (f *fakeInfodesk) EnviarMensagem(_ context.Context, convID, texto string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if len(f.enviarErros) > 0 {
+		err := f.enviarErros[0]
+		f.enviarErros = f.enviarErros[1:]
+		return err
+	}
 	if f.enviarErr != nil {
 		return f.enviarErr
 	}
-	f.msgs = append(f.msgs, msgEnviada{conv: convID, body: body})
+	f.msgs = append(f.msgs, msgEnviada{conv: convID, body: texto})
 	return nil
 }
 
-func (f *fakeTransporte) TransferirDepartamento(_ context.Context, convID, deptID string) error {
+func (f *fakeInfodesk) Handoff(_ context.Context, convID, deptID, note string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.transferirErr != nil {
-		return f.transferirErr
+	if f.handoffErr != nil {
+		return f.handoffErr
 	}
-	f.departamentos[convID] = append(f.departamentos[convID], deptID)
+	f.handoffs = append(f.handoffs, handoffFeito{conv: convID, dept: deptID, note: note})
 	return nil
 }
 
-func (f *fakeTransporte) LerConversa(_ context.Context, convID string) (map[string]any, error) {
+func (f *fakeInfodesk) LerConversa(_ context.Context, convID string) (map[string]any, error) {
 	return map[string]any{"id": convID}, nil
 }
 
+func (f *fakeInfodesk) Lookup(_ context.Context, telefone string) (infodesk.Lookup, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nLookups++
+	if f.lookupErr != nil {
+		return infodesk.Lookup{}, f.lookupErr
+	}
+	return f.lookups[telefone], nil
+}
+
 // mensagens devolve o corpo das mensagens enviadas na conversa.
-func (f *fakeTransporte) mensagens(convID string) []string {
+func (f *fakeInfodesk) mensagens(convID string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []string
@@ -78,11 +104,30 @@ func (f *fakeTransporte) mensagens(convID string) []string {
 	return out
 }
 
-// transferida devolve os departamentos para os quais a conversa foi movida.
-func (f *fakeTransporte) transferida(convID string) []string {
+// transferida devolve os departamentos dos handoffs feitos na conversa.
+func (f *fakeInfodesk) transferida(convID string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]string{}, f.departamentos[convID]...)
+	var out []string
+	for _, h := range f.handoffs {
+		if h.conv == convID {
+			out = append(out, h.dept)
+		}
+	}
+	return out
+}
+
+// notas devolve as notas internas dos handoffs da conversa.
+func (f *fakeInfodesk) notas(convID string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, h := range f.handoffs {
+		if h.conv == convID {
+			out = append(out, h.note)
+		}
+	}
+	return out
 }
 
 type fakeBrain struct {
@@ -155,7 +200,7 @@ const (
 )
 
 // engineCompleta monta a engine com transporte e cérebro falsos sobre SQLite.
-func engineCompleta(t *testing.T) (*Engine, store.Store, *fakeTransporte, *fakeBrain) {
+func engineCompleta(t *testing.T) (*Engine, store.Store, *fakeInfodesk, *fakeBrain) {
 	t.Helper()
 	st, err := store.NewSQLite(filepath.Join(t.TempDir(), "gateway.db"))
 	if err != nil {
@@ -163,7 +208,7 @@ func engineCompleta(t *testing.T) (*Engine, store.Store, *fakeTransporte, *fakeB
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	cfg := &config.Config{DepartamentoHumanoPadrao: deptHumano}
-	tr, br := novoFakeTransporte(), &fakeBrain{}
+	tr, br := novoFakeInfodesk(), &fakeBrain{}
 	e := New(cfg, tr, br, st, nil)
 	return e, st, tr, br
 }
@@ -277,7 +322,7 @@ func esperarCerebro(br *fakeBrain, n int) bool {
 }
 
 // esperarMensagens aguarda (até 3 s) n mensagens na conversa.
-func esperarMensagens(tr *fakeTransporte, conv string, n int) []string {
+func esperarMensagens(tr *fakeInfodesk, conv string, n int) []string {
 	for i := 0; i < 300; i++ {
 		if got := tr.mensagens(conv); len(got) >= n {
 			return got
@@ -495,8 +540,9 @@ func TestTransferenciaGeraIDQuandoCerebroNaoManda(t *testing.T) {
 }
 
 // TestTransferenciaSemDepartamentoAindaAvisaERegistra: sem
-// DEPARTAMENTO_HUMANO_PADRAO o cliente é avisado e a ocorrência registrada;
-// só a movimentação no canal fica de fora (e vai para o log).
+// DEPARTAMENTO_HUMANO_PADRAO o cliente é avisado, a ocorrência registrada e o
+// handoff vai SEM departamento (distribuição automática do Infodesk) — o bot
+// não pode ficar preso à conversa (TODO(P11)).
 func TestTransferenciaSemDepartamentoAindaAvisaERegistra(t *testing.T) {
 	e, st, tr, br := engineCompleta(t)
 	e.cfg.DepartamentoHumanoPadrao = ""
@@ -506,8 +552,8 @@ func TestTransferenciaSemDepartamentoAindaAvisaERegistra(t *testing.T) {
 	if got := tr.mensagens("c-62"); len(got) != 1 {
 		t.Fatalf("cliente devia ser avisado mesmo sem departamento: %q", got)
 	}
-	if got := tr.transferida("c-62"); len(got) != 0 {
-		t.Fatalf("sem departamento não há o que transferir no canal: %v", got)
+	if got := tr.transferida("c-62"); len(got) != 1 || got[0] != "" {
+		t.Fatalf("sem departamento o handoff devia ir sem departamento: %v", got)
 	}
 	if f, _ := st.UltimaFalha(ctx, "c-62"); f == nil {
 		t.Fatal("ocorrência devia ser registrada")
@@ -518,7 +564,7 @@ func TestTransferenciaSemDepartamentoAindaAvisaERegistra(t *testing.T) {
 // não apaga a ocorrência nem derruba o turno.
 func TestFalhaNoTransporteNaoImpedeRegistro(t *testing.T) {
 	e, st, tr, br := engineCompleta(t)
-	tr.enviarErr, tr.transferirErr = errors.New("canal fora"), errors.New("canal fora")
+	tr.enviarErr, tr.handoffErr = errors.New("canal fora"), errors.New("canal fora")
 	br.respostas = []func() (*brain.ChatResponse, error){sempre(erro402())}
 	ctx := context.Background()
 	e.processarLote(ctx, []Inbound{msg("c-66", "oi")})

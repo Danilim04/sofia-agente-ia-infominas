@@ -221,3 +221,281 @@ func TestStorePostgresMigraSchemaAntigo(t *testing.T) {
 		t.Fatalf("uuid devia voltar igual: %+v", f)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// E2.1: eventos, cursor, conversas, contatos, tickets
+// ---------------------------------------------------------------------------
+
+// TestStoreMarkEventDedupPorIDDoEvento: a chave é o `id` do EVENTO (evt_…); o
+// mesmo id com outro seq/entrega é duplicata; Desmarcar libera a reentrega.
+func TestStoreMarkEventDedupPorIDDoEvento(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			id := unico("evt")
+			if fresh, err := st.MarkEvent(ctx, id, 10); err != nil || !fresh {
+				t.Fatalf("1ª vez: fresh=%v err=%v", fresh, err)
+			}
+			if fresh, err := st.MarkEvent(ctx, id, 10); err != nil || fresh {
+				t.Fatalf("reentrega do mesmo evento devia ser duplicata: fresh=%v err=%v", fresh, err)
+			}
+			if err := st.DesmarcarEvento(ctx, id); err != nil {
+				t.Fatalf("desmarcar: %v", err)
+			}
+			if fresh, err := st.MarkEvent(ctx, id, 10); err != nil || !fresh {
+				t.Fatalf("depois de desmarcar devia ser novo: fresh=%v err=%v", fresh, err)
+			}
+		})
+	}
+}
+
+// TestStoreCursorSoAvanca: eventos_cursor guarda o MAIOR seq; um seq menor
+// (entrega fora de ordem) nunca o faz retroceder.
+func TestStoreCursorSoAvanca(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			c := unico("cursor")
+			if seq, err := st.Cursor(ctx, c); err != nil || seq != 0 {
+				t.Fatalf("cursor novo: seq=%d err=%v", seq, err)
+			}
+			for _, seq := range []int64{5, 9, 7} {
+				if err := st.AvancarCursor(ctx, c, seq); err != nil {
+					t.Fatalf("avançar %d: %v", seq, err)
+				}
+			}
+			if seq, _ := st.Cursor(ctx, c); seq != 9 {
+				t.Fatalf("esperava o maior seq (9), veio %d", seq)
+			}
+		})
+	}
+}
+
+// TestStoreConversaAtualizarCriaAtualizaEIgnora cobre a tabela `conversas`:
+// criação, atualização, fn que não grava e persistência de todas as colunas.
+func TestStoreConversaAtualizarCriaAtualizaEIgnora(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			id := unico("conv")
+			if c, err := st.ObterConversa(ctx, id); err != nil || c != nil {
+				t.Fatalf("antes: %+v err=%v", c, err)
+			}
+			t0 := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+			c, err := st.AtualizarConversa(ctx, id, func(c *Conversa, existia bool) bool {
+				if existia {
+					t.Error("conversa nova não devia existir")
+				}
+				c.Telefone, c.Estado, c.HandledBy = "+5531990000000", EstadoBot, "EXTERNAL_BOT"
+				c.SessaoIniciadaEm, c.UltimaMsgID, c.UltimaMsgEm, c.UpdatedAt = t0, "m1", t0, t0
+				return true
+			})
+			if err != nil || c.Estado != EstadoBot {
+				t.Fatalf("criar: %+v err=%v", c, err)
+			}
+			// fn devolvendo false não grava.
+			if _, err := st.AtualizarConversa(ctx, id, func(c *Conversa, existia bool) bool {
+				if !existia {
+					t.Error("agora devia existir")
+				}
+				c.Estado = EstadoEncerrada
+				return false
+			}); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := st.ObterConversa(ctx, id)
+			if got == nil || got.Estado != EstadoBot {
+				t.Fatalf("fn=false não pode gravar: %+v", got)
+			}
+			// Atualização grava ticket_number, resposta e classificação.
+			t1 := t0.Add(time.Minute)
+			if _, err := st.AtualizarConversa(ctx, id, func(c *Conversa, _ bool) bool {
+				c.Estado, c.TicketNumber, c.UltimaRespostaEm = EstadoTransferida, 4521, t1
+				c.ClassificacaoJSON, c.UpdatedAt = `{"categoria":"sem_conexao"}`, t1
+				return true
+			}); err != nil {
+				t.Fatal(err)
+			}
+			got, _ = st.ObterConversa(ctx, id)
+			if got == nil || got.Estado != EstadoTransferida || got.TicketNumber != 4521 ||
+				!got.UltimaRespostaEm.Equal(t1) || !got.SessaoIniciadaEm.Equal(t0) || got.Telefone != "+5531990000000" ||
+				got.HandledBy != "EXTERNAL_BOT" || got.UltimaMsgID != "m1" || got.ClassificacaoJSON == "" || !got.UpdatedAt.Equal(t1) {
+				t.Fatalf("colunas não persistiram: %+v", got)
+			}
+		})
+	}
+}
+
+// TestStoreContatoComTTL: contato expirado some; o CPF em claro não existe
+// no modelo (só hash + mascarado); upsert por telefone.
+func TestStoreContatoComTTL(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			tel := unico("+55319")
+			agora := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+			if c, err := st.ObterContato(ctx, tel, agora); err != nil || c != nil {
+				t.Fatalf("antes: %+v err=%v", c, err)
+			}
+			err := st.SalvarContato(ctx, &Contato{
+				Telefone: tel, Origem: OrigemLookup, Forma: FormaTelefone, ValorMascarado: "Maria S.",
+				RequesterID: "r1", ClienteID: "k1", NomeCadastro: "Maria Souza", ExpiresAt: agora.Add(24 * time.Hour),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, err := st.ObterContato(ctx, tel, agora)
+			if err != nil || c == nil || c.RequesterID != "r1" || c.Forma != FormaTelefone || c.Origem != OrigemLookup || c.NomeCadastro != "Maria Souza" {
+				t.Fatalf("contato: %+v err=%v", c, err)
+			}
+			// upsert: o CPF informado depois substitui a forma, sem duplicar a linha.
+			if err := st.SalvarContato(ctx, &Contato{
+				Telefone: tel, Origem: OrigemCPF, Forma: FormaCPF, ValorMascarado: "***.***.789-**", ValorHash: "abc",
+				RequesterID: "r1", ExpiresAt: agora.Add(24 * time.Hour),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if c, _ := st.ObterContato(ctx, tel, agora); c == nil || c.Forma != FormaCPF || c.ValorHash != "abc" {
+				t.Fatalf("upsert: %+v", c)
+			}
+			if c, _ := st.ObterContato(ctx, tel, agora.Add(25*time.Hour)); c != nil {
+				t.Fatalf("contato expirado devia sumir: %+v", c)
+			}
+		})
+	}
+}
+
+// TestStoreTicketIdempotenciaEStatus: a chave única devolve o ticket já
+// existente; o número é inteiro; ticket.* atualiza status_infodesk/encerrado
+// só para números nossos e nunca com evento mais velho.
+func TestStoreTicketIdempotenciaEStatus(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			chave := unico("chave")
+			conv := unico("conv")
+			novo := &Ticket{Chave: chave, ConversationID: conv, Telefone: "+5531990000000", Categoria: "sem_conexao"}
+			t1, criado, err := st.InserirTicketPendente(ctx, novo)
+			if err != nil || !criado || t1.Status != TicketPendente || t1.Numero != 0 {
+				t.Fatalf("1ª inserção: %+v criado=%v err=%v", t1, criado, err)
+			}
+			t2, criado, err := st.InserirTicketPendente(ctx, &Ticket{Chave: chave, Categoria: "outra"})
+			if err != nil || criado || t2.Categoria != "sem_conexao" {
+				t.Fatalf("mesma chave devia devolver o existente: %+v criado=%v err=%v", t2, criado, err)
+			}
+			numero := int(time.Now().UnixNano()%1_000_000_000) + 1
+			if err := st.ConcluirTicket(ctx, chave, numero, `{"number":1}`, true); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := st.ObterTicket(ctx, chave)
+			if got == nil || got.Status != TicketAberto || got.Numero != numero || !got.Reconciliado || got.RawResposta == "" {
+				t.Fatalf("concluir: %+v", got)
+			}
+			depois := time.Now().Add(time.Minute)
+			if ok, err := st.AtualizarStatusTicket(ctx, numero, "Resolvido", true, depois); err != nil || !ok {
+				t.Fatalf("ticket.closed: ok=%v err=%v", ok, err)
+			}
+			got, _ = st.ObterTicket(ctx, chave)
+			if !got.Encerrado || got.StatusInfodesk != "Resolvido" {
+				t.Fatalf("status: %+v", got)
+			}
+			// Evento reentregue mais velho (reabriu antes de fechar) não desfaz.
+			if _, err := st.AtualizarStatusTicket(ctx, numero, "Aberto", false, depois.Add(-time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ = st.ObterTicket(ctx, chave); !got.Encerrado {
+				t.Fatalf("evento velho não pode reabrir: %+v", got)
+			}
+			if ok, _ := st.AtualizarStatusTicket(ctx, numero+7, "x", true, depois); ok {
+				t.Fatal("ticket que não é nosso não pode ser atualizado")
+			}
+		})
+	}
+}
+
+// TestStoreSQLiteMigraDeliveryIDParaEventID: um processed_events anterior à
+// E2.1 (delivery_id, sem seq) é renomeado para event_id, ganha seq e continua
+// deduplicando o que já tinha.
+func TestStoreSQLiteMigraDeliveryIDParaEventID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gateway.db")
+	antigo, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := antigo.ExecContext(context.Background(),
+		`CREATE TABLE processed_events (delivery_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := antigo.ExecContext(context.Background(),
+		`INSERT INTO processed_events VALUES ('msg:antiga', ?)`, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	_ = antigo.Close()
+
+	sq, err := NewSQLite(path)
+	if err != nil {
+		t.Fatalf("abrir banco antigo: %v", err)
+	}
+	defer sq.Close()
+	cols := tabelasDe(t, sq.db, `SELECT name FROM pragma_table_info('processed_events')`)
+	if cols["delivery_id"] || !cols["event_id"] || !cols["seq"] {
+		t.Fatalf("colunas após migração: %v", cols)
+	}
+	ctx := context.Background()
+	if fresh, _ := sq.MarkProcessed(ctx, "msg:antiga"); fresh {
+		t.Fatal("linha antiga devia continuar deduplicando")
+	}
+	if fresh, err := sq.MarkEvent(ctx, "evt_000000000123", 123); err != nil || !fresh {
+		t.Fatalf("evento novo: fresh=%v err=%v", fresh, err)
+	}
+	for _, tabela := range []string{"conversas", "contatos", "tickets", "eventos_cursor"} {
+		if !tabelasDe(t, sq.db, `SELECT name FROM sqlite_master WHERE type = 'table'`)[tabela] {
+			t.Errorf("tabela %s não criada", tabela)
+		}
+	}
+	// Reabrir (idempotência da migração).
+	_ = sq.Close()
+	sq2, err := NewSQLite(path)
+	if err != nil {
+		t.Fatalf("reabrir: %v", err)
+	}
+	_ = sq2.Close()
+}
+
+// TestStorePostgresMigraDeliveryIDParaEventID: mesma prova no Postgres (só
+// com PG_TEST_URL).
+func TestStorePostgresMigraDeliveryIDParaEventID(t *testing.T) {
+	url := os.Getenv("PG_TEST_URL")
+	if url == "" {
+		t.Skip("PG_TEST_URL não definido")
+	}
+	ctx := context.Background()
+	antigo, err := sql.Open("pgx", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := antigo.ExecContext(ctx, `
+		DROP SCHEMA IF EXISTS gateway CASCADE;
+		CREATE SCHEMA gateway;
+		CREATE TABLE gateway.processed_events (delivery_id TEXT PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+		INSERT INTO gateway.processed_events (delivery_id) VALUES ('msg:antiga');`); err != nil {
+		t.Fatalf("montar schema antigo: %v", err)
+	}
+	_ = antigo.Close()
+
+	pg, err := NewPostgres(ctx, url)
+	if err != nil {
+		t.Fatalf("abrir banco antigo: %v", err)
+	}
+	defer pg.Close()
+	cols := tabelasDe(t, pg.db, `SELECT column_name FROM information_schema.columns WHERE table_schema = 'gateway' AND table_name = 'processed_events'`)
+	if cols["delivery_id"] || !cols["event_id"] || !cols["seq"] {
+		t.Fatalf("colunas após migração: %v", cols)
+	}
+	if fresh, _ := pg.MarkProcessed(ctx, "msg:antiga"); fresh {
+		t.Fatal("linha antiga devia continuar deduplicando")
+	}
+	if fresh, err := pg.MarkEvent(ctx, "evt_000000000123", 123); err != nil || !fresh {
+		t.Fatalf("evento novo: fresh=%v err=%v", fresh, err)
+	}
+}

@@ -11,7 +11,7 @@
 // par chegaria literal ao cliente). A simulação das regex está em
 // whatsapp_test.go (simularEntrega).
 //
-// TODO(E2.1): confirmar o dialeto que o Infodesk entrega ao WhatsApp
+// TODO(C7): confirmar o dialeto que o Infodesk entrega ao WhatsApp
 // (docs/infodesk/07-pontos-ambiguos.md, C7): se ele repassa o texto cru,
 // o negrito tem de sair daqui como `*x*`.
 package engine

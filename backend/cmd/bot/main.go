@@ -16,21 +16,26 @@ import (
 	"syscall"
 	"time"
 
+	"bot-infominas/internal/alerta"
 	"bot-infominas/internal/brain"
 	"bot-infominas/internal/config"
 	"bot-infominas/internal/engine"
+	"bot-infominas/internal/infodesk"
 	"bot-infominas/internal/store"
 	"bot-infominas/internal/toolsapi"
 	"bot-infominas/internal/webhook"
 )
 
-func main() {
+func main() { os.Exit(run()) }
+
+// run é o main com código de saída: os defers (store, sinal) rodam antes do os.Exit.
+func run() int {
 	bootLog := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	cfg, err := config.Load()
 	if err != nil {
 		bootLog.Error("config inválida", "err", err)
-		os.Exit(1)
+		return 1
 	}
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)}))
@@ -40,33 +45,64 @@ func main() {
 	st, err := abrirStore(cfg, log)
 	if err != nil {
 		log.Error("abrir store", "err", err)
-		os.Exit(1)
+		return 1
 	}
 	defer st.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// TODO(E2.1): trocar pelo cliente do Infodesk (internal/infodesk), que
-	// satisfaz engine.Transporte. Até lá nada sai para o cliente.
-	var transporte engine.Transporte = &transporteNulo{log: log}
-	log.Warn("transporte NULO: mensagens e transferências vão só para o log até E2.1",
-		"infodesk_base_url", cfg.InfodeskBaseURL)
+	// Cliente do Infodesk: o ÚNICO pacote que fala com a API (skill infodesk-api).
+	idk := infodesk.New(infodesk.Options{
+		BaseURL:  cfg.InfodeskBaseURL,
+		APIKey:   cfg.InfodeskAPIKey,
+		HTTP:     &http.Client{Timeout: cfg.InfodeskTimeout},
+		CacheTTL: cfg.ReferenciaCacheTTL,
+	})
 	if cfg.DepartamentoHumanoPadrao == "" {
-		log.Warn("DEPARTAMENTO_HUMANO_PADRAO vazio: transferências avisam o cliente mas não movem a conversa")
+		// TODO(P11): departamento humano padrão (Infominas). Sem ele o handoff
+		// vai sem departamento (distribuição automática do Infodesk).
+		log.Warn("DEPARTAMENTO_HUMANO_PADRAO vazio: o handoff vai sem departamento (distribuição automática)")
 	}
 
 	brainClient := brain.NewClient(cfg.BrainBaseURL, cfg.BrainTimeout)
-	eng := engine.New(cfg, transporte, brainClient, st, log)
+	eng := engine.New(cfg, engine.NovoTransporteInfodesk(idk), brainClient, st, log)
 	// Contexto-raiz dos workers de conversa (coalescência/fila por conversa).
 	eng.Start(ctx)
+
+	// GET /me no boot: a chave precisa conduzir conversas e ter os escopos
+	// mínimos; o organizationId dela é o esperado nos webhooks e o nome dela
+	// é o senderName do eco das nossas mensagens.
+	me, err := consultarMe(ctx, idk, time.Sleep)
+	if err == nil {
+		err = validarChave(me, cfg.InfodeskOrganizationID)
+	}
+	if err != nil {
+		log.Error("chave do Infodesk não serve", "err", err)
+		eng.Vigia().Aviso(alerta.TipoChaveSemEscopo, "Chave do Infodesk inválida no boot",
+			"O gateway não subiu: "+err.Error(), "")
+		return 1
+	}
+	nomeChave := cfg.InfodeskNomeChave
+	if nomeChave == "" {
+		nomeChave = me.Name
+	}
+	log.Info("chave do Infodesk validada", "key_id", me.KeyID, "nome_chave", nomeChave, "escopos", len(me.Scopes))
 
 	if cfg.InfodeskWebhookSecret == "" && cfg.WebhookToken == "" {
 		log.Warn("webhook SEM autenticação: defina INFODESK_WEBHOOK_SECRET (HMAC) ou WEBHOOK_TOKEN (?token=...)")
 	}
 	// O token NÃO vai ao log (segredo): a URL logada mostra só onde ele entra.
 	log.Info("configure este URL no webhook do Infodesk", "url", webhookURL(cfg, true), "brain", cfg.BrainBaseURL)
-	srv := webhook.NewServer(cfg.InfodeskWebhookSecret, cfg.WebhookToken, st, eng, log, 4, 256)
+	srv := webhook.NewServer(webhook.Options{
+		Secret:         cfg.InfodeskWebhookSecret,
+		Token:          cfg.WebhookToken,
+		Janela:         cfg.WebhookJanela,
+		OrganizationID: me.OrganizationID,
+		NomeChave:      nomeChave,
+		Workers:        4,
+		QueueSize:      256,
+	}, st, eng, eng.Vigia(), log)
 	go srv.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -107,24 +143,7 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown", "err", err)
 	}
-}
-
-// transporteNulo satisfaz engine.Transporte sem falar com ninguém: loga o
-// que seria enviado. Fica até E2.1 ligar o cliente do Infodesk.
-type transporteNulo struct{ log *slog.Logger }
-
-func (t *transporteNulo) EnviarMensagem(_ context.Context, convID, body string) error {
-	t.log.Info("transporte nulo: mensagem NÃO enviada", "conversation_id", convID, "chars", len(body))
-	return nil
-}
-
-func (t *transporteNulo) TransferirDepartamento(_ context.Context, convID, deptID string) error {
-	t.log.Info("transporte nulo: transferência NÃO executada", "conversation_id", convID, "departamento", deptID)
-	return nil
-}
-
-func (t *transporteNulo) LerConversa(_ context.Context, convID string) (map[string]any, error) {
-	return map[string]any{"id": convID}, nil
+	return 0
 }
 
 // abrirStore escolhe a persistência do gateway: Postgres quando PG_URL está

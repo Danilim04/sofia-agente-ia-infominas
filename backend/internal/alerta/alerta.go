@@ -20,7 +20,18 @@ const (
 	TipoFalhaDefinitiva = "falha_definitiva" // uma falha que repetir não resolve (402, chave, bug)
 	TipoTaxaDeFalhas    = "taxa_de_falhas"   // >5% dos turnos com falha em 15 min (mín. 3)
 	TipoDisjuntorAberto = "disjuntor_aberto" // o gateway parou de chamar o cérebro
+
+	// Tipos do gateway Infodesk (E2.1; docs/plano/01-ferramentas.md, seção B).
+	TipoWebhookTimestamp      = "webhook_timestamp_fora_da_janela" // entrega autêntica fora da janela: replay ou relógio errado
+	TipoChaveSemEscopo        = "chave_sem_escopo"                 // GET /me no boot: falta escopo ou a chave não conduz conversas
+	TipoHandoffFalhou         = "handoff_falhou"                   // o Infodesk não aceitou o handoff; o bot cala mesmo assim
+	TipoEventoIlegivel        = "evento_ilegivel"                  // Data.Erro != nil: objeto presente mas não decodificável
+	TipoLookupIlegivel        = "lookup_ilegivel"                  // Lookup.Erro != nil: cai no fallback CPF, mas o motivo precisa aparecer
+	TipoOrganizacaoDivergente = "organizacao_divergente"           // organizationId do webhook ≠ GET /me
 )
+
+// Métricas (contadores em memória; o log `sofia_metrica` as acompanha).
+const MetricaHumanoAssumiuSemHandoff = "humano_assumiu_sem_handoff"
 
 // Alerta é o aviso em si: texto pronto para humano + campos para correlação.
 type Alerta struct {

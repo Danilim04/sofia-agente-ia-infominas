@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// Valores de IDENT_LOOKUP_AMBIGUO.
+const IdentAmbiguoPedirCPF = "pedir_cpf"
+
 // Config agrega todos os parâmetros de execução do gateway.
 type Config struct {
 	Port          string
@@ -35,6 +38,25 @@ type Config struct {
 	// WebhookToken: segredo opcional na query da URL do webhook (?token=...),
 	// além do HMAC.
 	WebhookToken string
+	// WebhookJanela: tolerância de |now − X-Infominas-Timestamp| (docs/infodesk/05:
+	// 5 min). Fora dela a entrega é recusada com 401 (possível replay).
+	WebhookJanela time.Duration
+	// InfodeskNomeChave: nome da chave de API = `senderName` das nossas
+	// mensagens (eco `message.sent` a ignorar, docs/infodesk/07 W8). Vazio =
+	// usa o `name` de GET /me no boot.
+	InfodeskNomeChave string
+
+	// Identificação do cliente (ADR 0004, revisão 2026-10-20; docs/infodesk/07 N3).
+	// IdentExigirCPF=false (hipótese de plano): telefone reconhecido pelo
+	// lookup dispensa CPF; true restaura "sempre pede". TODO(N3): valor final
+	// em produção é decisão de negócio (E5.3).
+	IdentExigirCPF bool
+	// IdentLookupAmbiguo: o que fazer quando o lookup devolve mais de um
+	// solicitante. Único valor suportado hoje: "pedir_cpf" (tratar como não
+	// identificado e pedir CPF/contrato).
+	IdentLookupAmbiguo string
+	// IdentTTL: validade do cache de identificação por telefone (default 24 h).
+	IdentTTL time.Duration
 
 	// Persistência do gateway (dedup, ocorrências; E2.1: conversas, contatos,
 	// tickets). PGURL preenchido = Postgres (o MESMO do RAG/pgvector, schema
@@ -87,6 +109,9 @@ func Load() (*Config, error) {
 		BrainBaseURL:             strings.TrimRight(getenv("BRAIN_BASE_URL", "http://localhost:8001"), "/"),
 		ToolsAPIToken:            getenv("TOOLS_API_TOKEN", ""),
 		ReplyMaxChars:            getenvInt("REPLY_MAX_CHARS", 900),
+		InfodeskNomeChave:        strings.TrimSpace(getenv("INFODESK_NOME_CHAVE", "")),
+		IdentExigirCPF:           getenvBool("IDENT_EXIGIR_CPF", false),
+		IdentLookupAmbiguo:       strings.ToLower(strings.TrimSpace(getenv("IDENT_LOOKUP_AMBIGUO", IdentAmbiguoPedirCPF))),
 	}
 
 	duracoes := []struct {
@@ -102,6 +127,8 @@ func Load() (*Config, error) {
 		{&cfg.DebounceTeto, "DEBOUNCE_TETO", "20s"},
 		{&cfg.EventoIdadeMax, "EVENTO_IDADE_MAX", "10m"},
 		{&cfg.BolhaPausa, "BOLHA_PAUSA", "1500ms"},
+		{&cfg.WebhookJanela, "WEBHOOK_JANELA", "5m"},
+		{&cfg.IdentTTL, "IDENT_TTL", "24h"},
 	}
 	for _, d := range duracoes {
 		v, err := parseDuration(getenv(d.env, d.def))
@@ -109,6 +136,10 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("%s inválido: %w", d.env, err)
 		}
 		*d.dst = v
+	}
+
+	if cfg.IdentLookupAmbiguo != IdentAmbiguoPedirCPF {
+		return nil, fmt.Errorf("IDENT_LOOKUP_AMBIGUO inválido (%q): só %q é suportado", cfg.IdentLookupAmbiguo, IdentAmbiguoPedirCPF)
 	}
 
 	var missing []string
@@ -128,6 +159,18 @@ func Load() (*Config, error) {
 func getenv(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
+	}
+	return def
+}
+
+func getenvBool(key string, def bool) bool {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "t", "sim", "yes", "on":
+			return true
+		case "0", "false", "f", "nao", "não", "no", "off":
+			return false
+		}
 	}
 	return def
 }

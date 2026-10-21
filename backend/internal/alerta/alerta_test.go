@@ -137,3 +137,41 @@ func TestWebhookEnviaJSONComTexto(t *testing.T) {
 	// Sem URL, só o log — nada a enviar, nada a quebrar.
 	Padrao("", nil).Notificar(context.Background(), Alerta{Tipo: TipoTaxaDeFalhas})
 }
+
+// TestAvisoSilenciaRepeticaoPorTipoEConversa: o mesmo tipo + conversa não
+// repete dentro de SilencioAviso; outra conversa ou o fim da janela liberam.
+func TestAvisoSilenciaRepeticaoPorTipoEConversa(t *testing.T) {
+	v, n, agora := vigiaDeTeste()
+	if !v.Aviso(TipoHandoffFalhou, "t", "x", "c1") {
+		t.Fatal("1º aviso devia ser entregue")
+	}
+	if v.Aviso(TipoHandoffFalhou, "t", "x", "c1") {
+		t.Fatal("repetição dentro da janela devia ser silenciada")
+	}
+	if !v.Aviso(TipoHandoffFalhou, "t", "x", "c2") {
+		t.Fatal("outra conversa não é repetição")
+	}
+	*agora = agora.Add(SilencioAviso + time.Second)
+	if !v.Aviso(TipoHandoffFalhou, "t", "x", "c1") {
+		t.Fatal("passada a janela, avisa de novo")
+	}
+	if got := n.tipos(); len(got) != 3 {
+		t.Fatalf("esperava 3 alertas entregues, veio %v", got)
+	}
+}
+
+func TestContadorDeMetrica(t *testing.T) {
+	v, _, _ := vigiaDeTeste()
+	if v.Contagem(MetricaHumanoAssumiuSemHandoff) != 0 {
+		t.Fatal("começa em zero")
+	}
+	v.Contar(MetricaHumanoAssumiuSemHandoff)
+	if got := v.Contar(MetricaHumanoAssumiuSemHandoff); got != 2 {
+		t.Fatalf("esperava 2, veio %d", got)
+	}
+	var nulo *Vigia
+	nulo.Contar("x") // vigia nula é no-op seguro
+	if nulo.Aviso("t", "t", "x", "") {
+		t.Fatal("vigia nula não entrega")
+	}
+}

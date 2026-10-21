@@ -202,7 +202,7 @@ func TestQuebrarMensagemLimiteMinusculo(t *testing.T) {
 //
 // simularEntrega reproduz, fora deste repositório, o caminho painel de
 // atendimento → relay Evolution usado até a Onda 0. É uma SIMULAÇÃO copiada
-// do código de cada um, nas versões fixadas abaixo (TODO(E2.1): trocar pela
+// do código de cada um, nas versões fixadas abaixo (TODO(C7): trocar pela
 // entrega do Infodesk quando C7 for respondido):
 //
 //  1. Painel v4.15.1 — `Messages::WebhookContentNormalizer.normalize`

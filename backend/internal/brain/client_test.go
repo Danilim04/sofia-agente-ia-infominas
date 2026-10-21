@@ -1,11 +1,16 @@
 package brain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,5 +132,49 @@ func TestChaveDoDisjuntorAgrupaAMesmaFalha(t *testing.T) {
 	c := &Erro{Classe: ClasseDefinitiva, Status: 500, Causa: "chave do OpenRouter inválida (401)"}
 	if a.Chave() != b.Chave() || a.Chave() == c.Chave() {
 		t.Fatalf("chaves: %q %q %q", a.Chave(), b.Chave(), c.Chave())
+	}
+}
+
+// TestChatRequestCompativelComContratoA: o JSON de exemplo de
+// contratos/contrato-a/chat-request.json decodifica sem campo desconhecido e
+// volta idêntico — o ChatRequest do Go e o contrato não divergem (ADR 0006).
+func TestChatRequestCompativelComContratoA(t *testing.T) {
+	cru, err := os.ReadFile(filepath.Join("..", "..", "..", "contratos", "contrato-a", "chat-request.json"))
+	if err != nil {
+		t.Fatalf("contrato: %v", err)
+	}
+	var req ChatRequest
+	dec := json.NewDecoder(bytes.NewReader(cru))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		t.Fatalf("o contrato tem campo que o ChatRequest não conhece: %v", err)
+	}
+	if req.NomeContato == "" || req.Contato == nil || req.Contato.Forma != FormaCPF || req.EstadoConversa != EstadoBot {
+		t.Fatalf("campos novos não lidos: %+v", req)
+	}
+	volta, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a, b map[string]any
+	if err := json.Unmarshal(cru, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(volta, &b); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("re-serialização difere do contrato:\n contrato: %v\n go:       %v", a, b)
+	}
+}
+
+// TestChatRequestContatoNuloVaiComoNull: telefone nunca identificado → `contato: null`.
+func TestChatRequestContatoNuloVaiComoNull(t *testing.T) {
+	b, err := json.Marshal(ChatRequest{ConversationID: "c", Canal: "whatsapp", Mensagem: "oi", EstadoConversa: EstadoBot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"contato":null`) {
+		t.Fatalf("contato nulo devia ser null no JSON: %s", b)
 	}
 }

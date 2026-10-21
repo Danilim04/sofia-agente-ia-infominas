@@ -13,6 +13,9 @@ const (
 	MinFalhas    = 3                // mínimo de falhas na janela para a regra de taxa valer
 	LimiarTaxa   = 0.05             // >5% dos turnos com falha
 	SilencioTaxa = 15 * time.Minute // não repete o alerta de taxa dentro deste intervalo
+	// SilencioAviso: o mesmo Aviso (tipo + conversa) não repete dentro deste
+	// intervalo — uma rajada de entregas replay não pode virar uma rajada de alertas.
+	SilencioAviso = 5 * time.Minute
 )
 
 // Falha é o que a Vigia precisa saber de uma ocorrência (espelho mínimo de
@@ -43,6 +46,8 @@ type Vigia struct {
 	falhas        []time.Time // turnos com falha na janela
 	ultimoDaTaxa  time.Time
 	alertouDaTaxa bool
+	avisos        map[string]time.Time // tipo|conversa → último Aviso entregue
+	contadores    map[string]int
 }
 
 // NovaVigia cria a vigia; n nil = sem alertas (no-op seguro).
@@ -124,6 +129,54 @@ func (v *Vigia) DisjuntorAberto(chave, causa string, ate time.Time) {
 		Texto: fmt.Sprintf("3 falhas definitivas iguais em 5 min (%s). O cérebro não será chamado até %s; uma chamada de teste decide reabrir. Chave: %s",
 			causa, ate.Format("15:04"), chave),
 	})
+}
+
+// Aviso entrega um alerta avulso (tipos do gateway Infodesk), no máximo um por
+// SilencioAviso para o mesmo tipo + conversa. Devolve true se foi entregue.
+// O texto NÃO pode conter PII (CPF, telefone, nome): só ids e causas.
+func (v *Vigia) Aviso(tipo, titulo, texto, convID string) bool {
+	if v == nil {
+		return false
+	}
+	agora := v.Agora()
+	chave := tipo + "|" + convID
+	v.mu.Lock()
+	if v.avisos == nil {
+		v.avisos = map[string]time.Time{}
+	}
+	if ultimo, ok := v.avisos[chave]; ok && agora.Sub(ultimo) < SilencioAviso {
+		v.mu.Unlock()
+		return false
+	}
+	v.avisos[chave] = agora
+	v.mu.Unlock()
+	v.notificar(Alerta{Tipo: tipo, Titulo: titulo, Texto: texto, ConversationID: convID, Quando: agora})
+	return true
+}
+
+// Contar incrementa um contador de métrica (ex.: MetricaHumanoAssumiuSemHandoff)
+// e devolve o novo valor.
+func (v *Vigia) Contar(nome string) int {
+	if v == nil {
+		return 0
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.contadores == nil {
+		v.contadores = map[string]int{}
+	}
+	v.contadores[nome]++
+	return v.contadores[nome]
+}
+
+// Contagem devolve o valor atual de um contador.
+func (v *Vigia) Contagem(nome string) int {
+	if v == nil {
+		return 0
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.contadores[nome]
 }
 
 // podar descarta instantes anteriores ao corte (slice ordenado no tempo).

@@ -15,6 +15,7 @@ import (
 // (`gateway`) para não se misturar com as tabelas rag_* do cérebro. O schema
 // é criado/migrado no boot (idempotente), como o SQLite faz.
 type PostgresStore struct {
+	*ops
 	db *sql.DB
 }
 
@@ -26,9 +27,19 @@ const pgSchema = `
 CREATE SCHEMA IF NOT EXISTS gateway;
 
 CREATE TABLE IF NOT EXISTS gateway.processed_events (
-    delivery_id TEXT PRIMARY KEY,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    event_id   TEXT PRIMARY KEY,
+    seq        BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Anterior à E2.1: a chave era o id da entrega (delivery_id), sem seq.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'gateway' AND table_name = 'processed_events' AND column_name = 'delivery_id') THEN
+        ALTER TABLE gateway.processed_events RENAME COLUMN delivery_id TO event_id;
+    END IF;
+END $$;
+ALTER TABLE gateway.processed_events ADD COLUMN IF NOT EXISTS seq BIGINT NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS gateway.falhas (
     seq             BIGSERIAL PRIMARY KEY,
@@ -68,7 +79,8 @@ func NewPostgres(ctx context.Context, url string) (*PostgresStore, error) {
 	}
 	// Sem argumentos o pgx usa o protocolo simples, que aceita várias
 	// instruções numa chamada só.
-	if _, err := db.ExecContext(pingCtx, pgSchema); err != nil {
+	o := &ops{db: db, pg: true}
+	if _, err := db.ExecContext(pingCtx, pgSchema+o.rebind(ddlComum)); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrar schema gateway: %w", err)
 	}
@@ -80,22 +92,7 @@ func NewPostgres(ctx context.Context, url string) (*PostgresStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("limpar processed_events: %w", err)
 	}
-	return &PostgresStore{db: db}, nil
-}
-
-func (s *PostgresStore) MarkProcessed(ctx context.Context, deliveryID string) (bool, error) {
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO gateway.processed_events (delivery_id, created_at) VALUES ($1, $2)
-		 ON CONFLICT (delivery_id) DO NOTHING`,
-		deliveryID, time.Now())
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
+	return &PostgresStore{ops: o, db: db}, nil
 }
 
 func (s *PostgresStore) RegistrarFalha(ctx context.Context, f *Falha) error {
