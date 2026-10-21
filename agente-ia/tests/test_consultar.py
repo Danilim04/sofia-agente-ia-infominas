@@ -23,3 +23,9 @@ def test_formatar_lista_fontes_secoes_e_trechos_curtos():
 
 def test_formatar_sem_resultados_avisa_indice_vazio():
     assert "índice vazio" in formatar("qualquer coisa", [])
+
+
+def test_colecao_do_indice_e_infominas_kb():
+    from src.rag.ingest import COLLECTION_NAME
+
+    assert COLLECTION_NAME == "infominas_kb"
