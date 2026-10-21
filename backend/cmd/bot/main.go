@@ -21,6 +21,7 @@ import (
 	"bot-infominas/internal/config"
 	"bot-infominas/internal/engine"
 	"bot-infominas/internal/infodesk"
+	"bot-infominas/internal/reconciliador"
 	"bot-infominas/internal/store"
 	"bot-infominas/internal/toolsapi"
 	"bot-infominas/internal/webhook"
@@ -103,7 +104,15 @@ func run() int {
 		Workers:        4,
 		QueueSize:      256,
 	}, st, eng, eng.Vigia(), log)
+	// Reconciliador (E3.3; bloco de wiring fora da zona declarada da etapa): a
+	// recuperação de crash roda ANTES de o webhook receber o 1º evento; o loop
+	// (feed /events, tickets pendentes, vigia BOT_TIMEOUT_HANDOFF) nasce ligado.
+	rec := reconciliador.New(reconciliador.OptionsDoAmbiente(log), idk, srv, eng, st, eng.Vigia(), log)
+	if err := rec.Recuperar(ctx); err != nil {
+		log.Error("recuperação de crash do reconciliador falhou", "err", err)
+	}
 	go srv.Start(ctx)
+	go rec.Run(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook", srv.ServeHTTP)
