@@ -59,3 +59,6 @@ agente-ia/evals/bruto/
 agente-ia/evals/relatorios/
 # lista real de nomes próprios usada pelo anonimizador
 agente-ia/config/nomes.txt
+
+# Saída de scripts/descobrir-taxonomia.py (inventário do Infodesk; versionar só o que entrar na E5.1)
+descoberta-infodesk/

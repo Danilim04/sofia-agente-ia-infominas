@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"bot-infominas/internal/config"
 	"bot-infominas/internal/infodesk"
 	"bot-infominas/internal/store"
 	"bot-infominas/internal/webhook"
@@ -536,26 +537,22 @@ func TestRunRepeteACadaIntervaloAteCancelar(t *testing.T) {
 	}
 }
 
-func TestOptionsDoAmbiente(t *testing.T) {
-	t.Setenv("RECONCILIA_ATIVO", "")
-	o := OptionsDoAmbiente(nil)
-	if !o.Ativo {
-		t.Fatal("nasce ligado")
+// TestOptionsDeConfig: as Options vêm da configuração única (sem ler o
+// ambiente aqui); zero na Options cai nos defaults de comPadroes.
+func TestOptionsDeConfig(t *testing.T) {
+	o := OptionsDeConfig(&config.Config{
+		ReconciliaAtivo: false, ReconciliaIntervalo: 30 * time.Second, ReconciliaRetroativo: 2 * time.Hour,
+		ReconciliaAtraso: 3 * time.Minute, ReconciliaBackoffMax: 7 * time.Minute, ReconciliaSkew: 90 * time.Second,
+		BotTimeoutHandoff: 4 * time.Minute, TicketPendenteTTL: 15 * time.Minute,
+	})
+	if o.Ativo || o.Intervalo != 30*time.Second || o.Retroativo != 2*time.Hour || o.Atraso != 3*time.Minute ||
+		o.BackoffMax != 7*time.Minute || o.Skew != 90*time.Second || o.BotTimeoutHandoff != 4*time.Minute ||
+		o.TicketPendenteTTL != 15*time.Minute {
+		t.Fatalf("config não chegou às Options: %+v", o)
 	}
-	o = o.comPadroes()
-	if o.Intervalo != time.Minute || o.Retroativo != time.Hour || o.TicketPendenteTTL != 10*time.Minute || o.BotTimeoutHandoff != 5*time.Minute {
-		t.Fatalf("defaults: %+v", o)
-	}
-
-	t.Setenv("RECONCILIA_ATIVO", "false")
-	t.Setenv("RECONCILIA_INTERVALO", "30s")
-	t.Setenv("BOT_TIMEOUT_HANDOFF", "invalido")
-	o = OptionsDoAmbiente(nil)
-	if o.Ativo || o.Intervalo != 30*time.Second || o.BotTimeoutHandoff != 0 {
-		t.Fatalf("env: %+v", o)
-	}
-	if o.comPadroes().BotTimeoutHandoff != 5*time.Minute {
-		t.Fatal("valor inválido cai no default")
+	vazio := OptionsDeConfig(&config.Config{ReconciliaAtivo: true}).comPadroes()
+	if !vazio.Ativo || vazio.Intervalo != time.Minute || vazio.Retroativo != time.Hour || vazio.TicketPendenteTTL != 10*time.Minute || vazio.BotTimeoutHandoff != 5*time.Minute {
+		t.Fatalf("defaults: %+v", vazio)
 	}
 }
 

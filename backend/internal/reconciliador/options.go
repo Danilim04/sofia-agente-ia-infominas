@@ -2,10 +2,9 @@ package reconciliador
 
 import (
 	"context"
-	"log/slog"
-	"os"
-	"strings"
 	"time"
+
+	"bot-infominas/internal/config"
 )
 
 // Options configura o reconciliador. Os defaults são hipóteses de trabalho
@@ -48,7 +47,7 @@ type Options struct {
 }
 
 // comPadroes completa os campos zerados com os defaults (Ativo não: um
-// Options literal com Ativo=false desliga; use OptionsDoAmbiente para o
+// Options literal com Ativo=false desliga; use OptionsDeConfig para o
 // default true).
 func (o Options) comPadroes() Options {
 	pad := func(v *time.Duration, d time.Duration) {
@@ -88,49 +87,18 @@ func dormirDeVerdade(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// OptionsDoAmbiente lê as variáveis RECONCILIA_ATIVO, RECONCILIA_INTERVALO,
-// RECONCILIA_RETROATIVO, RECONCILIA_ATRASO, RECONCILIA_BACKOFF_MAX,
-// RECONCILIA_SKEW, TICKET_PENDENTE_TTL e BOT_TIMEOUT_HANDOFF. Valor ausente = default;
-// valor inválido = default com aviso no log (não derruba o boot).
-//
-// TODO(P3): mover para internal/config quando a zona dessa pasta permitir
-// (hoje a E3.3 não a toca); nenhuma delas é segredo.
-func OptionsDoAmbiente(log *slog.Logger) Options {
-	if log == nil {
-		log = slog.Default()
+// OptionsDeConfig monta as Options a partir da configuração única do gateway
+// (internal/config: RECONCILIA_*, TICKET_PENDENTE_TTL, BOT_TIMEOUT_HANDOFF;
+// defaults e validação moram lá).
+func OptionsDeConfig(cfg *config.Config) Options {
+	return Options{
+		Ativo:             cfg.ReconciliaAtivo,
+		Intervalo:         cfg.ReconciliaIntervalo,
+		Retroativo:        cfg.ReconciliaRetroativo,
+		Atraso:            cfg.ReconciliaAtraso,
+		BackoffMax:        cfg.ReconciliaBackoffMax,
+		Skew:              cfg.ReconciliaSkew,
+		TicketPendenteTTL: cfg.TicketPendenteTTL,
+		BotTimeoutHandoff: cfg.BotTimeoutHandoff,
 	}
-	o := Options{Ativo: true}
-	if v, ok := os.LookupEnv("RECONCILIA_ATIVO"); ok && strings.TrimSpace(v) != "" {
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "0", "false", "f", "nao", "não", "no", "off":
-			o.Ativo = false
-		case "1", "true", "t", "sim", "yes", "on":
-		default:
-			log.Warn("RECONCILIA_ATIVO inválido; usando true", "valor", v)
-		}
-	}
-	for _, d := range []struct {
-		dst *time.Duration
-		env string
-	}{
-		{&o.Intervalo, "RECONCILIA_INTERVALO"},
-		{&o.Retroativo, "RECONCILIA_RETROATIVO"},
-		{&o.Atraso, "RECONCILIA_ATRASO"},
-		{&o.BackoffMax, "RECONCILIA_BACKOFF_MAX"},
-		{&o.Skew, "RECONCILIA_SKEW"},
-		{&o.TicketPendenteTTL, "TICKET_PENDENTE_TTL"},
-		{&o.BotTimeoutHandoff, "BOT_TIMEOUT_HANDOFF"},
-	} {
-		v := strings.TrimSpace(os.Getenv(d.env))
-		if v == "" {
-			continue
-		}
-		dur, err := time.ParseDuration(v)
-		if err != nil || dur <= 0 {
-			log.Warn("duração inválida; usando o default", "variavel", d.env, "valor", v)
-			continue
-		}
-		*d.dst = dur
-	}
-	return o
 }
