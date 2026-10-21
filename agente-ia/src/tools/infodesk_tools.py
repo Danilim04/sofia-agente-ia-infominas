@@ -17,8 +17,10 @@ Regras que valem para todas (`CLAUDE.md`, regras 1–5):
 - Efeito colateral em duas fases: `preparar_abertura_chamado` (dry-run) →
   confirmação explícita no turno seguinte (checada por código) →
   `abrir_chamado` SEM argumentos do modelo. Nenhuma tool repete um POST.
-- PII: CPF/contrato em claro só na memória do turno e no corpo para o gateway;
-  logs e retorno só levam a forma mascarada.
+- PII: o CPF/contrato nunca é logado (só a forma mascarada) e não volta no
+  retorno; vai em claro apenas no corpo para o gateway. Ressalva: o argumento
+  que o MODELO passou fica no `AIMessage.tool_calls` do histórico (checkpoint e
+  trace) — mascarar isso é do checkpointer/nós, fora desta zona (TODO(follow-up da E2.3)).
 """
 
 from __future__ import annotations
@@ -42,8 +44,12 @@ _BASE = "/tools/infodesk"
 #: O `abrir` do gateway tem orçamento de 25 s até o POST/reconciliação do ticket
 #: (`toolsapi/abrir.go: abrirTeto`) e mais ≤ 10 s de folga própria para o handoff
 #: final (`posTeto`). Se a tool desistisse antes, o cliente ouviria "não consegui"
-#: de um chamado que o gateway ainda estava criando. O teto do turno do cérebro
-#: (`BRAIN_TURNO_PRAZO`, 40 s) fica acima deste valor.
+#: de um chamado que o gateway ainda estava criando.
+#: ATENÇÃO: o prazo do turno inteiro (`BRAIN_TURNO_PRAZO`, 40 s) também paga o JEV
+#: e as duas chamadas do LLM; no pior caso do gateway ele estoura antes da resposta
+#: (o cliente recebe a falha transitória enquanto o ticket pode ter sido criado —
+#: o reconciliador e a chave de idempotência cobrem). Subir `BRAIN_TURNO_PRAZO`,
+#: `TURNO_TETO` e `BRAIN_TIMEOUT` juntos é decisão do orquestrador (nota no PR).
 ABRIR_ORCAMENTO_GATEWAY_S = 25.0
 ABRIR_FOLGA_POS_S = 10.0
 ABRIR_TIMEOUT_MINIMO_S = ABRIR_ORCAMENTO_GATEWAY_S + ABRIR_FOLGA_POS_S

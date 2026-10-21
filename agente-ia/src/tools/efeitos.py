@@ -14,10 +14,17 @@ Infodesk (E2.3), ao final deste módulo:
 - `preparar_abertura_chamado` ok → carimba `proposta_chamado` (`criada_em`,
   `turno`); qualquer outro resultado zera a proposta (o estado reflete sempre
   o último preparo);
-- `abrir_chamado` ok → consome (`proposta_chamado = None`); falha mantém — a
-  chave de idempotência sai da MESMA proposta, então um retry nunca duplica;
+- `abrir_chamado` ok OU falha → consome (`proposta_chamado = None`). Depois de
+  uma tentativa que o gateway executou (mesmo sem resposta, `infodesk_indisponivel`)
+  não há segundo `abrir` com a mesma proposta no mesmo turno: o modelo teria de
+  preparar de novo, e o `preparar` do gateway devolve `chamado_aberto` se o ticket
+  existir (dedup) — "nunca retry em POST /tickets" (regra 3). Recusa da política
+  não chama o efeito: a proposta fica como estava;
 - `informar_identificacao` ok → grava `identificacao = {forma,
-  valor_mascarado}` — só o mascarado, o dado em claro morre na tool.
+  valor_mascarado}` — só o mascarado em `identificacao`. ATENÇÃO: o `AIMessage`
+  que chamou a tool leva o CPF/contrato em `tool_calls[].args` e vai para o
+  checkpoint e o trace como qualquer mensagem; mascarar isso é do checkpointer/nós
+  (fora da zona da E2.3) — TODO(follow-up da E2.3), nota no PR.
 
 Invariantes para quem registrar um efeito:
 - recebe o estado como leitura e devolve um dict NOVO (nunca muta `state`);
@@ -94,9 +101,7 @@ def _efeito_preparar(nome: str, resultado: Any, state: Mapping[str, Any]) -> dic
 
 
 def _efeito_abrir(nome: str, resultado: Any, state: Mapping[str, Any]) -> dict[str, Any]:
-    if _ok(resultado):
-        return {"proposta_chamado": None}
-    return {}
+    return {"proposta_chamado": None}
 
 
 def _args_da_chamada(nome: str, state: Mapping[str, Any]) -> list[Mapping[str, Any]]:

@@ -339,12 +339,17 @@ _exigir_proposta_confirmada = exigir_proposta_confirmada  # nome usado pelos fak
 # Precondições de sessão do `preparar_abertura_chamado`
 # ---------------------------------------------------------------------------
 
-#: "chamado 4821", "protocolo nº 123456", "ticket #77", "OS 9981": o cliente está
-#: falando de um chamado EXISTENTE (regra ZB herdada) — não vira chamado novo.
-#: Aplicada sobre o texto normalizado (minúsculas, sem acento/pontuação).
-#: TODO(P1): confirmar com a Infominas como o cliente chama o número ("protocolo"?).
+#: "chamado 4821", "protocolo nº 123456", "o protocolo é 20240001234", "chamado de
+#: número 4.821", "ordem de serviço 9981": o cliente está falando de um chamado
+#: EXISTENTE (regra ZB herdada) — não vira chamado novo. Aplicada sobre o texto
+#: normalizado (minúsculas, sem acento, pontuação vira espaço: "4.821" → "4 821").
+#: Palavra-chave + até alguns conectivos + número de 3+ dígitos (ou agrupado em
+#: milhares). "OS" solta NÃO entra: "tenho os 200 mega" não é protocolo.
+#: TODO(P9): o histórico real mostra como o cliente chama o número ("protocolo"?).
 _PROTOCOLO_CITADO = re.compile(
-    r"\b(?:chamado|protocolo|ticket|os|ordem de servico)\s+(?:n|no|numero)?\s*\d{3,10}\b"
+    r"\b(?:chamado|protocolo|ticket|ordem de servico)"
+    r"(?:\s+(?:n|no|numero|de|e|eh|que))*"
+    r"\s+(?:\d{3,}|\d{1,3}(?:\s\d{3})+)\b"
 )
 
 

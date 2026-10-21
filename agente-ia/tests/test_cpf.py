@@ -88,6 +88,31 @@ def test_regex_do_contrato_e_configuravel(monkeypatch):
     assert contrato_valido("123456") is False
 
 
+def test_config_de_identificacao_tambem_vem_do_dotenv(monkeypatch, tmp_path):
+    """O Go lê o ambiente; o cérebro lê ambiente E `.env` — as duas pontas concordam."""
+    (tmp_path / ".env").write_text(
+        "IDENT_EXIGIR_CPF=true\nIDENT_CONTRATO_RE=^INF-[0-9]{6}$\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("IDENT_EXIGIR_CPF", raising=False)
+    monkeypatch.delenv("IDENT_CONTRATO_RE", raising=False)
+    assert ident_exigir_cpf() is True
+    assert contrato_valido("INF-123456") is True
+    assert contrato_valido("123456") is False
+
+
+def test_ambiente_vence_o_dotenv(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text("IDENT_EXIGIR_CPF=true\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("IDENT_EXIGIR_CPF", "false")
+    assert ident_exigir_cpf() is False
+
+
+def test_valor_invalido_da_config_cai_no_default(monkeypatch):
+    monkeypatch.setenv("IDENT_EXIGIR_CPF", "talvez")
+    assert ident_exigir_cpf() is False
+
+
 def test_regex_invalida_cai_no_default(monkeypatch):
     monkeypatch.setenv("IDENT_CONTRATO_RE", "([")
     assert contrato_valido("123456") is True

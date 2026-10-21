@@ -1,25 +1,30 @@
 """Número de contrato do cliente: validação configurável e máscara.
 
 O formato do número de contrato da Infominas não está documentado
-(TODO(P2): confirmar com a Infominas). Hipótese de trabalho, configurável por
+(TODO(N3): confirmar com a Infominas). Hipótese de trabalho, configurável por
 `IDENT_CONTRATO_RE` (mesma variável do gateway): 4 a 12 dígitos.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import re
 from typing import Any
 
+from src.identity.config import CONTRATO_RE_PADRAO, carregar
+
 logger = logging.getLogger(__name__)
 
-#: Default do plano (`docs/plano/01-ferramentas.md`, A1).
-CONTRATO_RE_PADRAO = r"^\d{4,12}$"
+__all__ = [
+    "CONTRATO_RE_PADRAO",
+    "contrato_valido",
+    "mascarar_contrato",
+    "normalizar_contrato",
+]
 
 
 def _padrao() -> re.Pattern[str]:
-    bruto = os.environ.get("IDENT_CONTRATO_RE", "").strip() or CONTRATO_RE_PADRAO
+    bruto = carregar().ident_contrato_re.strip() or CONTRATO_RE_PADRAO
     try:
         return re.compile(bruto)
     except re.error:

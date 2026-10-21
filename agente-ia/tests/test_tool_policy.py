@@ -504,7 +504,13 @@ def test_preparar_valida_a_identificacao_antes_da_categoria():
         "ticket #4821 sem resposta",
         "meu chamado nº 48213",
         "Chamado Número 48213",
-        "OS 9981",
+        "ordem de serviço 9981",
+        "o protocolo é 123456",
+        "meu chamado de número 4821",
+        "chamado número 4.821",
+        "protocolo 20240001234",
+        "protocolo: 2024-0001",
+        "ticket 77123",
     ],
 )
 def test_preparar_recusa_quando_o_cliente_cita_um_chamado_existente(mensagem):
@@ -514,7 +520,16 @@ def test_preparar_recusa_quando_o_cliente_cita_um_chamado_existente(mensagem):
 
 @pytest.mark.parametrize(
     "mensagem",
-    ["minha internet caiu às 3 da tarde", "já reiniciei 2 vezes", "moro na rua 25, casa 4821"],
+    [
+        "minha internet caiu às 3 da tarde",
+        "já reiniciei 2 vezes",
+        "moro na rua 25, casa 4821",
+        "tenho os 200 mega e não funciona",
+        "Os 150 clientes da rua estão sem internet",
+        "meu plano de 500 mega os 500 não chegam",
+        "abri um chamado ontem e ninguém ligou",
+        "o chamado está parado há 3 dias",
+    ],
 )
 def test_preparar_nao_confunde_numero_solto_com_protocolo(mensagem):
     assert _preparar(_estado(messages=[HumanMessage(content=mensagem)]))[1] is None
@@ -691,11 +706,27 @@ def test_abrir_ok_consome_a_proposta():
 
 
 @pytest.mark.parametrize("motivo", ["em_andamento", "infodesk_indisponivel", "escopo_insuficiente"])
-def test_abrir_com_falha_mantem_a_proposta(motivo):
+def test_abrir_com_falha_tambem_consome_a_proposta(motivo):
+    """Nunca um segundo `abrir` com a mesma proposta (regra 3): o modelo teria de
+    preparar de novo, e o `preparar` do gateway devolve `chamado_aberto` se o ticket
+    existir."""
     delta = efeitos.efeito_pos_tool(
         "abrir_chamado", {"status": False, "erro": "e", "motivo": motivo}, _estado()
     )
-    assert delta == {}
+    assert delta == {"proposta_chamado": None}
+
+
+def test_segundo_abrir_no_mesmo_turno_depois_de_falha_e_recusado_pela_politica():
+    proposta = _proposta_pronta(1)
+    mensagens = [HumanMessage(content="1"), HumanMessage(content="sim")]
+    estado = _estado(proposta_chamado=proposta, messages=mensagens)
+    assert aplicar_politica("abrir_chamado", {}, estado)[1] is None
+    delta = efeitos.efeito_pos_tool(
+        "abrir_chamado", {"status": False, "erro": "e", "motivo": "infodesk_indisponivel"}, estado
+    )
+    depois = {**estado, **delta}
+    _, erro = aplicar_politica("abrir_chamado", {}, depois)
+    assert erro is not None and "preparar_abertura_chamado" in erro
 
 
 def _estado_com_chamada_informar(**args) -> dict:
