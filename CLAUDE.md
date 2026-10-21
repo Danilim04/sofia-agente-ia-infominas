@@ -41,4 +41,4 @@ Setup, variáveis, Postgres de teste, Windows: skill `ambiente-testes`.
 
 ## Skills (carregue a que a tarefa pedir)
 
-`infodesk-api` · `jev-classificacao` · `nova-tool` · `evals-agente` · `refatorar-modulo` · `revisar-pr` · `ambiente-testes` — em `.claude/skills/`. Papéis de agente em `.claude/agents/`; briefing e isolamento em `docs/plano/05-agentes.md`; por que o harness é assim em `docs/plano/06-harness.md`.
+`infodesk-api` · `jev-classificacao` · `nova-tool` · `evals-agente` · `refatorar-modulo` · `revisar-pr` · `ambiente-testes` · `analise-infodesk` (mede o uso real do Infodesk, só agregados, para decidir roteamento) — em `.claude/skills/`. Papéis de agente em `.claude/agents/`; briefing e isolamento em `docs/plano/05-agentes.md`; por que o harness é assim em `docs/plano/06-harness.md`.
