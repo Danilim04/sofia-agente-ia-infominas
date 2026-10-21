@@ -24,21 +24,31 @@ conversa foi ENCERRADA no Infodesk (`conversation.finished`); a proposta de
 chamado pendente, a classificação e a identificação da conversa são limpas.
 O histórico de mensagens fica.
 
-Campos só AUMENTAM neste contrato (compatibilidade): `classificacao` e
-`acoes` são devolvidos vazios até E2.2 preenchê-los.
+Campos só AUMENTAM neste contrato (compatibilidade). `classificacao` e `acoes`
+saem do estado do grafo (nó `classificar`, E2.2):
+    "classificacao": {"intencao", "categoria", "prioridade", "confianca", "origem"}
+    "acoes": [{"tipo": "transferir", "origem": "frustracao"|"confianca"|"pedido_cliente",
+               "motivo": "..."}]
+
+`POST /classificar` (só evals/ops; header `X-Tools-Token` = `INFODESK_TOOLS_TOKEN`):
+roda o JEV/roteador SEM o grafo e SEM estado de conversa —
+    {"conversation_id", "mensagem", "historico": [{"autor": "cliente"|"sofia", "texto"}]}
+ → {"classificacao": {...5 chaves...}, "frustracao": {"score", "confianca"},
+    "seguranca": {"malicioso": bool, "fora_de_escopo": bool}, "esclarecimento": null|{...}}
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import logging
 import os
 import threading
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
@@ -50,6 +60,8 @@ from src.agent.falhas import (
     gerar_id_ocorrencia,
 )
 from src.agent.graph import build_graph
+from src.agent.llm import get_classifier_llm
+from src.classificacao import Mensagem, ServicoClassificacao, criar_servico_padrao
 from src.config import get_settings
 from src.observability.tracing import get_tracing_handler
 
@@ -110,9 +122,11 @@ class ErroChat(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str = ""
-    #: Ações para o gateway executar (ex.: {"tipo": "transferir", ...}) — E2.2.
+    #: Ações para o gateway executar: `{"tipo": "transferir", "origem":
+    #: "frustracao"|"confianca"|"pedido_cliente", "motivo": "..."}` (E2.2).
     acoes: list[dict[str, Any]] = Field(default_factory=list)
-    #: Classificação fixada para a conversa (auditoria/log do gateway) — E2.2.
+    #: Classificação fixada para a conversa (auditoria/log do gateway): as 5
+    #: chaves `intencao, categoria, prioridade, confianca, origem` (E2.2).
     classificacao: dict[str, Any] | None = None
     fontes: list[str] = Field(default_factory=list)
     erro: ErroChat | None = None
@@ -128,7 +142,7 @@ class EncerrarEpisodioRequest(BaseModel):
 #: `identificacao` entra por decisão desta etapa (ver PR da E1.3): o cache de
 #: identificação por telefone vive no gateway e volta em `contato` no próximo
 #: turno; aqui só o registro mascarado da conversa é descartado.
-CAMPOS_DO_EPISODIO = ("proposta_chamado", "classificacao", "identificacao")
+CAMPOS_DO_EPISODIO = ("proposta_chamado", "classificacao", "identificacao", "esclarecimentos")
 
 
 class EncerrarEpisodioResponse(BaseModel):
@@ -235,14 +249,16 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
         return _falha_do_turno(req, exc)
     resposta = ChatResponse(
         reply=_extrair_reply(valores),
+        acoes=[dict(a) for a in valores.get("acoes") or []],
         classificacao=valores.get("classificacao") or None,
         fontes=list(valores.get("fontes_usadas") or []),
     )
     logger.info(
-        "chat_response conversation_id=%s len_reply=%d fontes=%s",
+        "chat_response conversation_id=%s len_reply=%d fontes=%s acoes=%s",
         req.conversation_id,
         len(resposta.reply),
         resposta.fontes,
+        [a.get("origem") for a in resposta.acoes],
     )
     logger.debug(
         "chat_response_full conversation_id=%s reply=%r",
@@ -319,13 +335,26 @@ def _falha_do_turno(
 # ---------------------------------------------------------------------------
 
 _GRAPH: Any = None
+_SERVICO: ServicoClassificacao | None = None
+
+
+def _get_servico() -> ServicoClassificacao:
+    """Serviço de classificação (JEV + fallback LLM), único por processo.
+
+    Carrega a taxonomia (avisa no log enquanto `placeholder: true` — P1) e só
+    liga o JEV real se houver `TYPESAFE_API_KEY` (P8).
+    """
+    global _SERVICO
+    if _SERVICO is None:
+        _SERVICO = criar_servico_padrao(get_classifier_llm)
+    return _SERVICO
 
 
 def _get_graph():
     """Fallback lazy (testes chamam sem lifespan): grafo com MemorySaver."""
     global _GRAPH
     if _GRAPH is None:
-        _GRAPH = build_graph()
+        _GRAPH = build_graph(classificador=_get_servico())
     return _GRAPH
 
 
@@ -382,7 +411,12 @@ async def _lifespan(app: FastAPI):
             "(histórico NÃO sobrevive a restart)",
             exc,
         )
-    _GRAPH = build_graph(checkpointer=saver) if saver is not None else build_graph()
+    servico = _get_servico()
+    _GRAPH = (
+        build_graph(checkpointer=saver, classificador=servico)
+        if saver is not None
+        else build_graph(classificador=servico)
+    )
     _warmup_rag_em_background()
     try:
         yield
@@ -428,3 +462,82 @@ async def encerrar_episodio_endpoint(req: EncerrarEpisodioRequest):
             status_code=500,
             content={"status": "erro", "proposta_limpa": False, "campos_limpos": []},
         )
+
+
+# ---------------------------------------------------------------------------
+# POST /classificar — só evals/ops: JEV/roteador sem o grafo
+# ---------------------------------------------------------------------------
+
+
+class ItemHistorico(BaseModel):
+    autor: Literal["cliente", "sofia"]
+    texto: str
+
+
+class ClassificarRequest(BaseModel):
+    conversation_id: str
+    mensagem: str
+    historico: list[ItemHistorico] = Field(default_factory=list)
+
+
+class ClassificarResponse(BaseModel):
+    classificacao: dict[str, Any]
+    frustracao: dict[str, float]
+    seguranca: dict[str, bool]
+    #: `None` quando não precisa esclarecer; senão `{"necessario": true, "candidatas": [...]}`.
+    esclarecimento: dict[str, Any] | None = None
+
+
+async def classificar_mensagem(
+    servico: ServicoClassificacao, req: ClassificarRequest
+) -> ClassificarResponse:
+    """Classifica UMA mensagem (sem estado de conversa: sem pegajosidade nem esclarecimentos).
+
+    Função pura (serviço por injeção) — testável sem servidor/rede. O histórico
+    entra como contexto; PII é mascarada pelo `estado_para_jev` antes de sair.
+    """
+    mensagens = [Mensagem(i.autor, i.texto) for i in req.historico]
+    mensagens.append(Mensagem("cliente", req.mensagem))
+    c = await servico.classificar(mensagens, None)
+    cfg = servico.config
+    return ClassificarResponse(
+        classificacao=c.para_estado(),
+        frustracao={
+            "score": c.frustracao,
+            "confianca": round(float(c.confiancas.get("frustracao", 0.0)), 4),
+        },
+        seguranca={
+            "malicioso": c.malicioso >= cfg.limiar_malicioso_bloqueio,
+            "fora_de_escopo": c.fora_de_escopo >= cfg.limiar_fora_escopo,
+        },
+        esclarecimento=(
+            {"necessario": True, "candidatas": list(c.candidatas)} if c.precisa_esclarecer else None
+        ),
+    )
+
+
+def _token_valido(recebido: str | None) -> bool:
+    esperado = get_settings().infodesk_tools_token
+    return (
+        bool(esperado)
+        and recebido is not None
+        and hmac.compare_digest(recebido.encode(), esperado.encode())
+    )
+
+
+@app.post("/classificar", response_model=ClassificarResponse)
+async def classificar_endpoint(
+    req: ClassificarRequest,
+    x_tools_token: str | None = Header(default=None, alias="X-Tools-Token"),
+):
+    """Só para evals/ops. Fail-closed: sem `INFODESK_TOOLS_TOKEN` configurado, ou
+    com token errado, responde 403 — nunca fica aberto por esquecimento."""
+    if not _token_valido(x_tools_token):
+        return JSONResponse(status_code=403, content={"erro": "token inválido ou não configurado"})
+    try:
+        return await classificar_mensagem(_get_servico(), req)
+    except Exception as exc:  # nunca um 500 mudo
+        logger.exception(
+            "classificar_erro conversation_id=%s tipo=%s", req.conversation_id, type(exc).__name__
+        )
+        return JSONResponse(status_code=500, content={"erro": "falha ao classificar"})
