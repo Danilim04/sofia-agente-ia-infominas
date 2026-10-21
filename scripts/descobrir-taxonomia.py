@@ -35,7 +35,12 @@ PAUSA_S = 0.1  # rate limit do Desk: 300 req/min por IP (07, A4)
 TIMEOUT_S = 20
 
 # Nomes canônicos da Sofia → nome mais provável no Infodesk (confirmar por mesa).
-PRIORIDADES_CANONICAS = {"baixa": "Baixa", "media": "Média", "alta": "Alta", "urgente": "Urgente"}
+PRIORIDADES_CANONICAS: dict[str, list[str]] = {
+    "baixa": ["Baixa"],
+    "media": ["Média", "Media", "Normal"],
+    "alta": ["Alta"],
+    "urgente": ["Urgente", "Crítica", "Critica"],
+}
 
 Json = dict[str, Any]
 
@@ -149,8 +154,10 @@ def matriz_prioridades(mesas: list[Json]) -> dict[str, dict[str, str | None]]:
     out: dict[str, dict[str, str | None]] = {c: {} for c in PRIORIDADES_CANONICAS}
     for m in mesas:
         nomes = {slug(p.get("name", "")): p.get("name") for p in m.get("priorities") or []}
-        for canonica, esperado in PRIORIDADES_CANONICAS.items():
-            out[canonica][m["name"]] = nomes.get(slug(esperado))
+        for canonica, aliases in PRIORIDADES_CANONICAS.items():
+            out[canonica][m["name"]] = next(
+                (nomes[slug(a)] for a in aliases if slug(a) in nomes), None
+            )
     return out
 
 
@@ -165,63 +172,166 @@ def mesa_do_item(item: Json, mesas: list[Json]) -> Json | None:
     return donas[0] if len(donas) == 1 else None
 
 
-def montar_rascunho(inv: Json) -> tuple[str, list[str]]:
+def escolher_mesas(mesas: list[Json], pedidas: list[str], avisos: list[str]) -> list[Json]:
+    """Mesas pedidas em `--mesas` (comparação sem acento/caixa); vazio = todas."""
+    if not pedidas:
+        return mesas
+    por_slug = {slug(m["name"]): m for m in mesas}
+    out: list[Json] = []
+    for nome in pedidas:
+        m = por_slug.get(slug(nome))
+        if m is None:
+            avisos.append(f"mesa '{nome}' não existe entre as ativas: {[x['name'] for x in mesas]}")
+        else:
+            out.append(m)
+    return out
+
+
+def _nome_unico(base: str, usados: dict[str, int]) -> str:
+    if base in usados:
+        usados[base] += 1
+        return f"{base}_{usados[base]}"
+    usados[base] = 1
+    return base
+
+
+def _sufixo_tipo(itens: list[Json]) -> str:
+    tipos = {(i.get("ticketType") or "").upper() for i in itens}
+    if tipos == {"INCIDENT"}:
+        return "incidente"
+    if tipos == {"REQUEST"}:
+        return "solicitacao"
+    return ""
+
+
+def montar_rascunho(
+    inv: Json, pedidas: list[str] | None = None, por: str = "area"
+) -> tuple[str, list[str]]:
+    """Rascunho de taxonomia.
+
+    Sem `--mesas`: uma categoria por item de catálogo que tenha mesa inequívoca
+    (`defaultDeskId` ou catálogo de uma mesa só). Com `--mesas`: só os catálogos
+    dessas mesas, agrupados por `por` ("area" = uma categoria por área do catálogo,
+    com os itens listados em comentário para escolher o `catalogo`; "item" = uma por
+    item). O agrupamento por área é o ponto de partida realista: 10–20 categorias
+    cabem numa pergunta do JEV e na cabeça do cliente; 80 itens não.
+    """
     mesas: list[Json] = inv["desks"]
     catalogo: list[Json] = inv["catalog"]
     departamentos: list[Json] = inv["departments"]
     avisos: list[str] = []
     nomes_mesa = [m["name"] for m in mesas]
+    escolhidas = escolher_mesas(mesas, pedidas or [], avisos)
 
     triagem = next(
         (n for n in nomes_mesa if slug(n) == "abertura_de_ticket"),
         nomes_mesa[0] if nomes_mesa else "TODO",
     )
     dep_padrao = departamentos[0]["name"] if len(departamentos) == 1 else "TODO"
+    deps = ", ".join(d.get("name", "?") for d in departamentos) or "nenhum"
 
     matriz = matriz_prioridades(mesas)
     linhas: list[str] = [
         "# RASCUNHO gerado por scripts/descobrir-taxonomia.py em "
         f"{inv['coletado_em']} a partir de {inv['base_url']}",
+        f"# Mesas: {', '.join(m['name'] for m in escolhidas) if pedidas else 'todas (sem --mesas)'}; agrupamento: {por if pedidas else 'item com mesa inequívoca'}.",
         "# Formato: docs/plano/02-classificacao.md. Regras lidas no código: docs/infodesk/10.",
         "# Cada 'TODO' é decisão da Infominas (10, §8). Revisar as categorias contra o que o",
         "# cliente escreve no WhatsApp: item de catálogo é a visão do técnico, não a do cliente.",
         "placeholder: true   # remover só depois de preencher todos os TODO (E5.1)",
         f"versao: {datetime.now(UTC).date().isoformat()}",
         f'mesa_triagem: "{triagem}"   # TODO(P11): confirmar destino de "indefinida"',
-        f'departamento_humano_padrao: "{dep_padrao}"   # TODO(P11): destino de toda transferência',
+        f'departamento_humano_padrao: "{dep_padrao}"   # TODO(P11): destino de toda transferência; departamentos de chat: {deps}',
         "",
         "categorias:",
     ]
     usados: dict[str, int] = {}
     categorias = 0
-    for item in catalogo:
-        mesa = mesa_do_item(item, mesas)
-        if mesa is None:
-            avisos.append(
-                f"item '{item.get('name')}' ({item.get('code') or item.get('id')}) sem mesa padrão: fora do rascunho"
-            )
-            continue
-        nome = slug(item.get("name", ""))
-        if nome in usados:
-            usados[nome] += 1
-            nome = f"{nome}_{usados[nome]}"
-        else:
-            usados[nome] = 1
-        descricao = (item.get("description") or item.get("name") or "").strip().replace('"', "'")
-        area = (item.get("area") or {}).get("name") or "—"
-        tipo = item.get("ticketType") or "tipo —"
-        linhas += [
+
+    def bloco(
+        nome: str, descricao: str, mesa: Json, itens: list[Json], area: str, comentario_extra: str
+    ) -> list[str]:
+        desc = descricao.strip().replace('"', "'")
+        tipos = ", ".join(sorted({i.get("ticketType") or "—" for i in itens}))
+        cat = (
+            [f'    catalogo: "{itens[0].get("name")}"   # catalogItemId {itens[0].get("id")}']
+            if len(itens) == 1
+            else [
+                "    # catalogo: OPCIONAL — escolher UM item abaixo (nome exato) ou omitir:",
+                *[f"    #   - {i.get('name')}   # {i.get('id')}" for i in itens],
+            ]
+        )
+        faltas = [c for c in PRIORIDADES_CANONICAS if matriz[c].get(mesa["name"]) is None]
+        nota_pr = (
+            f"nesta mesa faltam: {', '.join(faltas)}" if faltas else "todas existem nesta mesa"
+        )
+        return [
             f"  {nome}:",
-            f'    descricao: "{descricao}"   # TODO: reescrever na linguagem do cliente',
+            f'    descricao: "{desc}"   # TODO: reescrever na linguagem do cliente',
             '    exemplos: ["TODO frase real do cliente", "TODO outra"]',
             "    nao_e: []",
-            f'    mesa: "{mesa["name"]}"   # {tipo}; área: {area}',
-            f'    catalogo: "{item.get("name")}"   # catalogItemId {item.get("id")}',
-            f'    departamento: "{dep_padrao}"   # TODO(D1): departamento do handoff',
-            "    prioridade: media   # TODO: ver matriz prioridade × mesa em inventario.md",
+            f'    mesa: "{mesa["name"]}"   # {tipos}; área: {area}{comentario_extra}',
+            *cat,
+            f'    departamento: "{dep_padrao}"   # TODO(D1): departamento do handoff ({deps})',
+            f"    prioridade: media   # TODO: {nota_pr} (matriz em inventario.md)",
             "",
         ]
-        categorias += 1
+
+    if pedidas:
+        # Colisão de área entre mesas (ex.: "E-mail" em Incidente e em Solicitações): sufixo pelo tipo.
+        contagem_area: dict[str, int] = {}
+        for m in escolhidas:
+            for a in {
+                (i.get("area") or {}).get("name") or "sem_area" for i in m.get("catalogItems") or []
+            }:
+                contagem_area[slug(a)] = contagem_area.get(slug(a), 0) + 1
+        for m in escolhidas:
+            itens_mesa: list[Json] = m.get("catalogItems") or []
+            if not itens_mesa:
+                avisos.append(
+                    f"mesa '{m['name']}' não usa catálogo: categorias dela devem ser escritas à mão"
+                )
+                continue
+            if por == "item":
+                for item in itens_mesa:
+                    area = (item.get("area") or {}).get("name") or "—"
+                    nome = _nome_unico(slug(item.get("name", "")), usados)
+                    linhas += bloco(
+                        nome, item.get("description") or item.get("name") or "", m, [item], area, ""
+                    )
+                    categorias += 1
+                continue
+            por_area: dict[str, list[Json]] = {}
+            for item in itens_mesa:
+                por_area.setdefault((item.get("area") or {}).get("name") or "sem_area", []).append(
+                    item
+                )
+            for area, itens in por_area.items():
+                base = slug(area)
+                if contagem_area.get(base, 0) > 1:
+                    base = f"{base}_{_sufixo_tipo(itens) or slug(m['name'])}"
+                nome = _nome_unico(base, usados)
+                descricao = (
+                    f"{area}: "
+                    + "; ".join(i.get("name", "") for i in itens[:6])
+                    + (" …" if len(itens) > 6 else "")
+                )
+                linhas += bloco(nome, descricao, m, itens, area, f" ({len(itens)} itens)")
+                categorias += 1
+    else:
+        for item in catalogo:
+            mesa = mesa_do_item(item, mesas)
+            if mesa is None:
+                avisos.append(
+                    f"item '{item.get('name')}' ({item.get('code') or item.get('id')}) sem mesa inequívoca: fora do rascunho (use --mesas)"
+                )
+                continue
+            nome = _nome_unico(slug(item.get("name", "")), usados)
+            area = (item.get("area") or {}).get("name") or "—"
+            linhas += bloco(
+                nome, item.get("description") or item.get("name") or "", mesa, [item], area, ""
+            )
+            categorias += 1
     linhas += [
         "  indefinida:",
         '    descricao: "Não foi possível determinar: mensagem vaga, só saudação, mídia sem texto"',
@@ -233,13 +343,23 @@ def montar_rascunho(inv: Json) -> tuple[str, list[str]]:
         "",
         "prioridades:   # nome canônico → NOME no Infodesk; o gateway resolve o UUID por mesa (02, P4)",
     ]
-    for canonica, esperado in PRIORIDADES_CANONICAS.items():
-        faltam = [m for m, achado in matriz[canonica].items() if achado is None]
-        nota = "presente em todas as mesas" if not faltam else f"AUSENTE em: {', '.join(faltam)}"
-        linhas.append(f'  {canonica}: "{esperado}"   # {nota}')
+    alvo = escolhidas if pedidas else mesas
+    for canonica, aliases in PRIORIDADES_CANONICAS.items():
+        achados = [matriz[canonica].get(m["name"]) for m in alvo]
+        nomes_achados = sorted({a for a in achados if a})
+        faltam = [m["name"] for m, a in zip(alvo, achados, strict=True) if a is None]
+        escolhido = nomes_achados[0] if len(nomes_achados) == 1 else aliases[0]
+        nota = (
+            f"grafias diferentes por mesa: {nomes_achados}; " if len(nomes_achados) > 1 else ""
+        ) + (
+            "presente em todas as mesas escolhidas"
+            if not faltam
+            else f"AUSENTE em: {', '.join(faltam)}"
+        )
+        linhas.append(f'  {canonica}: "{escolhido}"   # {nota}')
     if categorias == 0:
         avisos.append(
-            "nenhum item de catálogo com mesa: o rascunho só tem 'indefinida' — mapear categorias à mão a partir das mesas"
+            "nenhuma categoria gerada: use --mesas com as mesas que a Sofia vai usar (ex.: --mesas Incidente,Solicitações)"
         )
     return "\n".join(linhas) + "\n", avisos
 
@@ -339,21 +459,43 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("INFODESK_BASE_URL", ""),
         help="raiz da API (default: $INFODESK_BASE_URL)",
     )
+    parser.add_argument(
+        "--mesas",
+        default="",
+        help='mesas que a Sofia vai usar, separadas por vírgula (ex.: "Incidente,Solicitações"); vazio = heurística por item',
+    )
+    parser.add_argument(
+        "--por",
+        choices=["area", "item"],
+        default="area",
+        help="com --mesas: uma categoria por área do catálogo (default) ou por item",
+    )
+    parser.add_argument(
+        "--de-arquivo",
+        default="",
+        help="reusa um inventario.json já coletado em vez de chamar a API (só regenera o rascunho)",
+    )
     args = parser.parse_args(argv)
-
-    api_key = os.environ.get("INFODESK_API_KEY", "").strip()
-    if not args.base_url.strip() or not api_key:
-        print(
-            "defina INFODESK_BASE_URL e INFODESK_API_KEY no ambiente (a chave nunca vai por argumento)",
-            file=sys.stderr,
-        )
-        return 2
+    pedidas = [m.strip() for m in args.mesas.split(",") if m.strip()]
 
     def log(msg: str) -> None:
         print(msg, file=sys.stderr)
 
+    if args.de_arquivo:
+        inv = json.loads(Path(args.de_arquivo).read_text(encoding="utf-8"))
+        log(f"inventário lido de {args.de_arquivo} (coletado em {inv.get('coletado_em')})")
+    else:
+        api_key = os.environ.get("INFODESK_API_KEY", "").strip()
+        if not args.base_url.strip() or not api_key:
+            print(
+                "defina INFODESK_BASE_URL e INFODESK_API_KEY no ambiente (a chave nunca vai por argumento)",
+                file=sys.stderr,
+            )
+            return 2
+        inv = None
     try:
-        inv = coletar(Cliente(args.base_url, api_key), log)
+        if inv is None:
+            inv = coletar(Cliente(args.base_url, api_key), log)
     except ErroAPI as exc:
         dica = {
             401: "chave ausente/inválida/revogada",
@@ -365,7 +507,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"falha: {exc}" + (f" — {dica}" if dica else ""), file=sys.stderr)
         return 1
 
-    rascunho, avisos = montar_rascunho(inv)
+    rascunho, avisos = montar_rascunho(inv, pedidas, args.por)
     saida = Path(args.saida)
     saida.mkdir(parents=True, exist_ok=True)
     (saida / "inventario.json").write_text(
