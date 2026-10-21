@@ -178,7 +178,14 @@ func TestClient_CacheMesaECatalogo(t *testing.T) {
 		case PrefixoRotas + "/desks/m2":
 			_, _ = io.WriteString(w, `{"id":"m2","name":"Financeiro","priorities":[]}`)
 		case PrefixoRotas + "/catalog":
-			_, _ = io.WriteString(w, `[{"id":"i-`+r.URL.Query().Get("deskId")+`","name":"Item"}]`)
+			switch r.URL.Query().Get("deskId") {
+			case "m1":
+				_, _ = io.WriteString(w, `[{"id":"i-m1","name":"Item"}]`)
+			case "m2":
+				_, _ = io.WriteString(w, `[{"id":"i-m2","name":"Item"}]`)
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

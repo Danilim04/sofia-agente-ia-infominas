@@ -331,9 +331,13 @@ func TestMensagem_TemMidia(t *testing.T) {
 }
 
 func TestMensagem_DoCliente(t *testing.T) {
-	for sender, quer := range map[string]bool{"CLIENT": true, "AGENT": false, "SYSTEM": false, "client": false, " CLIENT ": false, "": false} {
-		if got := (Mensagem{Sender: sender}).DoCliente(); got != quer {
-			t.Errorf("DoCliente(%q) = %v, quer %v", sender, got, quer)
+	casos := []struct {
+		sender string
+		quer   bool
+	}{{"CLIENT", true}, {"AGENT", false}, {"SYSTEM", false}, {"client", false}, {" CLIENT ", false}, {"", false}}
+	for _, cs := range casos {
+		if got := (Mensagem{Sender: cs.sender}).DoCliente(); got != cs.quer {
+			t.Errorf("DoCliente(%q) = %v, quer %v", cs.sender, got, cs.quer)
 		}
 	}
 }

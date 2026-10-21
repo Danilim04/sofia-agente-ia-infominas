@@ -214,17 +214,17 @@ func TestVerificar_VetorConhecido(t *testing.T) {
 	// "<timestamp>.<corpo>" — protege contra errar o formato da mensagem
 	// assinada nos dois lados (pacote e teste).
 	const (
-		secret = "whsec_vetor"
-		ts     = "1760875200"
-		corpo  = `{"id":"evt_000000000123","seq":123,"event":"ping"}`
-		vetor  = "4a47fc551425290c994229ef78e0a6468f9b318dcd592f9e46abbe9236425fbb"
+		segredoVetor = "whsec_vetor"
+		ts           = "1760875200"
+		corpo        = `{"id":"evt_000000000123","seq":123,"event":"ping"}`
+		vetor        = "4a47fc551425290c994229ef78e0a6468f9b318dcd592f9e46abbe9236425fbb"
 	)
 	agora := time.Unix(1760875200+30, 0)
-	v := Verificador{Secret: secret, Now: func() time.Time { return agora }}
+	v := Verificador{Secret: segredoVetor, Now: func() time.Time { return agora }}
 	if err := v.Verificar(ts, []byte(corpo), "sha256="+vetor); err != nil {
 		t.Errorf("vetor conhecido deveria verificar: %v", err)
 	}
-	if got := Assinar(secret, ts, []byte(corpo)); got != "sha256="+vetor {
+	if got := Assinar(segredoVetor, ts, []byte(corpo)); got != "sha256="+vetor {
 		t.Errorf("Assinar = %q", got)
 	}
 	if err := v.Verificar(ts, []byte(corpo+" "), "sha256="+vetor); !errors.Is(err, ErrAssinaturaInvalida) {
