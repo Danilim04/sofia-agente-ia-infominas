@@ -21,10 +21,10 @@ no Contrato B herdado e registradas aqui para não regredirem):
   e não interrompe os demais; a reexecução converge (o hash só é registrado
   junto com os chunks, na mesma transação).
 
-CLI: `python -m src.rag.sync [--fonte local] [--full] [--dry-run]
+CLI: `python -m src.rag.sync [--fonte local|api] [--full] [--dry-run]
 [--remover-ausentes] [--permitir-remocao-em-massa]` — exit 0 só com ciclo
-100% limpo (cron alerta em exit != 0). A fonte da Infominas (E3.2, pendência
-P6) entra como nova opção de `--fonte` sem mudar o motor.
+100% limpo (cron alerta em exit != 0). `--fonte api` é a API da Infominas
+(stub configurável por `DOCS_API_*`, pendência P6) e não muda o motor.
 """
 
 from __future__ import annotations
@@ -312,18 +312,27 @@ def _log_resumo(r: ResultadoSync) -> None:
 
 
 def _montar_fonte(nome: str, args: argparse.Namespace) -> FonteDocumentacao:
-    from src.config import get_settings
 
-    settings = get_settings()
     if nome == "local":
-        from src.rag.fonte import FonteDocsLocais
+        from src.rag.fonte import DIR_DOCS_BASE, FonteDocsLocais
 
-        return FonteDocsLocais(args.docs_dir or settings.docs_dir)
+        # `docs_dir` do ambiente só vale se alguém o apontou de propósito: o
+        # default de `Settings.docs_dir` (./docs) não é a base placeholder.
+        return FonteDocsLocais(args.docs_dir or DIR_DOCS_BASE)
+    if nome == "api":
+        from src.rag.fonte import FonteAPIInfominas
+
+        # TODO(P6): stub até a API/portal de documentos da Infominas existir.
+        try:
+            return FonteAPIInfominas()
+        except ErroDeFonte as exc:
+            raise SystemExit(f"sync_abortado motivo={exc}") from exc
     raise SystemExit(f"fonte desconhecida: {nome}")
 
 
 def _cli() -> None:
     from src.config import get_settings
+    from src.rag.ingest import COLLECTION_NAME
     from src.rag.retriever import get_embeddings
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -332,14 +341,20 @@ def _cli() -> None:
     parser = argparse.ArgumentParser(
         description="Sincroniza a base de conhecimento no índice pgvector."
     )
-    parser.add_argument("--fonte", choices=["local"], default="local")
+    parser.add_argument(
+        "--fonte",
+        choices=["local", "api"],
+        default="local",
+        help="local = agente-ia/docs/base (placeholder); api = API da Infominas "
+        "(stub, DOCS_API_*; pendência P6).",
+    )
     from pathlib import Path as _Path
 
     parser.add_argument(
         "--docs-dir",
         type=_Path,
         default=None,
-        help="Diretório dos .md (só fonte=local; default: DOCS_DIR).",
+        help="Diretório dos .md (só fonte=local; default: agente-ia/docs/base).",
     )
     parser.add_argument(
         "--full",
@@ -378,7 +393,9 @@ def _cli() -> None:
     indice = PgIndice.conectar(settings.pgvector_url)
     embeddings = get_embeddings()
     logger.info(
-        "sync_embeddings provider=%s modelo=%s",
+        "sync_inicio colecao=%s fonte=%s embeddings_provider=%s modelo=%s",
+        COLLECTION_NAME,
+        args.fonte,
         settings.embeddings_provider,
         settings.embeddings_model,
     )

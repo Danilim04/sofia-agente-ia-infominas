@@ -236,7 +236,7 @@ class PgIndice:
                 (doc_id, hash_listagem),
             )
 
-    # -- diagnóstico (usado por src.rag.verificar) --------------------------
+    # -- diagnóstico (contagens para conferência manual) --------------------------
 
     def contagens(self) -> dict[str, int]:
         vivos = self._conn.execute(
