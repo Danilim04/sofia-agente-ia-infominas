@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -536,6 +537,142 @@ func TestStoreAtualizarConversaConcorrenteNaoPerdeEscrita(t *testing.T) {
 			}
 			if c, _ := st.ObterConversa(ctx, outra); c != nil {
 				t.Fatalf("não podia ficar linha: %+v", c)
+			}
+		})
+	}
+}
+
+// TestStoreDesmarcarEventosDepois: a recuperação de crash do reconciliador
+// desfaz o dedup só dos eventos com seq acima do ponto dado; os de seq menor e
+// as chaves genéricas (seq 0, "msg:<id>") ficam.
+func TestStoreDesmarcarEventosDepois(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			// seqs altos: o Postgres de teste pode ser compartilhado.
+			base := time.Now().UnixNano()
+			antes, depois, msg := unico("evt-antes"), unico("evt-depois"), unico("msg")
+			for id, seq := range map[string]int64{antes: base + 1, depois: base + 2} {
+				if fresh, err := st.MarkEvent(ctx, id, seq); err != nil || !fresh {
+					t.Fatalf("marcar %s: fresh=%v err=%v", id, fresh, err)
+				}
+			}
+			if fresh, err := st.MarkProcessed(ctx, msg); err != nil || !fresh {
+				t.Fatalf("marcar chave genérica: fresh=%v err=%v", fresh, err)
+			}
+			n, err := st.DesmarcarEventosDepois(ctx, base+1)
+			if err != nil || n < 1 {
+				t.Fatalf("desmarcar: n=%d err=%v", n, err)
+			}
+			if fresh, _ := st.MarkEvent(ctx, depois, base+2); !fresh {
+				t.Fatal("o evento de seq acima do ponto devia voltar a ser novo")
+			}
+			if fresh, _ := st.MarkEvent(ctx, antes, base+1); fresh {
+				t.Fatal("o evento de seq no ponto (ou abaixo) devia continuar visto")
+			}
+			if fresh, _ := st.MarkProcessed(ctx, msg); fresh {
+				t.Fatal("chave genérica (seq 0) não pode ser desmarcada")
+			}
+		})
+	}
+}
+
+// TestStoreTicketsPendentesEFalhar: TicketsPendentes lista só os pendentes,
+// do mais antigo ao mais novo; FalharTicket só age sobre pendente.
+func TestStoreTicketsPendentesEFalhar(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			a, b, c := unico("pend-a"), unico("pend-b"), unico("pend-c")
+			for _, chave := range []string{a, b, c} {
+				if _, _, err := st.InserirTicketPendente(ctx, &Ticket{Chave: chave, ConversationID: "conv-" + chave}); err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(2 * time.Millisecond) // created_at em ms: ordem estável
+			}
+			numero := int(time.Now().UnixNano()%1_000_000_000) + 1
+			if err := st.ConcluirTicket(ctx, b, numero, "{}", true); err != nil {
+				t.Fatal(err)
+			}
+			pend, err := st.TicketsPendentes(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var chaves []string
+			for _, p := range pend {
+				if p.Chave == a || p.Chave == b || p.Chave == c {
+					chaves = append(chaves, p.Chave)
+				}
+			}
+			if len(chaves) != 2 || chaves[0] != a || chaves[1] != c {
+				t.Fatalf("pendentes (a, c) em ordem de criação, vieram %v", chaves)
+			}
+			if ok, err := st.FalharTicket(ctx, a); err != nil || !ok {
+				t.Fatalf("falhar pendente: ok=%v err=%v", ok, err)
+			}
+			if ok, _ := st.FalharTicket(ctx, a); ok {
+				t.Fatal("falhar de novo não pode agir")
+			}
+			if ok, _ := st.FalharTicket(ctx, b); ok {
+				t.Fatal("ticket já aberto não pode virar falha")
+			}
+			if got, _ := st.ObterTicket(ctx, a); got == nil || got.Status != TicketFalha {
+				t.Fatalf("a devia estar em falha: %+v", got)
+			}
+			if got, _ := st.ObterTicket(ctx, b); got == nil || got.Status != TicketAberto {
+				t.Fatalf("b devia continuar aberto: %+v", got)
+			}
+		})
+	}
+}
+
+// TestStoreConversasSemResposta: só entra no vigia a conversa do bot externo,
+// em estado bot, com a mensagem do cliente mais velha que o corte e sem
+// resposta nossa depois dela.
+func TestStoreConversasSemResposta(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			agora := time.Now()
+			msg := agora.Add(-10 * time.Minute)
+			corte := agora.Add(-5 * time.Minute)
+			novas := map[string]func(c *Conversa){
+				unico("sem-resposta"): func(c *Conversa) { c.UltimaMsgEm = msg },
+				unico("respondida"):   func(c *Conversa) { c.UltimaMsgEm = msg; c.UltimaRespostaEm = msg.Add(time.Minute) },
+				unico("resp-antiga"):  func(c *Conversa) { c.UltimaMsgEm = msg; c.UltimaRespostaEm = msg.Add(-2 * time.Minute) },
+				// skew: resposta nossa "antes" da mensagem por diferença de relógio, dentro da folga
+				unico("skew"):          func(c *Conversa) { c.UltimaMsgEm = msg; c.UltimaRespostaEm = msg.Add(-30 * time.Second) },
+				unico("recente"):       func(c *Conversa) { c.UltimaMsgEm = agora.Add(-time.Minute) },
+				unico("sem-msg"):       func(*Conversa) {},
+				unico("transferida"):   func(c *Conversa) { c.UltimaMsgEm = msg; c.Estado = EstadoTransferida },
+				unico("humano-conduz"): func(c *Conversa) { c.UltimaMsgEm = msg; c.HandledBy = "AGENT" },
+			}
+			for id, ajusta := range novas {
+				if _, err := st.AtualizarConversa(ctx, id, func(c *Conversa, _ bool) bool {
+					c.Estado, c.HandledBy = EstadoBot, HandledByBotExterno
+					ajusta(c)
+					return true
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := st.ConversasSemResposta(ctx, corte, time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			achadas := map[string]bool{}
+			for _, c := range got {
+				if _, nossa := novas[c.ID]; nossa {
+					achadas[c.ID] = true
+				}
+			}
+			for id := range achadas {
+				if !strings.HasPrefix(id, "sem-resposta") && !strings.HasPrefix(id, "resp-antiga") {
+					t.Fatalf("conversa %s não devia ser candidata do vigia", id)
+				}
+			}
+			if len(achadas) != 2 {
+				t.Fatalf("esperava sem-resposta e resp-antiga, vieram %v", achadas)
 			}
 		})
 	}
