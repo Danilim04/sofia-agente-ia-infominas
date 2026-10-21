@@ -284,15 +284,19 @@ tal como sai (testado com o inventário real de 2026-10-21: 25 categorias).
 
 ## 8. O que o código NÃO responde (perguntar à Infominas)
 
-| # | Pergunta | Onde se vê no Desk | Impacto |
-|---|---|---|---|
-| 1 | Chave de API para a Sofia com escopos `tickets:*`, `conversations:*`, `contacts:read`, `events:read` e a flag **"Conduz o atendimento (bot externo)"**; segredo `whsec_` | *Configurações › Integrações* | tudo; sem ela o script do §7 não roda |
-| 2 | O toggle **"Exigir campos na abertura do chamado"** está ligado? | *Configurações* (org) | T10: se ligado, a Sofia precisa de cliente, solicitante, item de catálogo e prioridade em todo ticket — e cliente não identificado **não consegue abrir** |
-| 3 | Alguma mesa de destino tem **campo personalizado obrigatório**? | configuração de cada mesa (builder de campos) | T10: a API recusa o ticket sem avisar antes |
-| 4 | Quais **mesas** recebem chamado vindo do WhatsApp de cliente externo (Incidente Externo? Solicitações Externo? Abertura de Ticket?) e qual **catálogo** vale onde há par `X` / `X_New` | 09 + saída do script | D1 / P1: categorias e `mesa` da taxonomia |
-| 5 | Para cada categoria, qual **departamento de chat** recebe o handoff, e qual é o **departamento humano padrão** | *Grupos de serviço* / saída do script | D6 / P11 |
-| 6 | Os nomes de prioridade existem em **todas** as mesas de destino? (a matriz do `inventario.md` mostra) | saída do script | P4 |
-| 7 | Encerrar a conversa ao abrir o ticket (`finish: true`, com a mensagem configurada e pedido de avaliação) ou manter aberta + handoff? | decisão de produto | C6 / `TICKET_FINISH_CONVERSA` |
-| 8 | Valores de **inatividade do WhatsApp** (`finishOnInactivityWhatsapp`, minutos) e de **horário** (`blockChatsOffHours`, `businessHours`) | *Configurações de chat* | N1 / P7 |
-| 9 | Existe **ambiente de homologação** com chave própria? | — | A1: hoje tudo é produção |
-| 10 | Política de identificação: telefone conhecido dispensa CPF? cadastrar desconhecido via `POST /requesters`? | decisão de produto | N3 / E5.3 |
+Estado em 2026-10-21, depois de ler a API (script do §7) e o painel do Desk
+com usuário administrador. Linhas marcadas **RESPONDIDO** não precisam ir à
+Infominas; o que resta é decisão de negócio.
+
+| # | Pergunta | Onde se vê no Desk | Impacto | Estado |
+|---|---|---|---|---|
+| 1 | Chave de API para a Sofia com escopos `tickets:*`, `conversations:*`, `contacts:read`, `events:read` e a flag **"Conduz o atendimento (bot externo)"**; segredo `whsec_` | *Configurações gerais › aba Integrações* (a página "Integrações" do menu é outra: conexões Microsoft/firewall) | tudo; sem ela o script do §7 não roda | **RESPONDIDO**: chave `sofia-agente-ia` criada com escopo `*`, **sem** a flag de bot externo (ligar só na homologação: com ela, toda conversa nova de WhatsApp nasce com o bot e os atendentes não são avisados) |
+| 2 | O toggle **"Exigir campos na abertura do chamado"** está ligado? | *Configurações gerais › Segurança* | T10: se ligado, a Sofia precisa de cliente, solicitante, item de catálogo e prioridade em todo ticket — e cliente não identificado **não consegue abrir** | **RESPONDIDO**: **desligado**. Só `deskId` e `title` são obrigatórios. Reconferir antes do smoke |
+| 3 | Alguma mesa de destino tem **campo personalizado obrigatório**? | configuração de cada mesa (builder de campos) | T10: a API recusa o ticket sem avisar antes | **RESPONDIDO**: nenhuma em `Incidente`, `Solicitações`, `Suporte Tecnico N1`, `Abertura de Ticket`, `Financeiro` |
+| 4 | Quais **mesas** recebem chamado vindo do WhatsApp de cliente externo e qual **catálogo** vale onde há par `X` / `X_New` | 09 + saída do script | D1 / P1: categorias e `mesa` da taxonomia | ABERTO. Fato (09): só `Incidente` e `Solicitações` estão configuradas; as mesas "Externo/Interno/Remoto" são cascas. Proposta: `Incidente` (quebrou), `Solicitações` (pedido), `Financeiro` (cobrança); triagem em `Suporte Tecnico N1` |
+| 5 | Para cada categoria, qual **departamento de chat** recebe o handoff, e qual é o **departamento humano padrão** | *Grupos de serviço* / saída do script | D6 / P11 | parcial: os departamentos são `Técnicos`, `Administrativo / Financeiro`, `Comercial`. **Falta** a escolha por categoria e o padrão (proposta: `Técnicos`) |
+| 6 | Os nomes de prioridade existem em **todas** as mesas de destino? | saída do script / tela de cada mesa | P4 | **RESPONDIDO**: `Incidente` e `Solicitações`: `Baixa`, `Media`, `Alta`, `Crítica`; `Suporte Tecnico N1`: `Baixa`, `Media`, `Alta`; `Financeiro`: `Normal`. Taxonomia: `media: "Media"`, `urgente: "Crítica"`. **Falta** só a prioridade padrão na dúvida (proposta: `Media`) |
+| 7 | Encerrar a conversa ao abrir o ticket (`finish: true`, com a mensagem configurada e pedido de avaliação) ou manter aberta + handoff? | decisão de produto | C6 / `TICKET_FINISH_CONVERSA` | ABERTO. Fato (painel): "Solicitar avaliação ao finalizar" está **ligado**, então `finish: true` também dispara a pesquisa |
+| 8 | Valores de **inatividade do WhatsApp** e de **horário** | *Configurações de chat*; expediente de cada mesa | N1 / P7 | parcial: inatividade do WhatsApp **desligada** (o Desk não finaliza sozinho); expediente das mesas `Incidente`/`Solicitações`/`Abertura de Ticket` **seg–sex 08:00–18:00**; "Abrir pré-ticket fora do expediente" ligado. **Falta** confirmar o horário humano do WhatsApp e a mensagem fora dele |
+| 9 | Existe **ambiente de homologação** com chave própria? | — | A1: hoje tudo é produção | ABERTO |
+| 10 | Política de identificação: telefone conhecido dispensa CPF? cadastrar desconhecido via `POST /requesters`? | decisão de produto | N3 / E5.3 | ABERTO. Fato: com o toggle da linha 2 desligado, cliente não identificado **consegue** abrir chamado; exigir CPF é regra nossa |
