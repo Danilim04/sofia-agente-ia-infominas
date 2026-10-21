@@ -1,6 +1,7 @@
 package infodesk
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -160,6 +161,7 @@ func Transitorio(err error) bool { return errors.Is(err, ErrTransitorio) }
 const (
 	corpoErroLeituraMax = 8 << 10 // bytes lidos da resposta de erro
 	corpoErroMax        = 500     // runas do trecho higienizado
+	retryAfterMax       = 24 * time.Hour
 )
 
 var (
@@ -169,6 +171,10 @@ var (
 	// HTTP (3 dígitos) e UUIDs com segmentos curtos continuam legíveis.
 	reEmail  = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
 	reNumero = regexp.MustCompile(`\d(?:[\s().\-/]{0,2}\d){6,}`)
+	// reSegredo mascara chave de API (`ik_live_…`), segredo de webhook
+	// (`whsec_…`) e credencial `Bearer …` que o servidor eventualmente ecoe
+	// na mensagem (comum em 401).
+	reSegredo = regexp.MustCompile(`(?i)\b(?:ik|sk|whsec)_[A-Za-z0-9_]+|\bbearer\s+\S+`)
 )
 
 // reCode é o formato aceito para `code`: caixa alta com _ (SCREAMING_SNAKE).
@@ -195,15 +201,23 @@ func extrairCode(raw []byte) string {
 // (06-erros.md) — ou usa o corpo cru quando não é esse formato — e devolve o
 // texto higienizado para log. O formato do array `errors` de VALIDATION_ERROR
 // não está documentado (docs/infodesk/06): `message` pode ser string ou lista;
-// ambos são aceitos, `errors` é ignorado.
+// ambos são aceitos, e o array `errors` (formato livre) entra compactado e
+// higienizado no fim do texto — é o que permite investigar um 400 em produção
+// (docs/infodesk/07 item T10).
 func higienizarCorpo(raw []byte) string {
 	texto := string(raw)
 	var env struct {
-		Message any `json:"message"`
+		Message any             `json:"message"`
+		Errors  json.RawMessage `json:"errors"`
 	}
-	if err := json.Unmarshal(raw, &env); err == nil && env.Message != nil {
-		if m := mensagemComoTexto(env.Message); m != "" {
-			texto = m
+	if err := json.Unmarshal(raw, &env); err == nil {
+		if env.Message != nil {
+			if m := mensagemComoTexto(env.Message); m != "" {
+				texto = m
+			}
+		}
+		if e := bytes.TrimSpace(env.Errors); len(e) > 0 && !bytes.Equal(e, []byte("null")) {
+			texto += " [errors: " + string(e) + "]"
 		}
 	}
 	return higienizarTexto(texto)
@@ -226,9 +240,10 @@ func mensagemComoTexto(v any) string {
 	}
 }
 
-// higienizarTexto mascara e-mails e números longos, achata controle/espaços
-// numa linha e corta em corpoErroMax runas.
+// higienizarTexto mascara segredos, e-mails e números longos, achata
+// controle/espaços numa linha e corta em corpoErroMax runas.
 func higienizarTexto(s string) string {
+	s = reSegredo.ReplaceAllLiteralString(s, "[segredo]")
 	s = reEmail.ReplaceAllLiteralString(s, "[email]")
 	s = reNumero.ReplaceAllLiteralString(s, "[numero]")
 	s = strings.Map(func(r rune) rune {
@@ -260,7 +275,8 @@ func analisarRetryAfter(valor string, agora time.Time) time.Duration {
 		if seg < 0 {
 			return 0
 		}
-		return time.Duration(seg) * time.Second
+		// Teto só para não estourar time.Duration com valor absurdo.
+		return time.Duration(min(seg, int(retryAfterMax/time.Second))) * time.Second
 	}
 	if quando, err := http.ParseTime(valor); err == nil {
 		if d := quando.Sub(agora); d > 0 {

@@ -177,7 +177,7 @@ func TestClient_ErrosHTTP(t *testing.T) {
 		{"404", http.StatusNotFound, `{"statusCode":404,"code":"NOT_FOUND","message":"Não encontrado"}`, CodeNotFound, false, "Não encontrado"},
 		{"429", http.StatusTooManyRequests, `{"statusCode":429,"code":"RATE_LIMITED","message":"Limite"}`, CodeRateLimited, true, "Limite"},
 		{"500", http.StatusInternalServerError, `{"statusCode":500,"code":"INTERNAL_ERROR","message":"erro"}`, CodeInternalError, true, "erro"},
-		{"400Validation", http.StatusBadRequest, `{"statusCode":400,"code":"VALIDATION_ERROR","message":"corpo inválido","errors":[{"campo":"title"}]}`, CodeValidationError, false, "corpo inválido"},
+		{"400Validation", http.StatusBadRequest, `{"statusCode":400,"code":"VALIDATION_ERROR","message":"corpo inválido","errors":[{"campo":"title"}]}`, CodeValidationError, false, `corpo inválido [errors: [{"campo":"title"}]]`},
 		{"400InvalidReference", http.StatusBadRequest, `{"statusCode":400,"code":"INVALID_REFERENCE","message":"deskId inexistente"}`, CodeInvalidReference, false, "deskId inexistente"},
 		{"409Conflict", http.StatusConflict, `{"statusCode":409,"code":"CONFLICT","message":"chamado preso a outro atendimento"}`, CodeConflict, false, "chamado preso a outro atendimento"},
 		{"409JanelaFechada", http.StatusConflict, `{"statusCode":409,"code":"WHATSAPP_WINDOW_CLOSED","message":"janela fechada","lastInboundAt":"2026-10-18T09:12:00.000Z"}`, CodeWhatsAppWindowClosed, false, "janela fechada"},

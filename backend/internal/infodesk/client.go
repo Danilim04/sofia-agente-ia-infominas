@@ -29,6 +29,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -170,6 +171,9 @@ func (c *Client) Handoff(ctx context.Context, convID string, h Handoff) error {
 	if err := exigirID(convID); err != nil {
 		return err
 	}
+	if err := ponteirosPreenchidos(map[string]*string{"departmentId": h.DepartmentID, "userId": h.UserID}); err != nil {
+		return err
+	}
 	return c.do(ctx, http.MethodPost, rotaConversa(convID, "handoff"), nil, h, nil)
 }
 
@@ -290,6 +294,10 @@ func (c *Client) Eventos(ctx context.Context, after int64, limit int) (FeedEvent
 	if err := c.do(ctx, http.MethodGet, "/events", q, nil, &raw); err != nil {
 		return FeedEventos{}, err
 	}
+	if raw.HasMore && raw.NextAfter <= after {
+		// Quem pagina enquanto hasMore giraria para sempre.
+		return FeedEventos{}, &ErroResposta{Rota: "/events", Motivo: "hasMore sem avanço de nextAfter"}
+	}
 	return FeedEventos{Data: raw.Data, NextAfter: raw.NextAfter, HasMore: raw.HasMore}, nil
 }
 
@@ -397,6 +405,9 @@ func (c *Client) CriarTicket(ctx context.Context, t NovoTicket) (Ticket, error) 
 	if strings.TrimSpace(t.Title) == "" {
 		return Ticket{}, fmt.Errorf("%w: title", ErrCampoObrigatorio)
 	}
+	if err := ponteirosPreenchidos(map[string]*string{"priorityId": t.PriorityID, "catalogItemId": t.CatalogItemID, "clientId": t.ClientID, "requesterId": t.RequesterID}); err != nil {
+		return Ticket{}, err
+	}
 	var out Ticket
 	if err := c.do(ctx, http.MethodPost, "/tickets", nil, t, &out); err != nil {
 		return Ticket{}, err
@@ -423,6 +434,9 @@ func (c *Client) CriarTicketDaConversa(ctx context.Context, convID string, t Nov
 	}
 	if strings.TrimSpace(t.Title) == "" {
 		return Ticket{}, fmt.Errorf("%w: title", ErrCampoObrigatorio)
+	}
+	if err := ponteirosPreenchidos(map[string]*string{"priorityId": t.PriorityID, "catalogItemId": t.CatalogItemID}); err != nil {
+		return Ticket{}, err
 	}
 	var out Ticket
 	if err := c.do(ctx, http.MethodPost, rotaConversa(convID, "ticket"), nil, t, &out); err != nil {
@@ -535,14 +549,23 @@ func (c *Client) do(ctx context.Context, metodo, rota string, query url.Values, 
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		// *url.Error traz a URL COMPLETA com a query (ex.: ?phone=%2B55…):
+		// guardar só a causa, para telefone nunca vazar em erro ou log.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
 		return &ErroRede{Rota: rota, Err: err}
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
+	// Qualquer coisa fora de 2xx é erro (3xx não seguido, 1xx).
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return c.erroHTTP(rota, resp)
 	}
 	if saida == nil {
+		// Drena (limitado) para a conexão poder ser reaproveitada.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, respostaMax))
 		return nil
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, respostaMax))
@@ -564,7 +587,12 @@ func (c *Client) do(ctx context.Context, metodo, rota string, query url.Values, 
 // extrai o `code`, higieniza a mensagem e captura Retry-After (sem dormir).
 func (c *Client) erroHTTP(rota string, resp *http.Response) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, corpoErroLeituraMax))
-	e := &HTTPError{Status: resp.StatusCode, Code: extrairCode(raw), Rota: rota, Mensagem: higienizarCorpo(raw)}
+	msg := higienizarCorpo(raw)
+	if c.apiKey != "" {
+		// Cinto e suspensório além do mascaramento por padrão em higienizarTexto.
+		msg = strings.ReplaceAll(msg, c.apiKey, "[segredo]")
+	}
+	e := &HTTPError{Status: resp.StatusCode, Code: extrairCode(raw), Rota: rota, Mensagem: msg}
 	if ra := resp.Header.Get("Retry-After"); ra != "" {
 		e.RetryAfter = analisarRetryAfter(ra, c.now())
 	}
@@ -605,8 +633,13 @@ func listaCompleta[T any](ctx context.Context, c *Client, rota string, base url.
 			return nil, err
 		}
 		todos = append(todos, p.Data...)
-		if p.NextCursor == "" || p.NextCursor == cursor {
+		if p.NextCursor == "" {
 			return todos, nil
+		}
+		if p.NextCursor == cursor {
+			// Lista parcial NÃO pode passar por completa (iria ao cache por
+			// 10 min e viraria "departamento não existe" falso).
+			return nil, &ErroResposta{Rota: rota, Motivo: "paginação com cursor repetido"}
 		}
 		cursor = p.NextCursor
 	}
@@ -676,6 +709,18 @@ func rotaTicket(number int, acao string) string {
 func exigirID(id string) error {
 	if strings.TrimSpace(id) == "" {
 		return ErrIDVazio
+	}
+	return nil
+}
+
+// ponteirosPreenchidos recusa um *string opcional que aponta para vazio: nil
+// é "omitido", mas ponteiro para "" iria ao corpo como "" e viraria 400 (ou,
+// pior, um vínculo vazio) — o chamador deve passar nil.
+func ponteirosPreenchidos(campos map[string]*string) error {
+	for nome, p := range campos {
+		if p != nil && strings.TrimSpace(*p) == "" {
+			return fmt.Errorf("%w: %s", ErrIDVazio, nome)
+		}
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -156,7 +157,9 @@ type Solicitante struct {
 // vem de Status (por mesa) e IsClosed. O resto do objeto (title, description,
 // channel, stage, client, responsible, prazos de SLA e, em GET /tickets/:number,
 // `messages` — formato não documentado, 07 item T13) fica em Bruto, com
-// números como json.Number.
+// números como json.Number. Status zerado (Status.ID == "") e IsClosed false
+// também significam "a resposta não trouxe/ não deu para ler" — quem decide
+// por estado do chamado confere Status.ID antes de tratar como "aberto".
 type Ticket struct {
 	Number         int
 	Status         Status
@@ -203,9 +206,14 @@ type Lookup struct {
 	OpenTickets  []Ticket
 	Conversation *Conversa // conversa ativa do número; nil = nenhuma
 	Bruto        map[string]any
+	// Erro é não nulo quando requesters, clientIds, openTickets ou conversation
+	// vieram mas não puderam ser lidos. O campo fica vazio e quem chama NÃO
+	// deve tratar isso como "telefone desconhecido" sem logar: o fallback
+	// (pedir CPF) continua seguro, mas o motivo precisa aparecer.
+	Erro error
 }
 
-// UnmarshalJSON é tolerante por campo.
+// UnmarshalJSON é tolerante por campo; falhas de tipo vão para Erro.
 func (l *Lookup) UnmarshalJSON(b []byte) error {
 	bruto, campos, err := decodificarObjeto(b)
 	if err != nil {
@@ -213,10 +221,24 @@ func (l *Lookup) UnmarshalJSON(b []byte) error {
 	}
 	*l = Lookup{Bruto: bruto}
 	lerCampo(campos, "phone", &l.Phone)
-	lerCampo(campos, "requesters", &l.Requesters)
-	lerCampo(campos, "clientIds", &l.ClientIDs)
-	lerCampo(campos, "openTickets", &l.OpenTickets)
-	lerCampo(campos, "conversation", &l.Conversation)
+	eReq := lerCampoErr(campos, "requesters", &l.Requesters)
+	eCli := lerCampoErr(campos, "clientIds", &l.ClientIDs)
+	eTk := lerCampoErr(campos, "openTickets", &l.OpenTickets)
+	eConv := lerCampoErr(campos, "conversation", &l.Conversation)
+	// Campo ilegível fica vazio por inteiro, nunca pela metade.
+	if eReq != nil {
+		l.Requesters = nil
+	}
+	if eCli != nil {
+		l.ClientIDs = nil
+	}
+	if eTk != nil {
+		l.OpenTickets = nil
+	}
+	if eConv != nil {
+		l.Conversation = nil
+	}
+	l.Erro = errors.Join(eReq, eCli, eTk, eConv)
 	return nil
 }
 
@@ -434,16 +456,23 @@ const (
 // `previousDepartmentId`, `ticket`, `changes`, e o `data` do `ping` — NÃO
 // estão tipados (docs/infodesk/07 item W7): decodifique de Bruto. Bruto é o
 // `data` inteiro, como veio.
+//
+// Erro é não nulo quando conversation, contact ou message VIERAM no payload
+// mas não puderam ser lidos (ex.: `botActive` como texto): o objeto fica nil e
+// o receptor DEVE logar/alertar em vez de tratar como "evento sem conversa" —
+// senão a mensagem do cliente some em silêncio. A mensagem do erro cita
+// campo e tipo, nunca o valor.
 type DadosEvento struct {
 	Conversation *Conversa
 	Contact      *Contato
 	Message      *Mensagem
 	Bruto        json.RawMessage
+	Erro         error
 }
 
 // UnmarshalJSON nunca falha: um `data` que não é objeto (ex.: `ping`) fica só
-// com o Bruto, e sub-objetos ilegíveis ficam nil. Quem decide o que fazer com
-// um evento sem os dados esperados é o receptor.
+// com o Bruto, e sub-objetos ilegíveis ficam nil com a causa em Erro. Quem
+// decide o que fazer com um evento sem os dados esperados é o receptor.
 func (d *DadosEvento) UnmarshalJSON(b []byte) error {
 	*d = DadosEvento{Bruto: bytes.Clone(b)}
 	var aux struct {
@@ -454,9 +483,11 @@ func (d *DadosEvento) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &aux); err != nil {
 		return nil
 	}
-	d.Conversation = opcional[Conversa](aux.Conversation)
-	d.Contact = opcional[Contato](aux.Contact)
-	d.Message = opcional[Mensagem](aux.Message)
+	var e1, e2, e3 error
+	d.Conversation, e1 = opcional[Conversa]("conversation", aux.Conversation)
+	d.Contact, e2 = opcional[Contato]("contact", aux.Contact)
+	d.Message, e3 = opcional[Mensagem]("message", aux.Message)
+	d.Erro = errors.Join(e1, e2, e3)
 	return nil
 }
 
@@ -485,15 +516,19 @@ type Evento struct {
 
 type eventoJSON struct {
 	ID             string          `json:"id"`
-	Seq            int64           `json:"seq"`
+	Seq            json.RawMessage `json:"seq"`
 	Event          string          `json:"event"`
-	CreatedAt      string          `json:"createdAt"`
+	CreatedAt      json.RawMessage `json:"createdAt"`
 	OrganizationID string          `json:"organizationId"`
 	Data           json.RawMessage `json:"data"`
 }
 
-// UnmarshalJSON tolera createdAt ausente ou fora do ISO-8601 (fica zero; o
-// receptor decide se descarta) e qualquer formato de `data`.
+// UnmarshalJSON tolera `createdAt` e `seq` ausentes, de tipo inesperado ou
+// fora do formato (ficam zero; o receptor decide se descarta) e qualquer
+// formato de `data`. Os campos de texto do envelope (id, event, organizationId)
+// são estritos: um item do feed com isso trocado derruba a PÁGINA com erro
+// claro, em vez de ser pulado — pular faria o cursor do reconciliador passar
+// por cima de um evento perdido.
 func (e *Evento) UnmarshalJSON(b []byte) error {
 	var aux eventoJSON
 	if err := json.Unmarshal(b, &aux); err != nil {
@@ -501,9 +536,9 @@ func (e *Evento) UnmarshalJSON(b []byte) error {
 	}
 	*e = Evento{
 		ID:             aux.ID,
-		Seq:            aux.Seq,
+		Seq:            seqDeRaw(aux.Seq),
 		Event:          aux.Event,
-		CreatedAt:      analisarInstante(aux.CreatedAt),
+		CreatedAt:      instanteDeRaw(aux.CreatedAt),
 		OrganizationID: aux.OrganizationID,
 	}
 	if raw := bytes.TrimSpace(aux.Data); len(raw) > 0 && !bytes.Equal(raw, []byte("null")) {
@@ -611,24 +646,35 @@ func decodificarObjeto(b []byte) (map[string]any, map[string]json.RawMessage, er
 // lerCampo decodifica campos[chave] em destino; ausente, null ou de tipo
 // inesperado deixa o zero value.
 func lerCampo(campos map[string]json.RawMessage, chave string, destino any) {
-	raw, ok := campos[chave]
-	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return
-	}
-	_ = json.Unmarshal(raw, destino)
+	_ = lerCampoErr(campos, chave, destino)
 }
 
-// opcional decodifica raw em *T; vazio, null ou ilegível = nil.
-func opcional[T any](raw json.RawMessage) *T {
+// lerCampoErr é lerCampo que também devolve a falha de tipo (com o nome do
+// campo; a mensagem do encoding/json cita tipos, nunca o valor) — para os
+// campos em que "ilegível" não pode ser confundido com "ausente".
+func lerCampoErr(campos map[string]json.RawMessage, chave string, destino any) error {
+	raw, ok := campos[chave]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	if err := json.Unmarshal(raw, destino); err != nil {
+		return fmt.Errorf("campo %q ilegível: %w", chave, err)
+	}
+	return nil
+}
+
+// opcional decodifica raw em *T; vazio ou null = nil, sem erro. Ilegível = nil
+// MAIS o erro (nome é o do campo, para a mensagem).
+func opcional[T any](nome string, raw json.RawMessage) (*T, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return nil
+		return nil, nil
 	}
 	var v T
 	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil
+		return nil, fmt.Errorf("campo %q ilegível: %w", nome, err)
 	}
-	return &v
+	return &v, nil
 }
 
 // numeroInteiro converte um valor decodificado em inteiro positivo: aceita
@@ -665,15 +711,60 @@ func cloneSlice[E any](s []E) []E {
 	return append([]E(nil), s...)
 }
 
+// seqDeRaw lê um `seq` inteiro (ou texto numérico); qualquer outra coisa = 0.
+func seqDeRaw(raw json.RawMessage) int64 {
+	var n int64
+	if json.Unmarshal(raw, &n) == nil {
+		return n
+	}
+	var f float64 // 9.0
+	if json.Unmarshal(raw, &f) == nil && f == math.Trunc(f) && f > 0 && f < 1<<53 {
+		return int64(f)
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+// instanteDeRaw lê um instante ISO-8601 de um valor JSON; só string vale.
+func instanteDeRaw(raw json.RawMessage) time.Time {
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return time.Time{}
+	}
+	return analisarInstante(s)
+}
+
+// cloneMapa copia em profundidade um objeto decodificado do JSON (maps e
+// slices aninhados; json.Number, string, bool e nil são imutáveis).
 func cloneMapa(m map[string]any) map[string]any {
 	if m == nil {
 		return nil
 	}
 	out := make(map[string]any, len(m))
 	for k, v := range m {
-		out[k] = v
+		out[k] = cloneValor(v)
 	}
 	return out
+}
+
+func cloneValor(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		return cloneMapa(x)
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = cloneValor(e)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // analisarInstante aceita ISO-8601/RFC 3339 com ou sem fração; vazio ou

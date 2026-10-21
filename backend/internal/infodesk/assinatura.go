@@ -70,11 +70,13 @@ func (v Verificador) Verificar(timestamp string, raw []byte, header string) erro
 	if janela <= 0 {
 		janela = JanelaTimestampPadrao
 	}
-	dif := agora().Sub(time.Unix(seg, 0))
+	// Em segundos inteiros, não em time.Duration: um timestamp absurdo (ex.:
+	// 99999999999) saturaria Sub e passaria pela janela.
+	dif := agora().Unix() - seg
 	if dif < 0 {
 		dif = -dif
 	}
-	if dif > janela {
+	if dif < 0 || dif > int64(janela/time.Second) { // dif < 0: -MinInt64
 		return ErrTimestampForaDaJanela
 	}
 	return nil

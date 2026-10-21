@@ -285,11 +285,18 @@ func TestClient_ListasDeReferencia_SegueNextCursor(t *testing.T) {
 func TestClient_ListasDeReferencia_CursorQueNaoAcabaPara(t *testing.T) {
 	t.Run("cursorRepetido", func(t *testing.T) {
 		s := novoServidor(t, responderJSON(http.StatusOK, `{"data":[{"id":"1","name":"A"}],"nextCursor":"sempre"}`))
-		if _, err := s.cliente().Mesas(context.Background()); err != nil {
-			t.Fatal(err)
+		// Lista parcial NÃO pode passar por completa (iria ao cache por 10 min).
+		c := s.cliente()
+		_, err := c.Mesas(context.Background())
+		var er *ErroResposta
+		if !errors.As(err, &er) {
+			t.Fatalf("esperado *ErroResposta, veio %v", err)
 		}
 		if n := s.chamadas.Load(); n != 2 {
 			t.Errorf("chamadas = %d (primeira + a que repete o cursor)", n)
+		}
+		if _, err := c.Mesas(context.Background()); err == nil || s.chamadas.Load() != 4 {
+			t.Errorf("a falha não pode ter entrado no cache: err = %v, chamadas = %d", err, s.chamadas.Load())
 		}
 	})
 	t.Run("cursorSempreNovo", func(t *testing.T) {
