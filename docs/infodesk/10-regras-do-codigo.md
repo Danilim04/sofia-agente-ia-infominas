@@ -251,20 +251,36 @@ INFODESK_BASE_URL=http://localhost:9000/api INFODESK_API_KEY=ik_test_mock \
 
 O que ele faz, nesta ordem: `GET /me` (valida chave, mostra org, escopos e se
 a chave "conduz o atendimento") → `GET /desks` → `GET /desks/:id` de cada
-mesa → `GET /catalog` (todos os itens) → `GET /departments`. Entre chamadas
+mesa → `GET /catalog?deskId=` por mesa e `GET /catalog` (todos os itens; o
+mock devolve 400 aí e o script segue) → `GET /departments`. Entre chamadas
 dorme 100 ms (rate limit). Saídas, na pasta `--saida` (gitignored por
 padrão):
 
 | Arquivo | Conteúdo |
 |---|---|
 | `inventario.json` | resposta crua das rotas, para anexar ao PR da E5.1 |
-| `inventario.md` | tabelas legíveis: mesas com prioridades/status/catálogo, itens de catálogo com mesa padrão, departamentos, e a **matriz prioridade × mesa** que mostra onde "Baixa/Média/Alta/Urgente" não existem |
-| `taxonomia.rascunho.yaml` | rascunho no formato de `config/taxonomia.yaml`: uma categoria por item de catálogo que tenha mesa (via `defaultDeskId` ou por pertencer ao catálogo da mesa), com `mesa` e `catalogo` já com os **nomes exatos**; `departamento`, `prioridade`, `exemplos` e `nao_e` marcados `TODO` para a Infominas; `indefinida`, `mesa_triagem` e `departamento_humano_padrao` sugeridos |
+| `inventario.md` | tabelas legíveis: mesas com prioridades/status/catálogo, itens de catálogo com mesa padrão, departamentos, e a **matriz prioridade × mesa** que mostra onde cada nome canônico não existe (aliases aceitos: `Média`/`Media`/`Normal` para `media`, `Urgente`/`Crítica` para `urgente`) |
+| `taxonomia.rascunho.yaml` | rascunho no formato de `config/taxonomia.yaml` (ver abaixo), com `mesa` e os nomes de prioridade **exatos**; `departamento`, `exemplos` e `nao_e` marcados `TODO`; `indefinida`, `mesa_triagem` e `departamento_humano_padrao` sugeridos |
+
+Opções que decidem o rascunho:
+
+- `--mesas "Incidente,Solicitações"`: só os catálogos dessas mesas (nome
+  sem acento/caixa). **Use sempre** na Infominas: nenhum item tem
+  `defaultDeskId` e os catálogos são compartilhados entre mesas (09), então
+  sem `--mesas` o script só consegue mapear itens de catálogo exclusivo.
+- `--por area` (default): uma categoria por **área** do catálogo da mesa
+  (ex.: `rede_e_internet_incidente`), com os itens listados em comentário para
+  escolher o `catalogo` (opcional). Área presente em mais de uma mesa ganha
+  sufixo `_incidente`/`_solicitacao`. `--por item`: uma categoria por item.
+- `--de-arquivo descoberta-infodesk/inventario.json`: regenera o rascunho de
+  um inventário já coletado, sem chamar a API (não precisa da chave).
 
 O rascunho **não substitui** `config/taxonomia.yaml` sozinho: as categorias
 precisam ser revistas contra o que o cliente final escreve no WhatsApp (os
 itens de catálogo são a visão do técnico, não a do cliente), os `TODO`
-preenchidos e `placeholder: true` removido — critério de pronto da E5.1.
+preenchidos e `placeholder: true` removido — critério de pronto da E5.1. O
+rascunho gerado carrega em `src.classificacao.taxonomia.carregar_taxonomia`
+tal como sai (testado com o inventário real de 2026-10-21: 25 categorias).
 
 ## 8. O que o código NÃO responde (perguntar à Infominas)
 
