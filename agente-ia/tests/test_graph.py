@@ -71,9 +71,14 @@ def test_entry_node_reseta_seguranca_tentou_rag_e_fontes():
         "fontes_usadas": [],
         "rag_contexto": None,
         "iteracoes_agente": 0,
+        # E2.2: ações (transferir) e sinais do turno também valem só para o turno.
+        "acoes": [],
+        "sinais_classificacao": None,
     }
     # Campos persistentes não aparecem no delta (ficam intactos no estado).
-    assert not ({"telefone", "nome_contato", "contato", "classificacao"} & set(out))
+    assert not (
+        {"telefone", "nome_contato", "contato", "classificacao", "esclarecimentos"} & set(out)
+    )
 
 
 # ===========================================================================
