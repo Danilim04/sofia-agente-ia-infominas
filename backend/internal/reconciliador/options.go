@@ -22,17 +22,22 @@ type Options struct {
 	// Limite de eventos por página do feed (500, o máximo documentado).
 	Limite int
 	// Atraso: o cursor `infodesk` persistido anda este tempo atrás do relógio
-	// (RECONCILIA_ATRASO; 2 min). Os eventos dentro da janela são relidos no
+	// (RECONCILIA_ATRASO; 2 min), contado a partir do maior entre o createdAt do
+	// evento e o instante em que este processo o entregou ao webhook. Os eventos dentro da janela são relidos no
 	// ciclo seguinte (duplicata = no-op) e é isso que torna recuperável o que
 	// estava na fila em memória num crash. Hipótese de trabalho, sem fonte no
 	// Infodesk: ver docs/infodesk/07 item W9 (reentrega/ordem) e o ADR 0007.
-	Atraso time.Duration
+	Atraso time.Duration // negativo desliga o atraso (só testes)
 	// TicketPendenteTTL: prazo para um ticket `pendente` aparecer na listagem
 	// antes de virar `falha` (TICKET_PENDENTE_TTL; 10 min, ADR 0005).
 	TicketPendenteTTL time.Duration
 	// BotTimeoutHandoff: conversa do bot sem resposta há mais que isto vai a um
 	// humano (BOT_TIMEOUT_HANDOFF; 5 min). // ver docs/infodesk/07 item N1.
 	BotTimeoutHandoff time.Duration
+	// Skew: tolerância entre o relógio do Infodesk (`ultima_msg_em`) e o nosso
+	// (`ultima_resposta_em`) ao decidir que uma mensagem ficou sem resposta
+	// (RECONCILIA_SKEW; 60 s). Hipótese de trabalho. // ver docs/infodesk/07 item W9.
+	Skew time.Duration
 	// BackoffMax: teto da espera após RATE_LIMITED (RECONCILIA_BACKOFF_MAX;
 	// 5 min). // ver docs/infodesk/07 item A4 (300 req/min).
 	BackoffMax time.Duration
@@ -53,10 +58,13 @@ func (o Options) comPadroes() Options {
 	}
 	pad(&o.Intervalo, 60*time.Second)
 	pad(&o.Retroativo, time.Hour)
-	pad(&o.Atraso, 2*time.Minute)
+	if o.Atraso == 0 {
+		o.Atraso = 2 * time.Minute
+	}
 	pad(&o.TicketPendenteTTL, 10*time.Minute)
 	pad(&o.BotTimeoutHandoff, 5*time.Minute)
 	pad(&o.BackoffMax, 5*time.Minute)
+	pad(&o.Skew, time.Minute)
 	if o.Limite <= 0 {
 		o.Limite = 500
 	}
@@ -82,7 +90,7 @@ func dormirDeVerdade(ctx context.Context, d time.Duration) bool {
 
 // OptionsDoAmbiente lê as variáveis RECONCILIA_ATIVO, RECONCILIA_INTERVALO,
 // RECONCILIA_RETROATIVO, RECONCILIA_ATRASO, RECONCILIA_BACKOFF_MAX,
-// TICKET_PENDENTE_TTL e BOT_TIMEOUT_HANDOFF. Valor ausente = default;
+// RECONCILIA_SKEW, TICKET_PENDENTE_TTL e BOT_TIMEOUT_HANDOFF. Valor ausente = default;
 // valor inválido = default com aviso no log (não derruba o boot).
 //
 // TODO(P3): mover para internal/config quando a zona dessa pasta permitir
@@ -109,6 +117,7 @@ func OptionsDoAmbiente(log *slog.Logger) Options {
 		{&o.Retroativo, "RECONCILIA_RETROATIVO"},
 		{&o.Atraso, "RECONCILIA_ATRASO"},
 		{&o.BackoffMax, "RECONCILIA_BACKOFF_MAX"},
+		{&o.Skew, "RECONCILIA_SKEW"},
 		{&o.TicketPendenteTTL, "TICKET_PENDENTE_TTL"},
 		{&o.BotTimeoutHandoff, "BOT_TIMEOUT_HANDOFF"},
 	} {

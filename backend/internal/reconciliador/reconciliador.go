@@ -70,11 +70,15 @@ type Reconciliador struct {
 	vigia  *alerta.Vigia
 	log    *slog.Logger
 
-	recuperado     bool          // Recuperar já rodou
-	backoff        time.Duration // espera atual após RATE_LIMITED (0 = sem backoff)
-	feedSemEscopo  bool          // o último GET /events foi 403
-	falhasDoFeed   int           // execuções seguidas com erro no feed
-	alertouFalhaFd bool
+	recuperado       bool          // Recuperar já rodou
+	backoff          time.Duration // espera atual após RATE_LIMITED (0 = sem backoff)
+	feedSemEscopo    bool          // o último GET /events foi 403
+	falhasDoFeed     int           // execuções seguidas com erro no feed
+	alertouFalhaFd   bool
+	cicloSemEscopo   bool // o feed deste ciclo foi 403
+	partidaFeita     bool // pontoDePartida já decidiu a partida deste processo
+	partidaSemCursor bool
+	vistos           map[int64]time.Time // seq → 1ª entrega por este processo (janela de Atraso)
 }
 
 // New cria o reconciliador. vigia e log podem ser nil.
@@ -83,7 +87,7 @@ func New(o Options, idk Infodesk, rec Receptor, transf Transferidor, st store.St
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Reconciliador{opt: o, idk: idk, rec: rec, transf: transf, st: st, vigia: vigia, log: log.With("componente", "reconciliador")}
+	return &Reconciliador{opt: o, idk: idk, rec: rec, transf: transf, st: st, vigia: vigia, log: log.With("componente", "reconciliador"), vistos: map[int64]time.Time{}}
 }
 
 // Run bloqueia até ctx ser cancelado: recupera o que um crash pode ter
@@ -121,6 +125,12 @@ func (r *Reconciliador) executarSeguro(ctx context.Context) (espera time.Duratio
 // duplicata. Reprocessar o que de fato já foi tratado é seguro — a engine
 // deduplica o turno por `msg:<id>`, o estado da conversa não é rebaixado por
 // evento mais velho (W9) e ticket.* é idempotente.
+//
+// LIMITE: recupera o que estava na fila `jobs` do webhook. O turno que já
+// passou por Engine.HandleMensagem (que grava `msg:<id>` antes de coalescer em
+// memória) NÃO é recuperado: o replay é descartado pelo dedup da engine e a
+// conversa cai no vigia BOT_TIMEOUT_HANDOFF. Desmarcar `msg:` aqui arriscaria
+// responder duas vezes uma mensagem já respondida.
 //
 // Deve rodar ANTES de o webhook começar a receber (main.go chama
 // sincronamente); Run chama se ninguém chamou. Só vale como rede de

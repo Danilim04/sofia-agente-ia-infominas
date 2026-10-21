@@ -157,8 +157,10 @@ type Store interface {
 	// ConversasSemResposta devolve as conversas em que a Sofia conduz
 	// (estado `bot`, handled_by EXTERNAL_BOT) e a última mensagem do cliente
 	// é anterior a `antes` e não foi respondida (`ultima_resposta_em` vazio ou
-	// anterior à mensagem): a entrada do vigia BOT_TIMEOUT_HANDOFF (E3.3).
-	ConversasSemResposta(ctx context.Context, antes time.Time) ([]Conversa, error)
+	// anterior à mensagem menos `folga`: `ultima_msg_em` vem do relógio do
+	// Infodesk e `ultima_resposta_em` do nosso, e a diferença não pode fazer uma
+	// conversa respondida parecer parada): a entrada do vigia BOT_TIMEOUT_HANDOFF (E3.3).
+	ConversasSemResposta(ctx context.Context, antes time.Time, folga time.Duration) ([]Conversa, error)
 
 	// ObterContato devolve o contato do telefone se ainda não expirou em
 	// `agora`; expirado ou ausente = nil.

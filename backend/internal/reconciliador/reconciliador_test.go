@@ -121,21 +121,40 @@ func TestEventoVistoMasNaoProcessadoAntesDoCrashERecuperado(t *testing.T) {
 	})
 }
 
-// O cursor persistido anda Atraso atrás do relógio: o evento dentro da janela
-// é entregue, mas o cursor não passa dele (é o que torna o crash recuperável).
+// O cursor persistido anda Atraso atrás do relógio, contado a partir de quando
+// ESTE processo entregou o evento ao webhook (ou do createdAt, se maior): um
+// backlog com createdAt antigo, recém-enfileirado, também fica atrás do cursor
+// (é o que torna recuperável o que estava só na fila em memória num crash).
 func TestCursorNaoPassaDaJanelaDeAtraso(t *testing.T) {
 	o := opcoesDeTeste()
 	o.Atraso = 2 * time.Minute
+	relogio := agora
+	o.Now = func() time.Time { return relogio }
 	a := novoAmbiente(t, nil, o, true, 16)
 	a.idk.eventos = []infodesk.Evento{
-		eventoMsg(t, 31, "conv-4", "velho", agora.Add(-10*time.Minute)),
+		eventoMsg(t, 31, "conv-4", "velho", agora.Add(-20*time.Minute)), // createdAt antigo, entregue agora
 		eventoMsg(t, 32, "conv-4", "novo", agora.Add(-30*time.Second)),
 	}
 	a.rec.Executar(context.Background())
 
 	espera(t, "os dois turnos", func() bool { return len(a.eng.textos()) == 2 })
-	if got := cursor(t, a.st, store.NomeCursorInfodesk); got != 31 {
-		t.Fatalf("cursor = %d, queria 31 (o evento 32 está dentro do Atraso)", got)
+	if got := cursor(t, a.st, store.NomeCursorInfodesk); got != 0 {
+		t.Fatalf("cursor = %d: nenhum evento entregue há menos de 2 min pode ser passado (nem o de createdAt antigo)", got)
+	}
+
+	relogio = agora.Add(90 * time.Second) // ainda dentro da janela
+	a.rec.Executar(context.Background())
+	if got := cursor(t, a.st, store.NomeCursorInfodesk); got != 0 {
+		t.Fatalf("cursor = %d, ainda dentro do Atraso", got)
+	}
+
+	relogio = agora.Add(3 * time.Minute)
+	a.rec.Executar(context.Background())
+	if got := cursor(t, a.st, store.NomeCursorInfodesk); got != 32 {
+		t.Fatalf("cursor = %d, queria 32 (os dois já passaram do Atraso)", got)
+	}
+	if got := a.eng.textos(); len(got) != 2 {
+		t.Fatalf("as releituras são no-op, mas os turnos = %v", got)
 	}
 }
 
@@ -537,5 +556,102 @@ func TestOptionsDoAmbiente(t *testing.T) {
 	}
 	if o.comPadroes().BotTimeoutHandoff != 5*time.Minute {
 		t.Fatal("valor inválido cai no default")
+	}
+}
+
+// "Página 1 ok, página 2 falha" a cada ciclo também conta como feed falhando.
+func TestFeedFalhandoNaSegundaPaginaAlertaUmaVez(t *testing.T) {
+	o := opcoesDeTeste()
+	o.Limite = 1
+	a := novoAmbiente(t, nil, o, true, 64)
+	for i, txt := range []string{"f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8"} {
+		a.idk.eventos = append(a.idk.eventos, eventoMsg(t, int64(300+i), "conv-f", txt, atrasado))
+	}
+	for i := 0; i < 6; i++ {
+		// cada ciclo: página ok (1 evento), página seguinte falha
+		a.idk.errosFeed = append(a.idk.errosFeed, nil, errors.New("conexão caiu"))
+		a.rec.Executar(context.Background())
+	}
+	if got := a.alertas.doTipo(TipoFeedFalhando); len(got) != 1 {
+		t.Fatalf("alertas de feed falhando = %d, queria 1", len(got))
+	}
+}
+
+// Seq repetido ou fora de ordem no feed nunca faz o cursor retroceder.
+func TestSeqForaDeOrdemNaoFazOCursorRetroceder(t *testing.T) {
+	a := novoAmbiente(t, nil, opcoesDeTeste(), true, 16)
+	a.idk.eventos = []infodesk.Evento{
+		eventoMsg(t, 405, "conv-o", "o1", atrasado),
+		eventoMsg(t, 403, "conv-o", "o2", atrasado),
+	}
+	a.rec.Executar(context.Background())
+	if got := cursor(t, a.st, store.NomeCursorInfodesk); got != 405 {
+		t.Fatalf("cursor = %d, queria 405", got)
+	}
+}
+
+// Conversa respondida cuja resposta aparece "antes" da mensagem por diferença
+// de relógio (dentro do Skew) não é conversa parada.
+func TestVigiaToleraSkewDeRelogio(t *testing.T) {
+	a := novoAmbiente(t, nil, opcoesDeTeste(), false, 16)
+	conversaDoBot(t, a.st, "conv-skew", agora.Add(-20*time.Minute), agora.Add(-20*time.Minute).Add(-20*time.Second))
+	a.rec.Executar(context.Background())
+	if got := a.eng.transferidas(); len(got) != 0 {
+		t.Fatalf("resposta dentro do skew não pode virar handoff: %v", got)
+	}
+}
+
+// Conversa já encerrada no Infodesk (finished perdido) não vai a handoff.
+func TestVigiaNaoTransfereConversaEncerrada(t *testing.T) {
+	a := novoAmbiente(t, nil, opcoesDeTeste(), false, 16)
+	conversaDoBot(t, a.st, "conv-fim", agora.Add(-20*time.Minute), time.Time{})
+	a.idk.conversas["conv-fim"] = infodesk.Conversa{ID: "conv-fim", Status: "FINISHED", HandledBy: infodesk.ConduzidaPorBotExterno}
+	a.rec.Executar(context.Background())
+	if got := a.eng.transferidas(); len(got) != 0 {
+		t.Fatalf("conversa FINISHED não pode ser transferida: %v", got)
+	}
+}
+
+// O pedido à engine leva a origem do vigia e a causa legível.
+func TestVigiaPedeATransferenciaComOrigemECausa(t *testing.T) {
+	a := novoAmbiente(t, nil, opcoesDeTeste(), false, 16)
+	conversaDoBot(t, a.st, "conv-pedido", agora.Add(-20*time.Minute), time.Time{})
+	a.rec.Executar(context.Background())
+	a.eng.mu.Lock()
+	defer a.eng.mu.Unlock()
+	if len(a.eng.pedidos) != 1 || a.eng.pedidos[0].Origem != OrigemVigia || a.eng.pedidos[0].Causa != "a Sofia não respondeu o cliente em 5 min" {
+		t.Fatalf("pedidos = %+v", a.eng.pedidos)
+	}
+}
+
+// Falha da conferência no Infodesk não transfere (tenta no próximo ciclo);
+// RATE_LIMITED nela interrompe o ciclo com backoff.
+func TestVigiaComConferenciaFalhandoNaoTransfere(t *testing.T) {
+	a := novoAmbiente(t, nil, opcoesDeTeste(), false, 16)
+	conversaDoBot(t, a.st, "conv-conf", agora.Add(-20*time.Minute), time.Time{})
+	a.idk.errConversa = &infodesk.HTTPError{Status: 503, Rota: "/conversations/x"}
+	if espera := a.rec.Executar(context.Background()); espera != time.Minute {
+		t.Fatalf("espera = %v", espera)
+	}
+	if got := a.eng.transferidas(); len(got) != 0 {
+		t.Fatalf("sem conferir não transfere: %v", got)
+	}
+	a.idk.errConversa = erroHTTP(429, infodesk.CodeRateLimited, 0)
+	if espera := a.rec.Executar(context.Background()); espera != 2*time.Minute {
+		t.Fatalf("RATE_LIMITED no vigia devia dar backoff, espera = %v", espera)
+	}
+}
+
+// RATE_LIMITED na listagem de tickets também dá backoff e para o ciclo.
+func TestRateLimitedNaListagemDeTicketsFazBackoff(t *testing.T) {
+	a := novoAmbiente(t, nil, opcoesDeTeste(), false, 16)
+	pendente(t, a.st, "k-rl", "conv-rl")
+	a.idk.errTickets = erroHTTP(429, infodesk.CodeRateLimited, 0)
+	conversaDoBot(t, a.st, "conv-parada", agora.Add(-20*time.Minute), time.Time{})
+	if espera := a.rec.Executar(context.Background()); espera != 2*time.Minute {
+		t.Fatalf("espera = %v, queria 2m", espera)
+	}
+	if got := a.eng.transferidas(); len(got) != 0 {
+		t.Fatalf("o ciclo para antes do vigia: %v", got)
 	}
 }

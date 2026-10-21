@@ -637,9 +637,11 @@ func TestStoreConversasSemResposta(t *testing.T) {
 			msg := agora.Add(-10 * time.Minute)
 			corte := agora.Add(-5 * time.Minute)
 			novas := map[string]func(c *Conversa){
-				unico("sem-resposta"):  func(c *Conversa) { c.UltimaMsgEm = msg },
-				unico("respondida"):    func(c *Conversa) { c.UltimaMsgEm = msg; c.UltimaRespostaEm = msg.Add(time.Minute) },
-				unico("resp-antiga"):   func(c *Conversa) { c.UltimaMsgEm = msg; c.UltimaRespostaEm = msg.Add(-time.Minute) },
+				unico("sem-resposta"): func(c *Conversa) { c.UltimaMsgEm = msg },
+				unico("respondida"):   func(c *Conversa) { c.UltimaMsgEm = msg; c.UltimaRespostaEm = msg.Add(time.Minute) },
+				unico("resp-antiga"):  func(c *Conversa) { c.UltimaMsgEm = msg; c.UltimaRespostaEm = msg.Add(-2 * time.Minute) },
+				// skew: resposta nossa "antes" da mensagem por diferença de relógio, dentro da folga
+				unico("skew"):          func(c *Conversa) { c.UltimaMsgEm = msg; c.UltimaRespostaEm = msg.Add(-30 * time.Second) },
 				unico("recente"):       func(c *Conversa) { c.UltimaMsgEm = agora.Add(-time.Minute) },
 				unico("sem-msg"):       func(*Conversa) {},
 				unico("transferida"):   func(c *Conversa) { c.UltimaMsgEm = msg; c.Estado = EstadoTransferida },
@@ -654,7 +656,7 @@ func TestStoreConversasSemResposta(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := st.ConversasSemResposta(ctx, corte)
+			got, err := st.ConversasSemResposta(ctx, corte, time.Minute)
 			if err != nil {
 				t.Fatal(err)
 			}

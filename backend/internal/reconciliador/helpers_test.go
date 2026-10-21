@@ -150,6 +150,7 @@ type fakeEngine struct {
 	st         store.Store
 	turnos     []engine.Inbound
 	transfer   []string
+	pedidos    []engine.Transferencia
 	transferID string
 }
 
@@ -166,8 +167,9 @@ func (e *fakeEngine) AplicarConversa(_ context.Context, v engine.ConversaVista) 
 }
 
 // TransferirParaHumano imita a engine: tira a conversa do estado bot.
-func (e *fakeEngine) TransferirParaHumano(ctx context.Context, convID string, _ engine.Transferencia) string {
+func (e *fakeEngine) TransferirParaHumano(ctx context.Context, convID string, t engine.Transferencia) string {
 	e.mu.Lock()
+	e.pedidos = append(e.pedidos, t)
 	e.transfer = append(e.transfer, convID)
 	id := e.transferID
 	e.mu.Unlock()
@@ -236,7 +238,7 @@ type ambiente struct {
 // aumentam).
 func opcoesDeTeste() Options {
 	return Options{
-		Ativo: true, Intervalo: time.Minute, Retroativo: time.Hour, Atraso: time.Nanosecond,
+		Ativo: true, Intervalo: time.Minute, Retroativo: time.Hour, Atraso: -1,
 		TicketPendenteTTL: 10 * time.Minute, BotTimeoutHandoff: 5 * time.Minute, BackoffMax: 5 * time.Minute,
 		Limite: 500, Now: func() time.Time { return agora },
 		Dormir: func(context.Context, time.Duration) bool { return false },

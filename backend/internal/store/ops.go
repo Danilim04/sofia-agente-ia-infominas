@@ -446,14 +446,14 @@ func (o *ops) FalharTicket(ctx context.Context, chave string) (bool, error) {
 	return n > 0, err
 }
 
-func (o *ops) ConversasSemResposta(ctx context.Context, antes time.Time) ([]Conversa, error) {
+func (o *ops) ConversasSemResposta(ctx context.Context, antes time.Time, folga time.Duration) ([]Conversa, error) {
 	rows, err := o.db.QueryContext(ctx, o.rebind(
 		`SELECT `+colunasConversa+` FROM gw.conversas
 		  WHERE estado = ? AND handled_by = ?
 		    AND ultima_msg_em IS NOT NULL AND ultima_msg_em < ?
-		    AND (ultima_resposta_em IS NULL OR ultima_resposta_em < ultima_msg_em)
+		    AND (ultima_resposta_em IS NULL OR ultima_resposta_em < ultima_msg_em - ?)
 		  ORDER BY ultima_msg_em, conversation_id`),
-		EstadoBot, HandledByBotExterno, antes.UnixMilli())
+		EstadoBot, HandledByBotExterno, antes.UnixMilli(), folga.Milliseconds())
 	if err != nil {
 		return nil, err
 	}
