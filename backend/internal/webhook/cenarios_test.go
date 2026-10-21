@@ -22,7 +22,7 @@ import (
 
 // Rajada de mensagens do cliente vira UM turno, com os textos unidos.
 func TestRajadaViraUmTurno(t *testing.T) {
-	a := novoAmbiente(t)
+	a := novoAmbiente(t, comRajadaLarga)
 	a.enviar(a.recebida("c-10", "m-1", "minha internet caiu", t0))
 	a.enviar(a.recebida("c-10", "m-2", "desde ontem", t0.Add(time.Second)))
 	a.enviar(a.recebida("c-10", "m-3", "e o roteador está vermelho", t0.Add(2*time.Second)))
@@ -55,7 +55,9 @@ func TestRajadaViraUmTurno(t *testing.T) {
 // Mídia chega em DUAS mensagens (rótulo "[imagem]" em TEXT + o arquivo): vira
 // UM handoff, com UM aviso ao cliente, sem passar pelo cérebro.
 func TestMidiaEmDuasMensagensViraUmHandoff(t *testing.T) {
-	a := novoAmbiente(t)
+	// As duas mensagens PRECISAM cair no mesmo lote: se a janela fechasse entre
+	// elas, o rótulo TEXT iria sozinho ao cérebro.
+	a := novoAmbiente(t, comRajadaLarga)
 	a.enviar(a.recebidaDe("c-20", "m-1", "[imagem]", "EXTERNAL_BOT", "TEXT", false, t0))
 	a.enviar(a.recebidaDe("c-20", "m-2", "", "EXTERNAL_BOT", "IMAGE", true, t0.Add(time.Second)))
 
