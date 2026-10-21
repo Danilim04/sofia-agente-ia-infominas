@@ -122,6 +122,20 @@ type Ticket struct {
 	UpdatedAt      time.Time
 }
 
+// HandoffPendente é uma linha de `handoffs_pendentes`: a transferência para
+// humano que a engine não conseguiu confirmar no Infodesk (E3.6). Guarda o que
+// o handoff precisa para ser repetido (departamento e nota por código, sem PII).
+type HandoffPendente struct {
+	ConversationID string
+	Origem         string // Transferencia.Origem de quem pediu
+	IDOcorrencia   string // SOF-… da ocorrência original
+	DepartamentoID string // "" = sem departamento (distribuição automática)
+	Nota           string // nota interna montada por código
+	Tentativas     int    // repetições do vigia que falharam (a da engine não conta)
+	ProximaEm      time.Time
+	CreatedAt      time.Time
+}
+
 // Store é a interface de persistência usada pelo resto da aplicação.
 type Store interface {
 	// MarkProcessed registra uma chave de dedup genérica ("msg:<id>" da
@@ -184,6 +198,21 @@ type Store interface {
 	// AtualizarStatusTicket aplica um evento ticket.* ao ticket local de
 	// `numero`; false se o número não é nosso.
 	AtualizarStatusTicket(ctx context.Context, numero int, statusInfodesk string, encerrado bool, quando time.Time) (bool, error)
+
+	// MarcarHandoffPendente grava (upsert por conversa) que o handoff dessa
+	// conversa NÃO foi confirmado pelo Infodesk: o estado local já é
+	// `transferida` e o bot calou, mas nenhum atendente foi avisado. É o que o
+	// vigia do reconciliador repete (E3.6; docs/plano/01, seção B).
+	MarcarHandoffPendente(ctx context.Context, h *HandoffPendente) error
+	// HandoffsPendentes devolve as marcas cuja próxima tentativa já venceu
+	// (ProximaEm ≤ ate), da mais antiga à mais nova.
+	HandoffsPendentes(ctx context.Context, ate time.Time) ([]HandoffPendente, error)
+	// AdiarHandoffPendente registra uma tentativa que falhou: grava o total de
+	// tentativas e quando tentar de novo.
+	AdiarHandoffPendente(ctx context.Context, convID string, tentativas int, proximaEm time.Time) error
+	// LimparHandoffPendente apaga a marca (handoff confirmado, ou a conversa
+	// deixou de precisar dele); false se não havia.
+	LimparHandoffPendente(ctx context.Context, convID string) (bool, error)
 
 	// RegistrarFalha grava uma ocorrência (tabela `falhas`). CreatedAt vazio =
 	// agora.

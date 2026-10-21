@@ -122,7 +122,7 @@ func TestEngineReal_AbrirIndisponivelAvisaOClienteETransfere(t *testing.T) {
 	if len(tr.mensagens) != 1 || tr.mensagens[0] != MsgFalhaAoAbrir {
 		t.Fatalf("aviso do gateway antes do handoff: %v", tr.mensagens)
 	}
-	if len(tr.handoffs) != 1 || !strings.Contains(tr.handoffs[0].nota, "sem chamado") {
+	if len(tr.handoffs) != 1 || !strings.Contains(tr.handoffs[0].nota, "chamado possivelmente criado, confira no Desk antes de abrir outro") && !strings.Contains(tr.handoffs[0].nota, "sem chamado") {
 		t.Fatalf("handoff com nota: %+v", tr.handoffs)
 	}
 	if c, _ := a.st.ObterConversa(context.Background(), convTeste); c.Estado != store.EstadoTransferida || c.TicketNumber != 0 {

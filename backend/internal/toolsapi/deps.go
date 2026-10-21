@@ -3,10 +3,7 @@ package toolsapi
 import (
 	"context"
 	"log/slog"
-	"os"
 	"regexp"
-	"strconv"
-	"strings"
 	"time"
 
 	"bot-infominas/internal/config"
@@ -152,33 +149,19 @@ func (o Opcoes) comPadroes() Opcoes {
 	return o
 }
 
-// OpcoesDoAmbiente lê as hipóteses desta etapa do ambiente (a zona da E3.1 não
-// inclui internal/config; o que já está lá vem de cfg).
-func OpcoesDoAmbiente(cfg *config.Config) Opcoes {
+// OpcoesDeConfig monta as Opcoes a partir da configuração única do gateway
+// (internal/config; defaults e validação moram lá, este pacote não lê o ambiente).
+func OpcoesDeConfig(cfg *config.Config) Opcoes {
 	return Opcoes{
-		TicketFinishConversa:     envBool("TICKET_FINISH_CONVERSA", false),
-		TicketRodape:             ptrBool(envBool("TICKET_RODAPE", true)),
-		TransferirAposTicket:     ptrBool(envBool("TRANSFERIR_APOS_TICKET", true)),
-		DedupConsultaInfodesk:    ptrBool(envBool("DEDUP_CONSULTA_INFODESK", true)),
-		DedupJanela:              envDur("TICKET_DEDUP_JANELA", 24*time.Hour),
-		TicketPendenteTTL:        envDur("TICKET_PENDENTE_TTL", 10*time.Minute),
-		IdentContratoRE:          os.Getenv("IDENT_CONTRATO_RE"),
-		IdentSal:                 os.Getenv("IDENT_HASH_SAL"),
+		TicketFinishConversa:     cfg.TicketFinishConversa,
+		TicketRodape:             ptrBool(cfg.TicketRodape),
+		TransferirAposTicket:     ptrBool(cfg.TransferirAposTicket),
+		DedupConsultaInfodesk:    ptrBool(cfg.DedupConsultaInfodesk),
+		DedupJanela:              cfg.TicketDedupJanela,
+		TicketPendenteTTL:        cfg.TicketPendenteTTL,
+		IdentContratoRE:          cfg.IdentContratoRE,
+		IdentSal:                 cfg.IdentHashSal,
 		IdentTTL:                 cfg.IdentTTL,
 		DepartamentoHumanoPadrao: cfg.DepartamentoHumanoPadrao,
 	}
-}
-
-func envBool(chave string, def bool) bool {
-	if v, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(chave))); err == nil {
-		return v
-	}
-	return def
-}
-
-func envDur(chave string, def time.Duration) time.Duration {
-	if d, err := time.ParseDuration(strings.TrimSpace(os.Getenv(chave))); err == nil && d > 0 {
-		return d
-	}
-	return def
 }

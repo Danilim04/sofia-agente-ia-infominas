@@ -807,17 +807,43 @@ func TestAbrir_ConcorrenteComAMesmaChaveFazUmSoPost(t *testing.T) {
 	}
 }
 
-// Recusa definitiva (4xx): a mesma chave NÃO fica "em andamento" — nada foi criado.
+// Recusa definitiva (4xx): a mesma chave NÃO fica "em andamento" — nada foi
+// criado. O fato é gravado no store (`falha`), não em memória: o retry responde
+// infodesk_indisponivel sem POST nem listagem, inclusive depois de um reinício.
 func TestAbrir_RecusaDefinitivaNaoViraEmAndamentoNoRetry(t *testing.T) {
 	a := novoAmb(t)
 	a.conversa(convTeste, telTeste)
 	a.identificadoPorCPF()
 	a.idk.postErr = &infodesk.HTTPError{Status: 400, Code: infodesk.CodeValidationError}
-	a.abrir("sem_conexao")
+	_, chave := a.abrir("sem_conexao")
+	if tk, _ := a.st.ObterTicket(context.Background(), chave); tk == nil || tk.Status != store.TicketFalha {
+		t.Fatalf("a recusa definitiva devia gravar `falha` no store: %+v", tk)
+	}
 	listagens := a.idk.listCalls
 	out, _ := a.abrir("sem_conexao")
 	if out["motivo"] != "infodesk_indisponivel" || a.idk.totalPosts() != 1 || a.idk.listCalls != listagens {
 		t.Fatalf("retry após 4xx: %+v (POSTs=%d)", out, a.idk.totalPosts())
+	}
+
+	// Reinício do processo: um handler novo sobre o mesmo store.
+	a.h = New(Deps{Token: tokenTeste, Store: a.st, Infodesk: a.idk, Taxonomia: a.tx, Transferidor: a.tr, Alertas: a.av,
+		Opcoes: Opcoes{DepartamentoHumanoPadrao: idDeptAtend}})
+	out, _ = a.abrir("sem_conexao")
+	if out["motivo"] != "infodesk_indisponivel" || a.idk.totalPosts() != 1 || a.idk.listCalls != listagens {
+		t.Fatalf("retry após reinício: %+v (POSTs=%d, listagens=%d→%d)", out, a.idk.totalPosts(), listagens, a.idk.listCalls)
+	}
+}
+
+// Erro AMBÍGUO do POST (5xx) não grava `falha`: o ticket pode existir e o
+// reconciliador/listagem ainda podem achá-lo.
+func TestAbrir_ErroAmbiguoNaoGravaFalha(t *testing.T) {
+	a := novoAmb(t)
+	a.conversa(convTeste, telTeste)
+	a.identificadoPorCPF()
+	a.idk.postErr = &infodesk.HTTPError{Status: 503, Code: infodesk.CodeInternalError}
+	_, chave := a.abrir("sem_conexao")
+	if tk, _ := a.st.ObterTicket(context.Background(), chave); tk == nil || tk.Status != store.TicketPendente {
+		t.Fatalf("5xx deixa o ticket pendente: %+v", tk)
 	}
 }
 

@@ -27,6 +27,11 @@ const (
 	OrigemFrustracao = "frustracao" // frustração alta detectada pelo cérebro
 	OrigemConfianca  = "confianca"  // classificação com confiança baixa demais
 	OrigemAcao       = "acao"       // ação `transferir` com origem que o gateway não conhece
+
+	// Origens de quem chama a engine de fora dela (reconciliador, toolsapi).
+	OrigemVigia          = "vigia"           // vigia BOT_TIMEOUT_HANDOFF: a Sofia não respondeu o cliente
+	OrigemTicketPendente = "ticket_pendente" // POST do chamado sem resposta / Infodesk recusou: o chamado pode existir
+	OrigemTicketAberto   = "ticket_aberto"   // handoff depois do chamado aberto (TRANSFERIR_APOS_TICKET)
 )
 
 // Transferencia descreve por que a conversa vai para um atendente.
@@ -40,6 +45,9 @@ type Transferencia struct {
 	// SemAviso: o cliente JÁ foi avisado (a resposta do cérebro anunciou a
 	// transferência) — não manda a mensagem de aviso de novo.
 	SemAviso bool
+	// Espera: há quanto tempo o cliente esperava (origem `vigia`; entra na nota
+	// como "sem resposta em N min"). Zero = a nota não cita o tempo.
+	Espera time.Duration
 }
 
 // transferenciaPorErroDoCerebro monta a transferência a partir do erro da
@@ -123,7 +131,7 @@ func (e *Engine) transferirPorMidia(ctx context.Context, convID string) {
 //  4. mensagem de aviso ao cliente (nunca erro técnico) ANTES do handoff — o
 //     handoff não fala com o cliente (07 C10);
 //  5. `conversas.estado = transferida`: o bot cala, mesmo que o handoff falhe
-//     (o vigia N1 da E3.3 repete);
+//     (a marca de handoff não confirmado faz o vigia do reconciliador repetir);
 //  6. `Handoff(DEPARTAMENTO_HUMANO_PADRAO, nota por código)`.
 //
 // Devolve o ID de ocorrência ("" quando a conversa já não era do bot).
@@ -193,19 +201,55 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 			"id_ocorrencia", id, "conversation_id", convID)
 	}
 	if err := e.handoffComRetry(ctx, convID, dept, nota); err != nil {
-		e.log.Error("transferir: handoff falhou; conversa fica muda localmente",
+		e.log.Error("transferir: handoff falhou; conversa fica muda localmente e o vigia do reconciliador repete",
 			"id_ocorrencia", id, "conversation_id", convID, "departamento", dept, "err", err)
-		e.vigia.Aviso(alerta.TipoHandoffFalhou, "Handoff para o atendente falhou",
-			"Ocorrência "+id+" (origem "+t.Origem+"): o Infodesk não aceitou o handoff. A Sofia parou de responder nessa conversa; o cliente pode estar sem ninguém. Veja o log sofia_falha.", convID)
+		texto := "Ocorrência " + id + " (origem " + t.Origem + "): o Infodesk não aceitou o handoff. A Sofia parou de responder nessa conversa; o cliente pode estar sem ninguém. O reconciliador vai repetir o handoff. Veja o log sofia_falha."
+		if !e.marcarHandoffPendente(ctx, convID, t.Origem, id, dept, nota) {
+			texto = "Ocorrência " + id + " (origem " + t.Origem + "): o Infodesk não aceitou o handoff e a marca para repeti-lo não foi gravada. A Sofia parou de responder nessa conversa e NINGUÉM vai repetir o handoff sozinho: transfira à mão. Veja o log sofia_falha."
+		}
+		e.vigia.Aviso(alerta.TipoHandoffFalhou, "Handoff para o atendente falhou", texto, convID)
 	}
 	e.log.Info("conversa transferida para atendimento humano",
 		"id_ocorrencia", id, "conversation_id", convID, "origem", t.Origem, "departamento", dept)
 	return id
 }
 
+// marcarHandoffPendente grava a marca de "handoff não confirmado" (a conversa
+// já está `transferida` e muda, mas nenhum atendente foi avisado) para o vigia
+// do reconciliador repetir. Devolve false se não conseguiu gravar. Não usa o
+// cancelamento do ctx do turno: é justamente nele que o handoff pode ter falhado.
+func (e *Engine) marcarHandoffPendente(ctx context.Context, convID, origem, idOcorrencia, dept, nota string) bool {
+	agora := e.agora()
+	err := e.st.MarcarHandoffPendente(context.WithoutCancel(ctx), &store.HandoffPendente{
+		ConversationID: convID, Origem: origem, IDOcorrencia: idOcorrencia,
+		DepartamentoID: dept, Nota: nota, CreatedAt: agora, ProximaEm: agora,
+	})
+	if err != nil {
+		e.log.Error("gravar a marca de handoff não confirmado", "conversation_id", convID, "id_ocorrencia", idOcorrencia, "err", err)
+		return false
+	}
+	return true
+}
+
+// ReenviarHandoff repete UMA vez o handoff de uma marca (o backoff e o alerta
+// são do vigia do reconciliador). Sucesso apaga a marca. O handoff é
+// idempotente — ao contrário de POST /tickets.
+func (e *Engine) ReenviarHandoff(ctx context.Context, h store.HandoffPendente) error {
+	if err := e.tr.Handoff(ctx, h.ConversationID, h.DepartamentoID, h.Nota); err != nil {
+		return err
+	}
+	if _, err := e.st.LimparHandoffPendente(context.WithoutCancel(ctx), h.ConversationID); err != nil {
+		e.log.Error("handoff repetido confirmado, mas não consegui apagar a marca (o vigia repete uma vez a mais, sem efeito)",
+			"conversation_id", h.ConversationID, "id_ocorrencia", h.IDOcorrencia, "err", err)
+	}
+	e.log.Info("handoff repetido e confirmado", "conversation_id", h.ConversationID, "id_ocorrencia", h.IDOcorrencia, "tentativas_antes", h.Tentativas)
+	return nil
+}
+
 // handoffComRetry repete o handoff só em falha transitória (5xx, rede, 429):
-// ele é idempotente — ao contrário de POST /tickets — e, se falhar de vez, o
-// cliente fica sem ninguém até o vigia N1 (E3.3).
+// ele é idempotente — ao contrário de POST /tickets. Se falhar de vez, a
+// engine grava a marca de handoff não confirmado e o vigia do reconciliador
+// o repete com backoff (E3.6).
 func (e *Engine) handoffComRetry(ctx context.Context, convID, dept, nota string) error {
 	var err error
 	for tentativa := 0; ; tentativa++ {
@@ -233,6 +277,31 @@ var motivosDaNota = map[string]string{
 	OrigemFrustracao: "frustração do cliente",
 	OrigemConfianca:  "classificação com baixa confiança",
 	OrigemAcao:       "ação do cérebro",
+
+	// Origens de fora da engine. vigia e ticket_aberto têm texto montado em
+	// motivoDaNota (levam número); este é o fixo das demais.
+	OrigemTicketPendente: "chamado possivelmente criado, confira no Desk antes de abrir outro",
+}
+
+// motivoDaNota é o texto do motivo da nota interna: fixo por origem, com só
+// dois números que o CÓDIGO conhece (nº do chamado e minutos de espera).
+func motivoDaNota(t Transferencia, ticket int) string {
+	switch t.Origem {
+	case OrigemVigia:
+		if t.Espera >= time.Minute {
+			return fmt.Sprintf("sem resposta da %s em %d min", nomeAssistente, int(t.Espera.Minutes()))
+		}
+		return "sem resposta da " + nomeAssistente + " no prazo"
+	case OrigemTicketAberto:
+		if ticket > 0 {
+			return fmt.Sprintf("chamado #%d aberto", ticket)
+		}
+		return "chamado aberto"
+	}
+	if m := motivosDaNota[t.Origem]; m != "" {
+		return m
+	}
+	return "transferido pela " + nomeAssistente
 }
 
 var (
@@ -247,19 +316,19 @@ const notaMaxRunas = 500
 // PII em claro (nome do cadastro abreviado; CPF/contrato só mascarado) e o
 // nº do chamado. Nada do que o cliente ou o LLM escreveu entra aqui.
 func (e *Engine) montarNota(ctx context.Context, convID string, t Transferencia, idOcorrencia string) string {
-	motivo := motivosDaNota[t.Origem]
-	if motivo == "" {
-		motivo = "transferido pela " + nomeAssistente
-	}
-	partes := []string{nomeAssistente + " → humano", "motivo: " + motivo}
-	if idOcorrencia != "" && (t.Origem == OrigemCerebro || t.Origem == OrigemDisjuntor) {
-		partes = append(partes, "ocorrência: "+idOcorrencia)
-	}
-
 	conv, err := e.st.ObterConversa(ctx, convID)
 	if err != nil {
 		e.log.Error("nota do handoff: ler conversa", "conversation_id", convID, "err", err)
 	}
+	ticket := 0
+	if conv != nil {
+		ticket = conv.TicketNumber
+	}
+	partes := []string{nomeAssistente + " → humano", "motivo: " + motivoDaNota(t, ticket)}
+	if idOcorrencia != "" && (t.Origem == OrigemCerebro || t.Origem == OrigemDisjuntor) {
+		partes = append(partes, "ocorrência: "+idOcorrencia)
+	}
+
 	if conv != nil {
 		if cat := categoriaDaClassificacao(conv.ClassificacaoJSON); cat != "" {
 			partes = append(partes, "categoria: "+cat)
@@ -278,9 +347,14 @@ func (e *Engine) montarNota(ctx context.Context, convID string, t Transferencia,
 				}
 			}
 		}
-		if conv.TicketNumber > 0 {
+		switch {
+		case t.Origem == OrigemTicketAberto && conv.TicketNumber > 0:
+			// o motivo já diz "chamado #N aberto"
+		case conv.TicketNumber > 0:
 			partes = append(partes, fmt.Sprintf("chamado #%d", conv.TicketNumber))
-		} else {
+		case t.Origem == OrigemTicketPendente:
+			// o motivo já avisa que o chamado pode existir: "sem chamado" seria falso
+		default:
 			partes = append(partes, "sem chamado")
 		}
 	}

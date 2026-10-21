@@ -32,11 +32,8 @@ const (
 	vinculoTeto = 5 * time.Second
 )
 
-// Origens de transferência próprias desta etapa (a engine trata origem
-// desconhecida com o texto genérico da nota).
+// Dimensões da reconciliação por listagem.
 const (
-	origemTicketAberto   = "ticket_aberto"   // handoff depois do ticket (TRANSFERIR_APOS_TICKET)
-	origemTicketPendente = "ticket_pendente" // POST sem resposta e a listagem não achou / Infodesk recusou
 	// paginasReconciliacao × listagemMaxima = quantos tickets abertos do
 	// telefone a reconciliação enxerga.
 	paginasReconciliacao = 3
@@ -239,7 +236,7 @@ func (h *Handler) sucessoAbrir(ctx context.Context, a *abertura, numero int) map
 		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), posTeto)
 		defer cancel()
 		id := h.d.Transferidor.TransferirParaHumano(pctx, a.conv, engine.Transferencia{
-			Origem:  origemTicketAberto,
+			Origem:  engine.OrigemTicketAberto,
 			Causa:   "chamado aberto; atendente assume (TRANSFERIR_APOS_TICKET)",
 			Detalhe: "chamado nº " + strconv.Itoa(numero),
 			// O LLM comunica o número e a passagem na resposta deste turno.
@@ -288,7 +285,8 @@ func (h *Handler) gravarNumeroNaConversa(ctx context.Context, a *abertura, numer
 }
 
 // abrirRepetido trata a chave já existente: aberto devolve o resultado;
-// pendente reconcilia por listagem; falha não reabre.
+// pendente reconcilia por listagem; falha (4xx definitivo gravado por
+// falhaDoPOST, ou TTL vencido) não reabre, nem faz POST nem listagem.
 func (h *Handler) abrirRepetido(ctx context.Context, a *abertura) map[string]any {
 	l := a.linha
 	switch {
@@ -296,13 +294,6 @@ func (h *Handler) abrirRepetido(ctx context.Context, a *abertura) map[string]any
 		return h.sucessoAbrir(ctx, a, l.Numero)
 	case l.Status == store.TicketFalha:
 		return h.indisponivelAoAbrir(ctx, a, "ticket desta chave já foi dado como falha")
-	}
-	// O Infodesk recusou esta chave de forma definitiva (4xx): nada foi criado e
-	// não há o que reconciliar nem o que "aguardar". Marcador em memória porque
-	// o store ainda não tem como gravar `falha` (TODO(E3.1-store)); após
-	// reinício vale a regra do TTL abaixo.
-	if _, recusada := h.recusadas.Load(a.chave); recusada {
-		return h.indisponivelAoAbrir(ctx, a, "o Infodesk recusou a abertura desta proposta")
 	}
 	// pendente: a primeira chamada ainda pode estar em curso, ou o POST ficou sem resposta.
 	tk, achou, err := h.reconciliar(ctx, a)
@@ -329,7 +320,7 @@ func (h *Handler) falhaDoPOST(ctx context.Context, a *abertura, err error) map[s
 	// existir, então é ambíguo e se resolve por listagem como o 5xx.
 	if errors.As(err, &he) && he.Status >= 400 && he.Status < 500 &&
 		he.Status != http.StatusTooManyRequests && he.Code != infodesk.CodeConflict {
-		h.recusadas.Store(a.chave, struct{}{})
+		h.registrarRecusa(ctx, a)
 		h.log.Error("abrir: o Infodesk recusou o ticket", "conversation_id", a.conv, "status", he.Status, "code", he.Code,
 			"campos", camposCitados(he.Mensagem), "rota", he.Rota)
 		switch he.Code {
@@ -378,7 +369,7 @@ func (h *Handler) indisponivelAoAbrir(ctx context.Context, a *abertura, causa st
 	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), posTeto)
 	defer cancel()
 	h.d.Transferidor.TransferirParaHumano(pctx, a.conv, engine.Transferencia{
-		Origem:   origemTicketPendente,
+		Origem:   engine.OrigemTicketPendente,
 		Causa:    "não foi possível registrar o chamado: " + causa,
 		Mensagem: MsgFalhaAoAbrir,
 	})
@@ -489,5 +480,23 @@ func descreverErro(err error) string {
 		return "prazo esgotado"
 	default:
 		return "erro interno"
+	}
+}
+
+// registrarRecusa grava `falha` na linha do ticket quando o Infodesk recusou o
+// POST de forma definitiva (4xx): nada foi criado, então um segundo `abrir` com
+// a mesma chave devolve `infodesk_indisponivel` pelo caminho `falha` do
+// abrirRepetido — sem POST e sem listagem, e sem perder o fato num reinício.
+// Se a gravação falhar o retry cai no caminho `pendente` (listagem até o TTL):
+// pior em latência, nunca em duplicar o POST.
+func (h *Handler) registrarRecusa(ctx context.Context, a *abertura) {
+	ok, err := h.d.Store.FalharTicket(context.WithoutCancel(ctx), a.chave)
+	switch {
+	case err != nil:
+		h.log.Error("abrir: não consegui gravar a recusa do Infodesk no ticket; o retry reconcilia por listagem (sem POST)",
+			"conversation_id", a.conv, "chave", chavePrefixo(a.chave), "err", err)
+	case !ok:
+		h.log.Warn("abrir: recusa do Infodesk, mas o ticket local já não estava pendente",
+			"conversation_id", a.conv, "chave", chavePrefixo(a.chave))
 	}
 }
