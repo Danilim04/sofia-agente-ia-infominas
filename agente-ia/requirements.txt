@@ -11,6 +11,10 @@ langgraph-checkpoint-sqlite>=2.0.0,<3.0.0
 # aiosqlite 0.22 removeu Connection(Thread) e quebra o is_alive() do checkpointer
 aiosqlite>=0.21,<0.22
 
+# --- Classificação (JEV / TypeSafe System One — docs/plano/02-classificacao.md) ---
+# Importado sob demanda em src/classificacao/jev.py; sem ele o cérebro cai no fallback LLM.
+typesafe-sdk>=0.7.5,<1.0.0
+
 # --- RAG ---
 chromadb>=1.0.0,<2.0.0
 pypdf>=5.0.0,<6.0.0
