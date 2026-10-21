@@ -43,6 +43,9 @@ func run() int {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)}))
 	slog.SetDefault(log)
 	log.Info("log inicializado", "level", cfg.LogLevel)
+	for _, aviso := range cfg.Avisos() {
+		log.Warn(aviso)
+	}
 
 	st, err := abrirStore(cfg, log)
 	if err != nil {
@@ -108,7 +111,7 @@ func run() int {
 	// Reconciliador (E3.3; bloco de wiring fora da zona declarada da etapa): a
 	// recuperação de crash roda ANTES de o webhook receber o 1º evento; o loop
 	// (feed /events, tickets pendentes, vigia BOT_TIMEOUT_HANDOFF) nasce ligado.
-	rec := reconciliador.New(reconciliador.OptionsDoAmbiente(log), idk, srv, eng, st, eng.Vigia(), log)
+	rec := reconciliador.New(reconciliador.OptionsDeConfig(cfg), idk, srv, eng, st, eng.Vigia(), log)
 	if err := rec.Recuperar(ctx); err != nil {
 		log.Error("recuperação de crash do reconciliador falhou", "err", err)
 	}
@@ -127,14 +130,14 @@ func run() int {
 	if cfg.ToolsAPIToken == "" {
 		log.Warn("TOOLS_API_TOKEN vazio: API de tools (/tools/infodesk/*) NÃO exposta")
 	} else {
-		tx, err := carregarTaxonomia(ctx, idk, eng, log)
+		tx, err := carregarTaxonomia(ctx, cfg, idk, eng, log)
 		if err != nil {
 			log.Error("taxonomia inválida", "err", err)
 			return 1
 		}
 		toolsapi.New(toolsapi.Deps{
 			Token: cfg.ToolsAPIToken, Log: log, Store: st, Infodesk: idk, Taxonomia: tx,
-			Transferidor: eng, Alertas: eng.Vigia(), Opcoes: toolsapi.OpcoesDoAmbiente(cfg),
+			Transferidor: eng, Alertas: eng.Vigia(), Opcoes: toolsapi.OpcoesDeConfig(cfg),
 		}).Register(mux)
 		log.Info("API de tools habilitada", "rota", "/tools/infodesk/*")
 	}
@@ -215,17 +218,20 @@ func parseLogLevel(s string) slog.Level {
 }
 
 // carregarTaxonomia lê config/taxonomia.yaml e resolve mesa/departamento/
-// prioridade/catálogo contra o Infodesk (E3.1). Com STRICT_TAXONOMIA=true uma
+// prioridade/catálogo contra o Infodesk (E3.1). Com cfg.StrictTaxonomia uma
 // divergência derruba o boot; sem ele vira alerta `taxonomia_invalida` e só as
 // categorias afetadas ficam sem mapa. Infodesk fora do ar no boot não derruba o
 // gateway: a taxonomia tenta carregar de novo sob demanda.
-func carregarTaxonomia(ctx context.Context, idk *infodesk.Client, eng *engine.Engine, log *slog.Logger) (*taxonomia.Taxonomia, error) {
-	caminho := taxonomia.CaminhoDoAmbiente()
+func carregarTaxonomia(ctx context.Context, cfg *config.Config, idk *infodesk.Client, eng *engine.Engine, log *slog.Logger) (*taxonomia.Taxonomia, error) {
+	caminho := cfg.TaxonomiaPath
+	if caminho == "" { // sem TAXONOMIA_PATH: os caminhos padrão (volume do compose, ../agente-ia)
+		caminho = taxonomia.CaminhoDoAmbiente()
+	}
 	def, err := taxonomia.Ler(caminho)
 	if err != nil {
 		return nil, err
 	}
-	tx := taxonomia.Nova(def, idk, taxonomia.Opcoes{Strict: taxonomia.StrictDoAmbiente(), Log: log})
+	tx := taxonomia.Nova(def, idk, taxonomia.Opcoes{Strict: cfg.StrictTaxonomia, Log: log})
 	rel, err := tx.Carregar(ctx)
 	switch {
 	case errors.Is(err, taxonomia.ErrReferenciaIndisponivel):

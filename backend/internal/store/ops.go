@@ -402,6 +402,17 @@ CREATE TABLE IF NOT EXISTS gw.tickets (
 CREATE INDEX IF NOT EXISTS tickets_numero ON gw.tickets (numero);
 CREATE INDEX IF NOT EXISTS tickets_conversa ON gw.tickets (conversation_id);
 CREATE INDEX IF NOT EXISTS tickets_telefone ON gw.tickets (telefone);
+
+CREATE TABLE IF NOT EXISTS gw.handoffs_pendentes (
+    conversation_id TEXT PRIMARY KEY,
+    origem          TEXT NOT NULL DEFAULT '',
+    id_ocorrencia   TEXT NOT NULL DEFAULT '',
+    departamento_id TEXT NOT NULL DEFAULT '',
+    nota            TEXT NOT NULL DEFAULT '',
+    tentativas      INTEGER NOT NULL DEFAULT 0,
+    proxima_em      BIGINT NOT NULL DEFAULT 0,
+    created_at      BIGINT NOT NULL DEFAULT 0
+);
 `
 
 // ---------------------------------------------------------------------------
@@ -467,4 +478,64 @@ func (o *ops) ConversasSemResposta(ctx context.Context, antes time.Time, folga t
 		out = append(out, *c)
 	}
 	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// Handoff não confirmado (E3.6)
+// ---------------------------------------------------------------------------
+
+func (o *ops) MarcarHandoffPendente(ctx context.Context, h *HandoffPendente) error {
+	criado := h.CreatedAt
+	if criado.IsZero() {
+		criado = time.Now()
+	}
+	proxima := h.ProximaEm
+	if proxima.IsZero() {
+		proxima = criado
+	}
+	_, err := o.db.ExecContext(ctx, o.rebind(
+		`INSERT INTO gw.handoffs_pendentes (conversation_id, origem, id_ocorrencia, departamento_id, nota, tentativas, proxima_em, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (conversation_id) DO UPDATE SET
+		   origem = excluded.origem, id_ocorrencia = excluded.id_ocorrencia, departamento_id = excluded.departamento_id,
+		   nota = excluded.nota, tentativas = excluded.tentativas, proxima_em = excluded.proxima_em, created_at = excluded.created_at`),
+		h.ConversationID, h.Origem, h.IDOcorrencia, h.DepartamentoID, h.Nota, h.Tentativas, proxima.UnixMilli(), criado.UnixMilli())
+	return err
+}
+
+func (o *ops) HandoffsPendentes(ctx context.Context, ate time.Time) ([]HandoffPendente, error) {
+	rows, err := o.db.QueryContext(ctx, o.rebind(
+		`SELECT conversation_id, origem, id_ocorrencia, departamento_id, nota, tentativas, proxima_em, created_at
+		   FROM gw.handoffs_pendentes WHERE proxima_em <= ? ORDER BY created_at, conversation_id`), ate.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HandoffPendente
+	for rows.Next() {
+		var h HandoffPendente
+		var proxima, criado int64
+		if err := rows.Scan(&h.ConversationID, &h.Origem, &h.IDOcorrencia, &h.DepartamentoID, &h.Nota, &h.Tentativas, &proxima, &criado); err != nil {
+			return nil, err
+		}
+		h.ProximaEm, h.CreatedAt = time.UnixMilli(proxima), time.UnixMilli(criado)
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+func (o *ops) AdiarHandoffPendente(ctx context.Context, convID string, tentativas int, proximaEm time.Time) error {
+	_, err := o.db.ExecContext(ctx, o.rebind(
+		`UPDATE gw.handoffs_pendentes SET tentativas = ?, proxima_em = ? WHERE conversation_id = ?`),
+		tentativas, proximaEm.UnixMilli(), convID)
+	return err
+}
+
+func (o *ops) LimparHandoffPendente(ctx context.Context, convID string) (bool, error) {
+	res, err := o.db.ExecContext(ctx, o.rebind(`DELETE FROM gw.handoffs_pendentes WHERE conversation_id = ?`), convID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
