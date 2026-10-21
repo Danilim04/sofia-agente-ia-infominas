@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import re
+
 import httpx
 import pytest
 
@@ -108,6 +110,8 @@ def test_docs_placeholder_nao_afirmam_preco_ou_prazo():
         texto = md.read_text(encoding="utf-8").lower()
         assert "r$" not in texto, md.name
         assert "garantimos" not in texto and "em até" not in texto, md.name
+        # nenhum prazo numérico ("24 horas", "2 dias"...): persona não promete prazo
+        assert not re.search(r"\d+\s*(hora|dia|minuto|semana|mes)", texto), md.name
 
 
 def test_docs_placeholder_geram_chunks_citaveis():

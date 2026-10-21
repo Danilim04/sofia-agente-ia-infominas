@@ -489,3 +489,15 @@ def test_sync_da_base_local_placeholder_e_idempotente():
     r2 = _sync(fonte, indice, emb)
     assert r2.inalterados == 3 and r2.novos == 0 and r2.alterados == 0 and r2.ok
     assert emb.textos_embedados == embeds  # nada reprocessado
+
+
+def test_cli_fonte_api_sem_config_aborta_com_mensagem_clara(monkeypatch, tmp_path):
+    import argparse
+
+    from src.rag.sync import _montar_fonte
+
+    for var in ("DOCS_API_BASE_URL", "DOCS_API_KEY", "DOCS_API_TIMEOUT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.chdir(tmp_path)  # sem .env por perto
+    with pytest.raises(SystemExit, match=r"DOCS_API_\* não configurado"):
+        _montar_fonte("api", argparse.Namespace(docs_dir=None))

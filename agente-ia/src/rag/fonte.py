@@ -224,6 +224,9 @@ class FonteAPIInfominas:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._client = httpx.Client(headers=headers, timeout=timeout or 30.0, transport=transport)
 
+    def close(self) -> None:
+        self._client.close()
+
     def _get(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
             resp = self._client.get(url, params=params)
