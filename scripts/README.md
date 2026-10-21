@@ -1,45 +1,42 @@
 # scripts/
 
-Scripts de conveniência para rodar o stack local inteiro.
+| Script | Para quê |
+|---|---|
+| `verificar.sh` | Fonte única da esteira (`--rapido` no commit, `--completo` no merge). Ver skill `ambiente-testes`. |
+| `start-all.sh` / `stop-all.sh` | Stack local de dev: mock-infodesk + cérebro + gateway (+ Chainlit). Abaixo. |
+| `dev.env.example` | Variáveis de dev (sem segredos) lidas pelo `start-all.sh`. |
+| `dev/taxonomia.dev.yaml` | Taxonomia **só para dev**, com as mesas do mock — não é o mapeamento real (P1). |
+| `instalar-hooks-git.sh`, `reset-gate.sh` | Hooks do git e reinício do gate do harness. |
+
+Guia completo, com o desenho e o Chainlit: `docs/plano/ambiente-dev.md`.
 
 ## `start-all.sh`
 
-Sobe os **três** serviços já conectados entre si, na ordem certa:
-
-1. **cérebro** (`agente-ia/`, FastAPI) em `:8001` — sobe primeiro porque o backend chama `POST /chat`.
-2. **backend** (`backend/`, Go) em `:8080` — sobe com `BRAIN_BASE_URL` apontando para o cérebro e `CHATWOOT_BASE_URL` para o mock.
-3. **mock-chatwoot** (`mock-chatwoot/`) em `:9000` — sobe com `GO_WEBHOOK_URL` apontando para o backend.
-
-A **cola mock ↔ backend é o `WEBHOOK_TOKEN`**: o script lê o token do
-`backend/.env` e o repassa ao mock, então os dois sempre casam (é o "token do
-mock para o backend"). Cada serviço espera o anterior ficar pronto
-(`/health` / porta aberta) antes de subir.
+Sobe, nesta ordem, **mock-infodesk** (`:9000`), **cérebro** (`agente-ia/`,
+`:8001`) e **gateway** (`backend/`, `:8080`), espera cada porta responder,
+confere que a taxonomia carregou sem problemas e imprime onde abrir cada
+coisa. Chave, segredo do webhook e `TOOLS_API_TOKEN` são forçados para casar
+entre os três; `TAXONOMIA_PATH` aponta para `dev/taxonomia.dev.yaml`.
 
 ```bash
-scripts/start-all.sh
-# abra http://localhost:9000 e converse
-# Ctrl+C derruba os três
+cp scripts/dev.env.example scripts/dev.env   # opcional, fora do git
+scripts/start-all.sh                         # Ctrl+C derruba os três
+scripts/start-all.sh --chainlit              # + Chainlit em :8000
+MOCK_PORT=9100 scripts/start-all.sh          # o shell vence o dev.env
 ```
 
-Portas e token são configuráveis por env:
+Segredos reais (`OPENROUTER_API_KEY`...) ficam em `agente-ia/.env` ou no
+ambiente, nunca no `dev.env.example`. Logs em `scripts/logs/`; o gateway
+compilado, em `scripts/.bin/` (ambos ignorados pelo git).
 
-```bash
-BRAIN_PORT=8001 BACKEND_PORT=8080 MOCK_PORT=9000 scripts/start-all.sh
-WEBHOOK_TOKEN=outro-token scripts/start-all.sh
-```
-
-Logs de cada serviço ficam em `scripts/logs/{cerebro,backend,mock}.log`.
-
-### Pré-requisitos
-
-- `agente-ia/venv` criado e dependências instaladas, `agente-ia/.env` com `OPENROUTER_API_KEY`.
-- ChromaDB ingerido: `cd agente-ia && source venv/bin/activate && python -m src.rag.ingest`.
-- `backend/.env` preenchido (precisa de `MONGO_URI` acessível para o gate de login).
-- `go` e `python3` no PATH.
+Pré-requisitos: `go` e `curl` no PATH; `agente-ia/venv` com as dependências
+(senão usa o Python do PATH); no Windows, Git Bash. Para o RAG, o índice
+ingerido (`python -m src.rag.ingest`).
 
 ## `stop-all.sh`
 
-Fallback que mata processos órfãos pelas portas (caso algo escape do Ctrl+C):
+Fallback que mata processos órfãos pelas portas (caso algo escape do Ctrl+C);
+`--chainlit` inclui a porta do Chainlit:
 
 ```bash
 scripts/stop-all.sh

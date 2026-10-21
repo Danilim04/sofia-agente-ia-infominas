@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
-# stop-all.sh — derruba qualquer processo órfão dos 3 serviços, por porta.
+# stop-all.sh — derruba qualquer processo órfão dos 3 serviços, por porta
+# (o Chainlit, :8000 por padrão, só com --chainlit — a porta pode ser de outra coisa).
 # Normalmente o Ctrl+C no start-all.sh já limpa tudo; use isto se algo escapou.
 #
-# Uso: scripts/stop-all.sh   (respeita BRAIN_PORT/BACKEND_PORT/MOCK_PORT)
+# Uso: scripts/stop-all.sh [--chainlit]   (respeita BRAIN_PORT/BACKEND_PORT/MOCK_PORT/CHAINLIT_PORT)
 # Linux/macOS: fuser ou lsof. Windows (Git Bash): netstat + taskkill.
 
 set -uo pipefail
@@ -11,6 +12,7 @@ set -uo pipefail
 BRAIN_PORT="${BRAIN_PORT:-8001}"
 BACKEND_PORT="${BACKEND_PORT:-8080}"
 MOCK_PORT="${MOCK_PORT:-9000}"
+CHAINLIT_PORT="${CHAINLIT_PORT:-8000}"
 
 pids_na_porta() {
   local port="$1"
@@ -51,4 +53,5 @@ kill_port() {
 kill_port "$MOCK_PORT"    "mock"
 kill_port "$BACKEND_PORT" "gateway"
 kill_port "$BRAIN_PORT"   "cerebro"
+if [[ "${1:-}" == "--chainlit" || "${START_CHAINLIT:-0}" == "1" ]]; then kill_port "$CHAINLIT_PORT" "chainlit"; fi
 echo "✓ feito."

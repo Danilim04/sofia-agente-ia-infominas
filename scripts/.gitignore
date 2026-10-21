@@ -1,0 +1,6 @@
+# dev.env é a cópia local de dev.env.example (pode ter ajustes e, se alguém
+# insistir, chaves) — nunca entra no git.
+dev.env
+# binários e logs gerados por start-all.sh
+.bin/
+logs/

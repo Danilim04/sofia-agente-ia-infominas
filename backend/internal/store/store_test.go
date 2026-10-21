@@ -677,3 +677,82 @@ func TestStoreConversasSemResposta(t *testing.T) {
 		})
 	}
 }
+
+// TestStoreHandoffPendente: a marca é por conversa (upsert), só aparece quando
+// a próxima tentativa venceu, Adiar registra a tentativa e Limpar apaga.
+func TestStoreHandoffPendente(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			a, b := unico("hp-a"), unico("hp-b")
+			base := time.Now().Truncate(time.Millisecond)
+			achar := func(ate time.Time, conv string) *HandoffPendente {
+				t.Helper()
+				hs, err := st.HandoffsPendentes(ctx, ate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i := range hs {
+					if hs[i].ConversationID == conv {
+						return &hs[i]
+					}
+				}
+				return nil
+			}
+
+			if err := st.MarcarHandoffPendente(ctx, &HandoffPendente{
+				ConversationID: a, Origem: "cerebro", IDOcorrencia: "SOF-1", DepartamentoID: "dept-1", Nota: "nota a",
+				CreatedAt: base, ProximaEm: base.Add(time.Minute),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// ProximaEm e CreatedAt vazios = agora (venceu).
+			if err := st.MarcarHandoffPendente(ctx, &HandoffPendente{ConversationID: b, Origem: "vigia"}); err != nil {
+				t.Fatal(err)
+			}
+			if achar(base, a) != nil {
+				t.Fatal("a só vence em +1 min")
+			}
+			if achar(time.Now().Add(time.Second), b) == nil {
+				t.Fatal("b (sem ProximaEm) devia estar vencida")
+			}
+			got := achar(base.Add(time.Minute), a)
+			if got == nil || got.Origem != "cerebro" || got.IDOcorrencia != "SOF-1" || got.DepartamentoID != "dept-1" ||
+				got.Nota != "nota a" || got.Tentativas != 0 || !got.CreatedAt.Equal(base) {
+				t.Fatalf("a lida errado: %+v", got)
+			}
+
+			// upsert: marcar de novo substitui (outro episódio, outra nota).
+			if err := st.MarcarHandoffPendente(ctx, &HandoffPendente{ConversationID: a, Origem: "cliente", Nota: "nota nova", CreatedAt: base, ProximaEm: base}); err != nil {
+				t.Fatal(err)
+			}
+			if got := achar(base, a); got == nil || got.Origem != "cliente" || got.Nota != "nota nova" {
+				t.Fatalf("upsert não substituiu: %+v", got)
+			}
+
+			if err := st.AdiarHandoffPendente(ctx, a, 2, base.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if achar(base.Add(time.Minute), a) != nil {
+				t.Fatal("adiada para +1 h não pode vencer antes")
+			}
+			if got := achar(base.Add(time.Hour), a); got == nil || got.Tentativas != 2 {
+				t.Fatalf("tentativas não gravadas: %+v", got)
+			}
+
+			if ok, err := st.LimparHandoffPendente(ctx, a); err != nil || !ok {
+				t.Fatalf("limpar a: ok=%v err=%v", ok, err)
+			}
+			if ok, _ := st.LimparHandoffPendente(ctx, a); ok {
+				t.Fatal("limpar de novo não havia o que apagar")
+			}
+			if achar(base.Add(24*time.Hour), a) != nil {
+				t.Fatal("a limpa não pode reaparecer")
+			}
+			if achar(time.Now().Add(time.Second), b) == nil {
+				t.Fatal("limpar a não pode tocar em b")
+			}
+			_, _ = st.LimparHandoffPendente(ctx, b)
+		})
+	}
+}
