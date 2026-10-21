@@ -195,12 +195,12 @@ func Load() (*Config, error) {
 		{&cfg.TicketDedupJanela, "TICKET_DEDUP_JANELA", "24h"},
 	}
 	for _, d := range positivas {
-		v, err := parseDuration(getenv(d.env, d.def))
+		v, err := parseDuration(strings.TrimSpace(getenv(d.env, d.def)))
 		if err != nil {
 			return nil, fmt.Errorf("%s inválido: %w", d.env, err)
 		}
 		if v <= 0 {
-			return nil, fmt.Errorf("%s inválido (%s): precisa ser maior que zero", d.env, getenv(d.env, d.def))
+			return nil, fmt.Errorf("%s inválido (%s): precisa ser maior que zero", d.env, strings.TrimSpace(getenv(d.env, d.def)))
 		}
 		*d.dst = v
 	}
@@ -225,7 +225,7 @@ func Load() (*Config, error) {
 		{&cfg.IdentTTL, "IDENT_TTL", "24h"},
 	}
 	for _, d := range duracoes {
-		v, err := parseDuration(getenv(d.env, d.def))
+		v, err := parseDuration(strings.TrimSpace(getenv(d.env, d.def)))
 		if err != nil {
 			return nil, fmt.Errorf("%s inválido: %w", d.env, err)
 		}

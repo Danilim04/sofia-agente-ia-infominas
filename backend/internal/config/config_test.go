@@ -255,3 +255,18 @@ func TestAvisoDoSalDoHashVazio(t *testing.T) {
 		t.Fatalf("sem a API de tools o sal não importa: %v", cfg.Avisos())
 	}
 }
+
+// Espaço sobrando no valor (compose, systemd, .env sem trim) não derruba o boot.
+func TestDuracoesDaE36ToleramEspacos(t *testing.T) {
+	comObrigatorias(t)
+	limparE36(t)
+	t.Setenv("RECONCILIA_INTERVALO", " 30s ")
+	t.Setenv("TICKET_PENDENTE_TTL", "15m\t")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if cfg.ReconciliaIntervalo != 30*time.Second || cfg.TicketPendenteTTL != 15*time.Minute {
+		t.Fatalf("valores: %+v", cfg)
+	}
+}

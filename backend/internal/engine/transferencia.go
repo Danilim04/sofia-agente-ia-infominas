@@ -233,7 +233,9 @@ func (e *Engine) marcarHandoffPendente(ctx context.Context, convID, origem, idOc
 
 // ReenviarHandoff repete UMA vez o handoff de uma marca (o backoff e o alerta
 // são do vigia do reconciliador). Sucesso apaga a marca. O handoff é
-// idempotente — ao contrário de POST /tickets.
+// idempotente — ao contrário de POST /tickets. Não reconfere o estado local: há uma janela
+// minúscula entre a conferência do vigia e esta chamada em que um humano pode
+// assumir e devolver a conversa à fila; o custo é um handoff a mais, sem efeito.
 func (e *Engine) ReenviarHandoff(ctx context.Context, h store.HandoffPendente) error {
 	if err := e.tr.Handoff(ctx, h.ConversationID, h.DepartamentoID, h.Nota); err != nil {
 		return err

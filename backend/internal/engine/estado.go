@@ -136,9 +136,12 @@ func (e *Engine) AplicarConversa(ctx context.Context, v ConversaVista) (Resultad
 	// Handoff não confirmado (E3.6): o evento conversation.handoff o confirma;
 	// humano que assumiu, conversa encerrada ou episódio novo o tornam
 	// desnecessário. Só vale evento aplicado: uma reentrega velha de outro
-	// episódio não pode apagar a marca do atual (o vigia ainda confere o
-	// Infodesk antes de repetir, então apagar a mais custa no máximo um repique).
-	if res.Aplicado && (v.Handoff || v.humanoConduz() || v.Encerrada || (anterior != "" && anterior != store.EstadoBot && res.Estado == store.EstadoBot)) {
+	// episódio não pode apagar a marca do atual. CUIDADO: apagar a mais deixa o
+	// cliente sem atendente e sem ninguém repetindo (o vigia só confere o
+	// Infodesk antes de repetir, não antes de desistir); por isso o chatbot
+	// interno do Desk (INTERNAL_BOT sem atribuição) não conta como humano.
+	humano := v.humanoConduz() && (v.Atribuida || v.HandledBy != infodesk.ConduzidaPorBotInterno)
+	if res.Aplicado && (v.Handoff || humano || v.Encerrada || (anterior != "" && anterior != store.EstadoBot && res.Estado == store.EstadoBot)) {
 		if ok, err := e.st.LimparHandoffPendente(ctx, v.ID); err != nil {
 			e.log.Error("limpar a marca de handoff não confirmado", "conversation_id", v.ID, "evento", v.Evento, "err", err)
 		} else if ok {

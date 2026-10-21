@@ -50,7 +50,7 @@ func (r *Reconciliador) vigiaSemResposta(ctx context.Context) error {
 		parado := r.opt.Now().Sub(c.UltimaMsgEm).Round(1e9)
 		id := r.transf.TransferirParaHumano(ctx, c.ID, engine.Transferencia{
 			Origem:  OrigemVigia,
-			Espera:  r.opt.BotTimeoutHandoff,
+			Espera:  parado,
 			Causa:   fmt.Sprintf("a Sofia não respondeu o cliente em %s", minutos(r.opt.BotTimeoutHandoff)),
 			Detalhe: "BOT_TIMEOUT_HANDOFF: última mensagem do cliente há " + parado.String() + " sem resposta",
 		})

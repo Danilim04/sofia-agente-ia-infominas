@@ -169,14 +169,14 @@ func TestVigiaHandoffComInfodeskLimitandoOuFalhando(t *testing.T) {
 	}
 }
 
-// A origem vigia leva o tempo de espera que a nota cita.
+// A origem vigia leva o tempo REAL parado (não o limiar) para a nota citar.
 func TestVigiaPassaAEsperaParaANota(t *testing.T) {
 	a := novoAmbiente(t, nil, opcoesDeTeste(), false, 16)
 	conversaDoBot(t, a.st, "conv-espera", agora.Add(-20*time.Minute), time.Time{})
 	a.rec.Executar(context.Background())
 	a.eng.mu.Lock()
 	defer a.eng.mu.Unlock()
-	if len(a.eng.pedidos) != 1 || a.eng.pedidos[0].Espera != 5*time.Minute {
+	if len(a.eng.pedidos) != 1 || a.eng.pedidos[0].Espera != 20*time.Minute {
 		t.Fatalf("pedidos = %+v", a.eng.pedidos)
 	}
 }

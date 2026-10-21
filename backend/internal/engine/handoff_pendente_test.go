@@ -257,3 +257,20 @@ func TestNotaPorOrigem(t *testing.T) {
 		})
 	}
 }
+
+// O chatbot interno do Desk (INTERNAL_BOT sem atribuição) cala a Sofia mas não é
+// atendente: a marca fica, para o vigia ainda avisar um humano.
+func TestChatbotInternoNaoLimpaAMarca(t *testing.T) {
+	e, st, tr, _ := engineCompleta(t)
+	comRelogioFalso(e)
+	ctx := context.Background()
+	tr.handoffErr = errors.New("fora")
+	e.TransferirParaHumano(ctx, "c-hp7", Transferencia{Origem: OrigemCliente})
+	res, _ := e.AplicarConversa(ctx, vistaDe("c-hp7", infodesk.ConduzidaPorBotInterno, e.agora().Add(time.Minute)))
+	if !res.Aplicado {
+		t.Fatal("evento devia ser aplicado")
+	}
+	if marcaDe(t, st, "c-hp7") == nil {
+		t.Fatal("INTERNAL_BOT não é humano: a marca devia ficar")
+	}
+}
