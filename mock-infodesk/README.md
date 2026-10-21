@@ -117,8 +117,9 @@ reopen/cancel/escalate` de ticket, `/tickets/:n/requester`, `/conversations/:id/
 {messages GET,bot,client}`, `/messages`, `/attachments`, `/clients`,
 `/requesters`, `/whatsapp/*`, `/alerts`, `/deliveries`, `/webhook/test`.
 Eventos **não emitidos**: `message.sent`, `message.status`,
-`conversation.department_changed`, `ticket.*`, `ping` (ver 07 item W8 quando o
-gateway precisar testar o eco das próprias ações).
+`conversation.department_changed`, `ticket.*`, `ping` (07 item W8: o real emite os
+ecos das nossas próprias ações; sem eles o E2E não prova "ignorar eco" nem
+"`ticket.created` já conhecido é no-op" — pendência para a E2.1/E3.3).
 
 ### Endpoints de controle (só do mock, sem chave)
 
@@ -205,6 +206,7 @@ Corpos JSON devem ser UTF-8 (senão `400`). No Git Bash do Windows, `curl -d
 | **T10** | só `deskId` e `title` são obrigatórios (a organização real pode exigir mais → `400`) | `_abrir_ticket` |
 | **T11** | `POST /conversations/:id/ticket` herda `clientId`/`requesterId` e o telefone da conversa e devolve o objeto `ticket` | `abrir_ticket_da_conversa` |
 | **T12** | conversa que já tem `ticketNumber`: o mock cria **outro** chamado (sem `CONFLICT`) | `abrir_ticket_da_conversa` |
+| 06 | `link-ticket` com `ticketNumber` inexistente → `400 INVALID_REFERENCE` (o real poderia ser `404`); telefone digitado na UI/`/mock/*` é normalizado para E.164 (`+` + dígitos) antes de ir no webhook | `vincular_ticket`, `mensagem_do_cliente` |
 | **W7** | `conversation.assigned` não leva extras (`userId`/`previousUserId` desconhecidos); `handoff` leva `note` | `_assumir`, `handoff` |
 | **W9** | `data.conversation` é o retrato do **momento** do evento; reentrega e `/events` repetem o mesmo retrato | `_evento` |
 | 04 | `status` da conversa: `PENDING` (nova/fila), `IN_PROGRESS` (com atendente), `FINISHED`; `whatsappWindow` = formato de `/whatsapp/window`; `/assign` com `userId: null` manda para a fila | `_conversa_externa`, `_janela_whatsapp`, `_assumir` |

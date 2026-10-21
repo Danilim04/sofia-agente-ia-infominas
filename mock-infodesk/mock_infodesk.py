@@ -219,7 +219,7 @@ def exigir_str_ou_none(corpo: dict[str, Any], *campos: str) -> None:
 
 
 def limite_da_query(query: dict[str, str], padrao: int, maximo: int) -> int:
-    """`limit` fora de [1, max] é cortado no máximo (comportamento real não documentado, 06)."""
+    """`limit` acima do máximo é cortado no máximo; `limit < 1` ou não inteiro é 400 (real não documentado, 06)."""
     bruto = query.get("limit")
     if bruto is None:
         return padrao
@@ -517,7 +517,9 @@ class MockInfodesk:
     ) -> dict[str, Any]:
         """Cria o ticket (compartilhado por `POST /tickets` e `POST /conversations/:id/ticket`).
 
-        Segura o lock do chamador. Só `deskId` e `title` são obrigatórios aqui; quais campos a
+        Segura o lock do chamador. ver docs/infodesk/07 item W8: o real emite `ticket.created` (e o
+        mock não), então "ticket.created com number já conhecido = no-op" não é testável aqui.
+        Só `deskId` e `title` são obrigatórios aqui; quais campos a
         Infominas exige é desconhecido (docs/infodesk/07 item T10).
         """
         desk_id = corpo.get("deskId")
@@ -857,6 +859,9 @@ class MockInfodesk:
 
         `body` NÃO vale mais (era o guia antigo) → 400 VALIDATION_ERROR. `template` e `media`
         existem no Infodesk mas o mock só implementa `text` (fora da v1 da Sofia).
+
+        ver docs/infodesk/07 item W8: o real emite `message.sent` para esta chamada; o mock NÃO emite
+        (o eco das mensagens do bot não é testável aqui).
         """
         with self.lock:
             c = self._conversa(args[0], aberta=True)
@@ -922,7 +927,10 @@ class MockInfodesk:
     def transferir_departamento(
         self, args: tuple[str, ...], query: dict[str, str], corpo: dict[str, Any]
     ) -> Any:
-        """`POST /conversations/:id/department` {departmentId} — `null` remove. Não solta o bot (docs/infodesk/04)."""
+        """`POST /conversations/:id/department` {departmentId} — `null` remove. Não solta o bot (docs/infodesk/04).
+
+        ver docs/infodesk/07 item W8: o real emite `conversation.department_changed`; o mock não emite.
+        """
         if "departmentId" not in corpo:
             raise invalido("departmentId", "Campo obrigatório ausente: departmentId.")
         dep_id = corpo["departmentId"]
@@ -1090,6 +1098,8 @@ class MockInfodesk:
             c = self._conversa(args[0], aberta=True)
             t = self.tickets.get(numero)
             if t is None:
+                # ver docs/infodesk/06: chamado inexistente no corpo = INVALID_REFERENCE (o real
+                # poderia ser 404 NOT_FOUND; a doc não decide).
                 raise referencia_invalida(
                     f"ticketNumber inválido: chamado não encontrado ({numero})."
                 )
@@ -1130,7 +1140,7 @@ class MockInfodesk:
         ver docs/infodesk/07 item C5: depois do `finish`, nova mensagem abre OUTRA conversa (novo id).
         """
         for c in self.conversas.values():
-            if c["contact"]["phone"] == telefone and c["status"] != "FINISHED":
+            if c["contact"]["phone"] == telefone and c["status"] != "FINISHED":  # já em E.164
                 if nome:
                     c["contact"]["name"] = nome
                 return c, False
@@ -1163,9 +1173,10 @@ class MockInfodesk:
         self, telefone: str, nome: str, texto: str, audio: bool = False
     ) -> dict[str, Any]:
         """Grava a mensagem do cliente e emite os webhooks (started na 1ª vez, depois message.received)."""
-        telefone = (telefone or "").strip()
-        if not telefone:
+        if not digitos(telefone):
             raise invalido("telefone", "telefone é obrigatório.")
+        # O Infodesk sempre manda E.164 (docs/infodesk/05): normaliza o que foi digitado na UI.
+        telefone = "+" + digitos(telefone)
         if not audio and not (texto or "").strip():
             raise invalido("texto", "texto é obrigatório (ou use áudio).")
         with self.lock:
@@ -1204,7 +1215,7 @@ class MockInfodesk:
             (
                 c
                 for c in self.conversas.values()
-                if c["contact"]["phone"] == telefone and c["status"] != "FINISHED"
+                if digitos(c["contact"]["phone"]) == digitos(telefone) and c["status"] != "FINISHED"
             ),
             None,
         )
@@ -1344,6 +1355,7 @@ class MockInfodesk:
                     if (e["data"].get("conversation") or {}).get("id") == query["conversationId"]
                 ]
             if query.get("ticketNumber"):
+                # ainda sem efeito: o mock não emite ticket.* (ver docs/infodesk/07 item W8)
                 itens = [
                     e
                     for e in itens

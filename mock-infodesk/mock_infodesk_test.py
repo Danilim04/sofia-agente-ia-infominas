@@ -1225,6 +1225,21 @@ class TestMockInfodesk(unittest.TestCase):
         self.assertEqual(e2["event"], "message.received")
         self.assertGreater(e2["json"]["seq"], recebida["seq"])
 
+    def test_telefone_digitado_fora_de_e164_e_normalizado(self) -> None:
+        # O webhook sempre leva E.164 (docs/infodesk/05), mesmo que a UI receba outro formato.
+        res = self.cliente_escreve("55 (31) 99000-0042")
+        entregas = self.gateway.esperar(2)
+        self.assertEqual(entregas[1]["json"]["data"]["contact"]["phone"], "+5531990000042")
+        # e as ações de atendente acham a conversa por qualquer grafia do telefone
+        r = chamar(
+            self.base, "POST", "/mock/atendente/assume", {"telefone": "5531990000042"}, chave=None
+        )
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertEqual(r.json["id"], res["conversationId"])
+        self.assertEqual(
+            self.cliente_escreve("+5531990000042")["conversationId"], res["conversationId"]
+        )
+
     def test_audio_e_message_received_com_type_audio_e_body_vazio(self) -> None:
         r = chamar(
             self.base,
