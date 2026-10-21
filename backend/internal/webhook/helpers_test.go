@@ -203,6 +203,16 @@ func (a *ambiente) now() time.Time {
 
 type opcaoAmb func(*config.Config)
 
+// comRajadaLarga alarga a janela de debounce para os cenários que PRECISAM de
+// várias mensagens coalescidas em um lote. Cada `enviar` assina, grava no
+// SQLite e enfileira; sob `-race` em CI isso passa fácil de 30 ms, e a janela
+// padrão fecharia entre a 1ª e a 2ª mensagem (run 39646043453). 500 ms dá
+// folga de ~15x; o custo é só a espera da janela depois da última mensagem.
+func comRajadaLarga(c *config.Config) {
+	c.DebounceJanela = 500 * time.Millisecond
+	c.DebounceTeto = 3 * time.Second
+}
+
 func novoAmbiente(t *testing.T, opcoes ...opcaoAmb) *ambiente {
 	t.Helper()
 	st, err := store.NewSQLite(filepath.Join(t.TempDir(), "gateway.db"))

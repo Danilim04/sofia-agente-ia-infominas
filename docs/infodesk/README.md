@@ -11,7 +11,10 @@ parte do comportamento em aberto.
 **Tudo que não está no PDF está marcado como "NÃO DOCUMENTADO"** e consolidado
 em [07-pontos-ambiguos.md](07-pontos-ambiguos.md). Nenhum campo, valor ou
 comportamento foi inventado: se um agente precisar de algo que não está aqui,
-a resposta certa é "perguntar à Infominas", não assumir.
+a resposta certa é "perguntar à Infominas", não assumir. Desde 2026-10-21 há
+uma segunda fonte, o **código-fonte do Infodesk**, lida e resumida em
+[10-regras-do-codigo.md](10-regras-do-codigo.md): vale como "comportamento
+atual", não como contrato.
 
 ## Para quem lê isto
 
@@ -62,6 +65,7 @@ implementar e **sempre** leia o 07 antes de fixar um contrato.
 | [07-pontos-ambiguos.md](07-pontos-ambiguos.md) | **O que a documentação ainda não responde** + itens respondidos em 2026-10-19 |
 | [08-bot-externo.md](08-bot-externo.md) | Modo "conduz o atendimento": `handledBy`, handoff, `/bot`, fluxo de referência de triagem |
 | [09-inventario-mesas-catalogos.md](09-inventario-mesas-catalogos.md) | Mesas e catálogos reais da Infominas (observados no painel em 2026-10-20) — insumo do P1 |
+| [10-regras-do-codigo.md](10-regras-do-codigo.md) | O que o **código-fonte do Infodesk** faz hoje (lido em 2026-10-21): validações do ticket, bot externo, outbox, payloads; script `scripts/descobrir-taxonomia.py`; questionário final à Infominas |
 
 ## Mapa rápido de rotas (todas sob a base `/integration/v1`)
 
