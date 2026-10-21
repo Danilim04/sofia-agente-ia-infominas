@@ -85,16 +85,41 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 	return &Client{baseURL: baseURL, http: &http.Client{Timeout: timeout}}
 }
 
-// ChatRequest é o corpo do Contrato A (contratos/contrato-a/). Não há mais
-// identidade resolvida pelo gateway: a identificação acontece na conversa.
-//
-// TODO(E2.1): `nome_contato`, `contato` e `estado_conversa`
-// (docs/plano/01-ferramentas.md, "Contrato A — mudanças").
+// Valores de ChatRequest.EstadoConversa e Contato.Forma (contratos/contrato-a).
+const (
+	EstadoBot         = "bot"
+	EstadoTransferida = "transferida" // nunca chega ao cérebro (defesa)
+
+	FormaTelefone = "telefone" // identificado pelo lookup do Infodesk
+	FormaCPF      = "cpf"
+	FormaContrato = "contrato"
+)
+
+// Contato é a identificação do telefone enviada ao cérebro (`contato` do
+// Contrato A). `ValorMascarado` é o CPF/contrato mascarado — ou, para
+// FormaTelefone, o nome do cadastro abreviado ("Maria S."). O requester_id
+// fica só no gateway. Os dois ponteiros vão como null quando vazios.
+type Contato struct {
+	Forma          string  `json:"forma"`
+	ValorMascarado string  `json:"valor_mascarado"`
+	ClienteID      *string `json:"cliente_id"`
+	NomeCadastro   *string `json:"nome_cadastro"`
+}
+
+// ChatRequest é o corpo do Contrato A (contratos/contrato-a/chat-request.json).
+// Não há identidade resolvida pelo gateway além de `contato`: o resto da
+// identificação acontece na conversa, com validação por código.
 type ChatRequest struct {
 	ConversationID string `json:"conversation_id"`
 	Canal          string `json:"canal"`
 	Mensagem       string `json:"mensagem"`
 	Telefone       string `json:"telefone,omitempty"`
+	// NomeContato é o nome do perfil do WhatsApp (pode ser apelido) — PII.
+	NomeContato string `json:"nome_contato,omitempty"`
+	// Contato é nil (null no JSON) quando o telefone nunca foi identificado.
+	Contato *Contato `json:"contato"`
+	// EstadoConversa: "bot" (nunca "transferida": o gateway cala antes).
+	EstadoConversa string `json:"estado_conversa,omitempty"`
 }
 
 // ChatResponse é a resposta do Contrato A. `acoes` e `classificacao` chegam

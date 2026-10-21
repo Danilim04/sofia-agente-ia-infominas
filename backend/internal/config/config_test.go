@@ -80,3 +80,45 @@ func TestValoresLidos(t *testing.T) {
 		t.Fatalf("valores não lidos: %+v", cfg)
 	}
 }
+
+// TestIdentificacaoEWebhookDefaults: hipóteses de plano configuráveis (07 N3,
+// ADR 0004 revisado) e a janela do webhook.
+func TestIdentificacaoEWebhookDefaults(t *testing.T) {
+	comObrigatorias(t)
+	for _, v := range []string{"IDENT_EXIGIR_CPF", "IDENT_LOOKUP_AMBIGUO", "IDENT_TTL", "WEBHOOK_JANELA", "INFODESK_NOME_CHAVE"} {
+		t.Setenv(v, "")
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if cfg.IdentExigirCPF || cfg.IdentLookupAmbiguo != "pedir_cpf" || cfg.IdentTTL != 24*time.Hour ||
+		cfg.WebhookJanela != 5*time.Minute || cfg.InfodeskNomeChave != "" {
+		t.Fatalf("defaults inesperados: %+v", cfg)
+	}
+}
+
+func TestIdentificacaoEWebhookLidos(t *testing.T) {
+	comObrigatorias(t)
+	t.Setenv("IDENT_EXIGIR_CPF", "true")
+	t.Setenv("IDENT_TTL", "2h")
+	t.Setenv("WEBHOOK_JANELA", "90s")
+	t.Setenv("INFODESK_NOME_CHAVE", "Sofia")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if !cfg.IdentExigirCPF || cfg.IdentTTL != 2*time.Hour || cfg.WebhookJanela != 90*time.Second || cfg.InfodeskNomeChave != "Sofia" {
+		t.Fatalf("valores não lidos: %+v", cfg)
+	}
+}
+
+// TestLookupAmbiguoDesconhecidoFalha: valor sem implementação não vira
+// comportamento inventado em silêncio.
+func TestLookupAmbiguoDesconhecidoFalha(t *testing.T) {
+	comObrigatorias(t)
+	t.Setenv("IDENT_LOOKUP_AMBIGUO", "primeiro")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "IDENT_LOOKUP_AMBIGUO") {
+		t.Fatalf("esperava erro citando IDENT_LOOKUP_AMBIGUO, veio %v", err)
+	}
+}

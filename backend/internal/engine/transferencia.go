@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 
 	"bot-infominas/internal/alerta"
 	"bot-infominas/internal/brain"
+	"bot-infominas/internal/infodesk"
 	"bot-infominas/internal/store"
 )
 
@@ -20,6 +22,11 @@ const (
 	OrigemDisjuntor = "disjuntor" // disjuntor aberto: o cérebro nem foi chamado
 	OrigemCliente   = "cliente"   // o cliente pediu um atendente
 	OrigemAnexo     = "anexo"     // o cliente mandou áudio/imagem/arquivo, que o bot não lê
+
+	// Origens vindas das `acoes` do ChatResponse (docs/plano/01, "Contrato A").
+	OrigemFrustracao = "frustracao" // frustração alta detectada pelo cérebro
+	OrigemConfianca  = "confianca"  // classificação com confiança baixa demais
+	OrigemAcao       = "acao"       // ação `transferir` com origem que o gateway não conhece
 )
 
 // Transferencia descreve por que a conversa vai para um atendente.
@@ -30,6 +37,9 @@ type Transferencia struct {
 	Detalhe  string // técnico, sem dado pessoal: só log/tabela
 	ID       string // ID de ocorrência já existente (ex.: vindo do cérebro); vazio = gerar
 	Mensagem string // mensagem ao cliente; vazia = MsgTransferencia
+	// SemAviso: o cliente JÁ foi avisado (a resposta do cérebro anunciou a
+	// transferência) — não manda a mensagem de aviso de novo.
+	SemAviso bool
 }
 
 // transferenciaPorErroDoCerebro monta a transferência a partir do erro da
@@ -100,23 +110,34 @@ func (e *Engine) transferirPorMidia(ctx context.Context, convID string) {
 	})
 }
 
-// TransferirParaHumano é o ÚNICO caminho para o atendimento humano — usado
-// pelas falhas do cérebro, pelo disjuntor, pela mídia e pelo pedido explícito
-// do cliente (e, a partir de E2.1, pelas `acoes` do cérebro). Faz, nesta
-// ordem e sem interromper nas falhas parciais (cada passo loga o próprio
-// erro):
+// TransferirParaHumano é o ÚNICO caminho para o atendimento humano (ADR 0007)
+// — usado pelas falhas do cérebro, pelo disjuntor, pela mídia, pelo pedido
+// explícito do cliente e pelas `acoes` do cérebro. Faz, nesta ordem e sem
+// interromper nas falhas parciais (cada passo loga o próprio erro):
 //
-//  1. ID de ocorrência (gera se não veio), log estruturado `sofia_falha` e
+//  1. conversa que já não é do bot (transferida, encerrada, humano conduz) →
+//     não faz nada (idempotente: duas mídias = um handoff);
+//  2. ID de ocorrência (gera se não veio), log estruturado `sofia_falha` e
 //     registro na tabela `falhas` — o mesmo ID em todos;
-//  2. alertas ao responsável (vigia, ZC-7);
-//  3. mensagem neutra ao cliente (nunca erro técnico);
-//  4. transferência de departamento no transporte (DEPARTAMENTO_HUMANO_PADRAO).
+//  3. alertas ao responsável (vigia, ZC-7);
+//  4. mensagem de aviso ao cliente (nunca erro técnico) ANTES do handoff — o
+//     handoff não fala com o cliente (07 C10);
+//  5. `conversas.estado = transferida`: o bot cala, mesmo que o handoff falhe
+//     (o vigia N1 da E3.3 repete);
+//  6. `Handoff(DEPARTAMENTO_HUMANO_PADRAO, nota por código)`.
 //
-// Devolve o ID de ocorrência.
+// Devolve o ID de ocorrência ("" quando a conversa já não era do bot).
 //
-// TODO(E2.1): marcar `conversas.estado = transferida` e escolher o
-// departamento pela taxonomia (categoria → departamento) quando houver.
+// TODO(P11): escolher o departamento pela taxonomia (categoria → departamento)
+// quando a E2.2/E3.1 entregarem a tabela; hoje é sempre o padrão. Sem padrão
+// configurado o handoff vai SEM departamento (distribuição automática do
+// Infodesk) — melhor que deixar o bot preso à conversa.
 func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Transferencia) string {
+	if !e.botConduz(ctx, convID) {
+		e.log.Info("transferência ignorada: a conversa já não é do bot",
+			"conversation_id", convID, "origem", t.Origem)
+		return ""
+	}
 	agora := e.agora()
 	id := strings.TrimSpace(t.ID)
 	if id == "" {
@@ -144,20 +165,148 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 		ID: id, ConversationID: convID, Origem: t.Origem, Classe: t.Classe, Causa: t.Causa,
 	})
 
-	msg := t.Mensagem
-	if msg == "" {
-		msg = MsgTransferencia
+	if !t.SemAviso {
+		msg := t.Mensagem
+		if msg == "" {
+			msg = MsgTransferencia
+		}
+		e.send(ctx, convID, msg)
 	}
-	e.send(ctx, convID, msg)
+
+	// Entre o aviso (pausas de bolha, rede) e o handoff um atendente pode ter
+	// assumido ou a conversa ter sido encerrada: não devolve à fila o que
+	// outro já conduz. O estado vai ANTES da chamada, para as mensagens que
+	// chegarem durante o handoff já encontrarem a conversa muda.
+	if !e.botConduz(ctx, convID) {
+		e.log.Info("handoff cancelado: a conversa deixou de ser do bot durante a transferência",
+			"id_ocorrencia", id, "conversation_id", convID)
+		return id
+	}
+	nota := e.montarNota(ctx, convID, t, id)
+	if !e.marcarEstado(ctx, convID, store.EstadoTransferida) {
+		return id
+	}
 
 	dept := strings.TrimSpace(e.cfg.DepartamentoHumanoPadrao)
 	if dept == "" {
-		e.log.Error("transferir: DEPARTAMENTO_HUMANO_PADRAO vazio — conversa não foi movida no canal",
+		e.log.Warn("transferir: DEPARTAMENTO_HUMANO_PADRAO vazio — handoff sem departamento (distribuição automática)",
 			"id_ocorrencia", id, "conversation_id", convID)
-	} else if err := e.tr.TransferirDepartamento(ctx, convID, dept); err != nil {
-		e.log.Error("transferir: departamento", "id_ocorrencia", id, "conversation_id", convID, "departamento", dept, "err", err)
+	}
+	if err := e.handoffComRetry(ctx, convID, dept, nota); err != nil {
+		e.log.Error("transferir: handoff falhou; conversa fica muda localmente",
+			"id_ocorrencia", id, "conversation_id", convID, "departamento", dept, "err", err)
+		e.vigia.Aviso(alerta.TipoHandoffFalhou, "Handoff para o atendente falhou",
+			"Ocorrência "+id+" (origem "+t.Origem+"): o Infodesk não aceitou o handoff. A Sofia parou de responder nessa conversa; o cliente pode estar sem ninguém. Veja o log sofia_falha.", convID)
 	}
 	e.log.Info("conversa transferida para atendimento humano",
 		"id_ocorrencia", id, "conversation_id", convID, "origem", t.Origem, "departamento", dept)
 	return id
+}
+
+// handoffComRetry repete o handoff só em falha transitória (5xx, rede, 429):
+// ele é idempotente — ao contrário de POST /tickets — e, se falhar de vez, o
+// cliente fica sem ninguém até o vigia N1 (E3.3).
+func (e *Engine) handoffComRetry(ctx context.Context, convID, dept, nota string) error {
+	var err error
+	for tentativa := 0; ; tentativa++ {
+		if err = e.tr.Handoff(ctx, convID, dept, nota); err == nil {
+			return nil
+		}
+		if !infodesk.Transitorio(err) || tentativa >= len(e.esperasEnvio) {
+			return err
+		}
+		e.log.Warn("handoff transitório falhou; nova tentativa",
+			"conversation_id", convID, "tentativa", tentativa+1, "err", err)
+		if !e.dormir(ctx, e.esperasEnvio[tentativa]) {
+			return err
+		}
+	}
+}
+
+// motivosDaNota traduz a origem da transferência para o texto fixo da nota
+// interna (nunca texto livre do LLM nem do cliente).
+var motivosDaNota = map[string]string{
+	OrigemCliente:    "pedido do cliente",
+	OrigemAnexo:      "cliente enviou áudio, imagem ou arquivo",
+	OrigemCerebro:    "falha ao processar a mensagem",
+	OrigemDisjuntor:  "cérebro em pausa por falhas repetidas",
+	OrigemFrustracao: "frustração do cliente",
+	OrigemConfianca:  "classificação com baixa confiança",
+	OrigemAcao:       "ação do cérebro",
+}
+
+var (
+	reCategoria = regexp.MustCompile(`^[a-z0-9_]{1,40}$`)
+	reOrigemCls = regexp.MustCompile(`^(jev|llm|esclarecimento)$`)
+)
+
+const notaMaxRunas = 500
+
+// montarNota escreve a nota interna do handoff POR CÓDIGO (ADR 0007): motivo
+// (texto fixo por origem), categoria + confiança validadas, identificação sem
+// PII em claro (nome do cadastro abreviado; CPF/contrato só mascarado) e o
+// nº do chamado. Nada do que o cliente ou o LLM escreveu entra aqui.
+func (e *Engine) montarNota(ctx context.Context, convID string, t Transferencia, idOcorrencia string) string {
+	motivo := motivosDaNota[t.Origem]
+	if motivo == "" {
+		motivo = "transferido pela " + nomeAssistente
+	}
+	partes := []string{nomeAssistente + " → humano", "motivo: " + motivo}
+	if idOcorrencia != "" && (t.Origem == OrigemCerebro || t.Origem == OrigemDisjuntor) {
+		partes = append(partes, "ocorrência: "+idOcorrencia)
+	}
+
+	conv, err := e.st.ObterConversa(ctx, convID)
+	if err != nil {
+		e.log.Error("nota do handoff: ler conversa", "conversation_id", convID, "err", err)
+	}
+	if conv != nil {
+		if cat := categoriaDaClassificacao(conv.ClassificacaoJSON); cat != "" {
+			partes = append(partes, "categoria: "+cat)
+		}
+		if conv.Telefone != "" {
+			if c, _ := e.st.ObterContato(ctx, conv.Telefone, e.agora()); c != nil {
+				switch c.Forma {
+				case store.FormaTelefone:
+					if c.ValorMascarado != "" {
+						partes = append(partes, "solicitante: "+c.ValorMascarado)
+					}
+				case store.FormaCPF, store.FormaContrato:
+					if c.ValorMascarado != "" {
+						partes = append(partes, c.Forma+": "+c.ValorMascarado)
+					}
+				}
+			}
+		}
+		if conv.TicketNumber > 0 {
+			partes = append(partes, fmt.Sprintf("chamado #%d", conv.TicketNumber))
+		} else {
+			partes = append(partes, "sem chamado")
+		}
+	}
+	nota := strings.Join(partes, " · ")
+	if r := []rune(nota); len(r) > notaMaxRunas {
+		nota = string(r[:notaMaxRunas])
+	}
+	return nota
+}
+
+// categoriaDaClassificacao lê categoria e confiança da última classificação
+// gravada, só se estiverem no formato esperado ("sem_conexao (jev 0.88)").
+func categoriaDaClassificacao(j string) string {
+	if j == "" {
+		return ""
+	}
+	var c struct {
+		Categoria string  `json:"categoria"`
+		Confianca float64 `json:"confianca"`
+		Origem    string  `json:"origem"`
+	}
+	if json.Unmarshal([]byte(j), &c) != nil || !reCategoria.MatchString(c.Categoria) {
+		return ""
+	}
+	if reOrigemCls.MatchString(c.Origem) && c.Confianca > 0 && c.Confianca <= 1 {
+		return fmt.Sprintf("%s (%s %.2f)", c.Categoria, c.Origem, c.Confianca)
+	}
+	return c.Categoria
 }

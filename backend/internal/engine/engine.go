@@ -1,12 +1,17 @@
 // Package engine orquestra: mensagem neutra do webhook → higiene/dedup →
 // fila por conversa (coalescência) → cérebro Python (Contrato A) →
-// formatação WhatsApp → resposta pelo Transporte. Não há gate de login: a
-// identificação do cliente acontece na conversa, dentro do cérebro, com
-// validação por código (ADR 0003).
+// formatação WhatsApp → resposta pelo Transporte. Não há gate de login: o
+// telefone é identificado pelo lookup do Infodesk no primeiro turno do
+// episódio (ADR 0004, revisão) e, se isso não bastar, o cérebro pede CPF/
+// contrato com validação por código. Toda transferência para humano passa por
+// TransferirParaHumano → Handoff (ADR 0007); o estado bot/transferida vive em
+// `conversas` (estado.go).
 package engine
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -16,6 +21,7 @@ import (
 	"bot-infominas/internal/alerta"
 	"bot-infominas/internal/brain"
 	"bot-infominas/internal/config"
+	"bot-infominas/internal/infodesk"
 	"bot-infominas/internal/store"
 )
 
@@ -43,6 +49,9 @@ type Engine struct {
 	// Resiliência ao cérebro (ZC-5): esperas entre novas tentativas de falha
 	// TRANSITÓRIA, espera injetável (testes não dormem) e o disjuntor.
 	esperasRetry []time.Duration
+	// esperasEnvio: esperas entre novas tentativas de ENVIO ao cliente em
+	// falha transitória do Infodesk (2 retries, docs/plano/01 seção B).
+	esperasEnvio []time.Duration
 	dormir       func(ctx context.Context, d time.Duration) bool
 	disjuntor    *disjuntor
 	// vigia decide quando alertar o responsável (ZC-7) — pode ser nil.
@@ -69,6 +78,7 @@ func New(cfg *config.Config, tr Transporte, brainClient BrainAPI, st store.Store
 		log:          log,
 		agora:        time.Now,
 		esperasRetry: []time.Duration{2 * time.Second, 5 * time.Second},
+		esperasEnvio: []time.Duration{time.Second, 3 * time.Second},
 		dormir:       dormirDeVerdade,
 		disjuntor:    novoDisjuntor(),
 		baseCtx:      context.Background(),
@@ -145,10 +155,9 @@ func (e *Engine) HandleMensagem(ctx context.Context, m Inbound) {
 // EncerrarEpisodio é o fim do episódio da conversa (`conversation.finished`
 // no Infodesk): manda o cérebro limpar a proposta de chamado pendente dela
 // (ZB-1), best-effort — a validade da proposta no cérebro (15 min) é a rede
-// de segurança quando esta limpeza não chega lá.
-//
-// TODO(E2.1): limpar também `conversas.estado` (transferida → encerrada)
-// quando a tabela existir.
+// de segurança quando esta limpeza não chega lá. O estado local
+// (`conversas.estado = encerrada`) é gravado por AplicarConversa com o evento
+// `finished` (que também guarda o W9); quem chama as duas é o webhook.
 func (e *Engine) EncerrarEpisodio(ctx context.Context, convID string) {
 	if e.brain == nil {
 		return
@@ -187,10 +196,19 @@ func (e *Engine) processarLote(ctx context.Context, lote []Inbound) {
 	ultimo := lote[len(lote)-1]
 	convID := ultimo.ConversationID
 
+	// Conversa que já não é do bot (transferida, encerrada, humano conduz):
+	// o webhook já filtra, mas a mensagem pode ter entrado na fila antes do
+	// handoff/`assigned` — a Sofia não fala por cima.
+	if !e.botConduz(ctx, convID) {
+		e.log.Info("conversa não está com a Sofia; lote ignorado",
+			"conversation_id", convID, "mensagens", len(lote))
+		return
+	}
+
 	// Mídia na rajada: o bot não lê áudio/imagem/arquivo — avisa o cliente e
-	// transfere, sem cérebro.
-	// TODO(E2.1): conversa já `transferida` (tabela conversas) não transfere
-	// de novo — hoje o webhook ainda não filtra esse estado.
+	// transfere, sem cérebro. Duas mensagens de mídia (rótulo "[imagem]" +
+	// arquivo) caem no mesmo lote ou, se separadas, a 2ª acha a conversa já
+	// transferida: um handoff só.
 	for _, m := range lote {
 		if m.TemMidia {
 			e.transferirPorMidia(ctx, convID)
@@ -262,7 +280,17 @@ func (e *Engine) encaminhar(ctx context.Context, m Inbound, texto string, inicio
 		Canal:          "whatsapp",
 		Mensagem:       texto,
 		Telefone:       m.Telefone,
+		NomeContato:    m.Nome,
+		EstadoConversa: brain.EstadoBot,
 	}
+	// Identificação: cache de `contatos` e, no primeiro turno do episódio, o
+	// lookup do Infodesk (ADR 0004, revisão). Fora do laço de retry: o
+	// lookup acontece uma vez por turno.
+	primeiroTurno := true
+	if c, err := e.st.ObterConversa(ctx, convID); err == nil && c != nil {
+		primeiroTurno = c.UltimaRespostaEm.IsZero()
+	}
+	req.Contato = e.contatoDoTurno(ctx, convID, m.Telefone, primeiroTurno)
 
 	var resp *brain.ChatResponse
 	for tentativa := 0; ; tentativa++ {
@@ -311,21 +339,100 @@ func (e *Engine) encaminhar(ctx context.Context, m Inbound, texto string, inicio
 	}
 	e.log.Debug("resposta do cérebro",
 		"conversation_id", convID, "fontes", resp.Fontes, "chars", len(reply))
-	// TODO(E2.1): executar `resp.Acoes` (transferir) pelo caminho único e
-	// gravar `resp.Classificacao` na tabela conversas.
-	e.send(ctx, convID, reply)
+	e.gravarClassificacao(ctx, convID, resp.Classificacao)
+
+	// `acoes` do cérebro: `transferir` passa pelo caminho único. A resposta do
+	// cérebro, enviada antes, já avisa o cliente (SemAviso); resposta vazia
+	// cai na mensagem padrão de transferência.
+	if acao, ok := acaoTransferir(resp.Acoes); ok {
+		if strings.TrimSpace(resp.Reply) != "" {
+			e.responder(ctx, convID, reply)
+			acao.SemAviso = true
+		}
+		e.TransferirParaHumano(ctx, convID, acao)
+		return
+	}
+	e.responder(ctx, convID, reply)
+}
+
+// acaoTransferir procura a 1ª ação `transferir` das `acoes` do cérebro. Só a
+// `origem` (enum) é usada: o `motivo` do cérebro é texto de LLM que pode ecoar
+// fala do cliente (CPF, telefone) e por isso não vai a log, disco, nota nem
+// cliente (regra 5).
+func acaoTransferir(acoes []map[string]any) (Transferencia, bool) {
+	for _, a := range acoes {
+		if tipo, _ := a["tipo"].(string); tipo != "transferir" {
+			continue
+		}
+		origem, _ := a["origem"].(string)
+		switch origem {
+		case "frustracao":
+			origem = OrigemFrustracao
+		case "confianca":
+			origem = OrigemConfianca
+		case "pedido_cliente":
+			origem = OrigemCliente
+		default:
+			origem = OrigemAcao
+		}
+		return Transferencia{
+			Origem: origem,
+			Causa:  "o cérebro pediu a transferência (" + origem + ")",
+		}, true
+	}
+	return Transferencia{}, false
+}
+
+// gravarClassificacao guarda a última `classificacao` do cérebro em
+// `conversas.classificacao_json` (auditoria e nota do handoff). Não mexe em
+// `updated_at`: classificar não é um fato do Infodesk (W9).
+func (e *Engine) gravarClassificacao(ctx context.Context, convID string, cls map[string]any) {
+	if len(cls) == 0 {
+		return
+	}
+	b, err := json.Marshal(cls)
+	if err != nil {
+		e.log.Warn("classificação do cérebro não serializável", "conversation_id", convID, "err", err)
+		return
+	}
+	_, err = e.st.AtualizarConversa(ctx, convID, func(c *store.Conversa, existia bool) bool {
+		if !existia {
+			c.Estado = store.EstadoBot
+		}
+		c.ClassificacaoJSON = string(b)
+		return true
+	})
+	if err != nil {
+		e.log.Error("gravar classificação", "conversation_id", convID, "err", err)
+	}
+}
+
+// responder envia a resposta do cérebro, depois de reconferir no store que a
+// conversa continua com a Sofia (ZC-6: um atendente pode ter assumido
+// durante o turno) e registra `ultima_resposta_em`.
+func (e *Engine) responder(ctx context.Context, convID, content string) {
+	if !e.botConduz(ctx, convID) {
+		e.log.Info("resposta descartada: a conversa deixou de ser da Sofia durante o turno",
+			"conversation_id", convID)
+		return
+	}
+	if e.send(ctx, convID, content) {
+		e.registrarResposta(ctx, convID)
+	}
 }
 
 // send divide a resposta nas bolhas marcadas pelo cérebro (`---`), formata
 // cada uma para o WhatsApp (F3) e quebra as que ainda passarem do limite
 // (F12), entregando cada parte como mensagem separada — com uma pausa curta
-// entre elas para imitar o ritmo de quem digita.
+// entre elas para imitar o ritmo de quem digita. Devolve true se TODAS as
+// partes foram aceitas pelo canal.
 //
-// TODO(E2.1): antes da primeira bolha, reconferir no store se a conversa
-// continua com o bot (estado `transferida` = humano assumiu, ZC-6).
-func (e *Engine) send(ctx context.Context, convID, content string) {
+// Cada parte é reenviada até 2× só se o erro for transitório (5xx, rede,
+// 429); `WHATSAPP_WINDOW_CLOSED` é definitivo: o cliente sumiu por mais de
+// 24 h, o episódio local é encerrado e não se tenta template (v1).
+func (e *Engine) send(ctx context.Context, convID, content string) bool {
 	if content == "" {
-		return
+		return true
 	}
 	primeira := true
 	for _, bolha := range DividirBolhas(content) {
@@ -334,10 +441,36 @@ func (e *Engine) send(ctx context.Context, convID, content string) {
 				e.pausaEntreBolhas(ctx)
 			}
 			primeira = false
-			if err := e.tr.EnviarMensagem(ctx, convID, parte); err != nil {
-				e.log.Error("enviar mensagem", "conversation_id", convID, "err", err)
-				return
+			if err := e.enviarParte(ctx, convID, parte); err != nil {
+				if errors.Is(err, ErrJanelaWhatsAppFechada) {
+					e.log.Warn("janela de 24 h do WhatsApp fechada: encerrando o episódio local",
+						"conversation_id", convID)
+					e.marcarEstado(ctx, convID, store.EstadoEncerrada)
+					e.EncerrarEpisodio(ctx, convID)
+				} else {
+					e.log.Error("enviar mensagem", "conversation_id", convID, "err", err)
+				}
+				return false
 			}
+		}
+	}
+	return true
+}
+
+// enviarParte entrega UMA bolha, repetindo só em falha transitória.
+func (e *Engine) enviarParte(ctx context.Context, convID, parte string) error {
+	var err error
+	for tentativa := 0; ; tentativa++ {
+		if err = e.tr.EnviarMensagem(ctx, convID, parte); err == nil {
+			return nil
+		}
+		if !infodesk.Transitorio(err) || tentativa >= len(e.esperasEnvio) {
+			return err
+		}
+		e.log.Warn("envio transitório falhou; nova tentativa",
+			"conversation_id", convID, "tentativa", tentativa+1, "err", err)
+		if !e.dormir(ctx, e.esperasEnvio[tentativa]) {
+			return err
 		}
 	}
 }
