@@ -389,7 +389,12 @@ def test_efeito_nao_pode_escrever_messages_nem_identidade_da_sessao(monkeypatch)
 
 def test_efeito_nao_registrado_e_no_op():
     assert efeitos.efeito_pos_tool("qualquer", {"status": True}, {}) == {}
-    assert efeitos.EFEITOS == {}  # preenchido em E2.3
+    # Registro preenchido em E2.3: só as 3 tools do Infodesk com efeito no estado.
+    assert set(efeitos.EFEITOS) == {
+        "informar_identificacao",
+        "preparar_abertura_chamado",
+        "abrir_chamado",
+    }
 
 
 # ===========================================================================

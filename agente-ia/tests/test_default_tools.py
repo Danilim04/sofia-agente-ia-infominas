@@ -40,9 +40,17 @@ def _modulo_de_origem(tool: BaseTool) -> str:
     return type(tool).__module__
 
 
-def test_lista_canonica_vazia_ate_e23():
-    assert get_default_tools() == []
-    assert POLITICAS == {}
+def test_lista_canonica_tem_as_6_tools_do_infodesk_e_cada_uma_tem_politica():
+    nomes = [t.name for t in get_default_tools()]
+    assert nomes == [
+        "informar_identificacao",
+        "preparar_abertura_chamado",
+        "abrir_chamado",
+        "consultar_status_chamado",
+        "listar_meus_chamados",
+        "transferir_para_atendente",
+    ]
+    assert set(nomes) == TOOLS_DO_PLANO == set(POLITICAS)
 
 
 def test_toda_tool_oficial_vem_de_modulo_de_producao():
