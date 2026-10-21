@@ -5,6 +5,8 @@
 - `sem_rag`: retriever nulo para o nó `retrieve`.
 - `passa_seguranca(monkeypatch)`: guardrail de entrada sempre "suporte".
 - `_texto_de`: texto de um `content` que pode ser str ou lista de blocos.
+- `FakeJEV`/`resp_jev`/`FakeFallbackLLM`/`servico_fake`: classificação (E2.2) sem rede —
+  respostas do JEV scriptadas por pergunta e por turno.
 - Tools de teste com `InjectedToolArg` + políticas/efeitos correspondentes:
   `tool_de_teste` (injeção simples) e o par `tool_preparar_de_teste` /
   `tool_abrir_de_teste` (duas fases). `registrar_duas_fases_de_teste`
@@ -16,7 +18,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any
 from unittest.mock import MagicMock
 
@@ -31,6 +33,16 @@ from src.agent.tool_policy import (
     _proposta_da_sessao,
     _telefone_da_sessao,
     carimbar_proposta,
+)
+from src.classificacao.config import ConfigClassificacao
+from src.classificacao.fallback_llm import ResultadoFallback
+from src.classificacao.roteador import ServicoClassificacao
+from src.classificacao.taxonomia import Taxonomia, carregar_taxonomia
+from src.classificacao.tipos import (
+    Pergunta,
+    RespostaChoice,
+    RespostaJEV,
+    RespostaScore,
 )
 from src.tools import efeitos
 
@@ -198,4 +210,120 @@ def tc_preparar(id_: str = "tc-prep", titulo: str = "Sem conexão desde cedo") -
                 "args": {"titulo": titulo, "descricao": "Cliente relata queda total"},
             }
         ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Classificação (E2.2): JEV e fallback LLM falsos, scriptados por pergunta
+# ---------------------------------------------------------------------------
+
+#: Escolha, confiança[, segunda opção mais provável].
+EscolhaFalsa = tuple[str, float] | tuple[str, float, str]
+
+
+def _choice(valor: EscolhaFalsa) -> RespostaChoice:
+    escolha, confianca = valor[0], valor[1]
+    probs = {escolha: round(0.5 + confianca / 2, 4)}
+    if len(valor) == 3:
+        probs[valor[2]] = round(max(0.0, 0.5 - confianca / 2), 4) or 0.01
+    return RespostaChoice(escolha=escolha, confianca=confianca, probabilidades=probs)
+
+
+def resp_jev(
+    *,
+    intencao: EscolhaFalsa = ("reclamacao_problema", 0.92),
+    categoria: EscolhaFalsa = ("sem_conexao", 0.88),
+    prioridade: tuple[int, float] = (2, 0.8),
+    frustracao: tuple[int, float] = (0, 0.9),
+    malicioso: float = 0.02,
+    fora_de_escopo: float = 0.02,
+    modelo: str = "jev-fake",
+) -> RespostaJEV:
+    """Resposta do JEV scriptada POR PERGUNTA (defaults: reclamação clara, calmo, seguro)."""
+    return RespostaJEV(
+        choices={"intencao": _choice(intencao), "categoria": _choice(categoria)},
+        scores={
+            "prioridade": RespostaScore(nivel=prioridade[0], confianca=prioridade[1]),
+            "frustracao": RespostaScore(nivel=frustracao[0], confianca=frustracao[1]),
+        },
+        nouls={"malicioso": malicioso, "fora_de_escopo": fora_de_escopo},
+        modelo=modelo,
+        latencia_ms=5,
+    )
+
+
+class FakeJEV:
+    """`ClienteJEV` falso: devolve (ou levanta) o próximo item do roteiro por chamada.
+
+    - `por_turno`: lista consumida em ordem — uma `RespostaJEV` ou uma exceção
+      (JEV fora do ar naquele turno);
+    - `padrao`: usado quando o roteiro acaba (sem ele, chamada extra falha o teste);
+    - `chamadas`: `(estado, perguntas)` de cada chamada, para os asserts de
+      mascaramento de PII e de "uma chamada por turno".
+    """
+
+    def __init__(
+        self,
+        por_turno: Sequence[RespostaJEV | BaseException] = (),
+        padrao: RespostaJEV | BaseException | None = None,
+    ) -> None:
+        self._fila: list[RespostaJEV | BaseException] = list(por_turno)
+        self._padrao = padrao
+        self.chamadas: list[tuple[str, Mapping[str, Pergunta]]] = []
+
+    async def perguntar(self, estado: str, perguntas: Mapping[str, Pergunta]) -> RespostaJEV:
+        self.chamadas.append((estado, perguntas))
+        item = self._fila.pop(0) if self._fila else self._padrao
+        if item is None:
+            raise AssertionError("FakeJEV sem resposta scriptada para esta chamada")
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
+class FakeFallbackLLM:
+    """`FallbackLLM` falso: roteiro de `ResultadoFallback` (ou exceção) por chamada."""
+
+    def __init__(
+        self,
+        respostas: Sequence[ResultadoFallback | BaseException] = (),
+        padrao: ResultadoFallback | None = None,
+    ) -> None:
+        self._fila: list[ResultadoFallback | BaseException] = list(respostas)
+        self._padrao = padrao
+        self.chamadas: list[str] = []
+
+    async def classificar(self, estado: str) -> ResultadoFallback:
+        self.chamadas.append(estado)
+        item = self._fila.pop(0) if self._fila else self._padrao
+        if item is None:
+            raise AssertionError("FakeFallbackLLM sem resposta scriptada para esta chamada")
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
+def config_de_teste(**mudancas: Any) -> ConfigClassificacao:
+    """Config com os defaults do plano, sem `.env` nem chave real."""
+    base: dict[str, Any] = {"TYPESAFE_API_KEY": ""}
+    base.update(mudancas)
+    return ConfigClassificacao(_env_file=None, **base)  # type: ignore[call-arg]
+
+
+def taxonomia_de_teste() -> Taxonomia:
+    """A taxonomia versionada (placeholder P1) — a mesma que o cérebro carrega."""
+    return carregar_taxonomia(ConfigClassificacao(_env_file=None).taxonomia_path)  # type: ignore[call-arg]
+
+
+def servico_fake(
+    jev: FakeJEV | None = None,
+    fallback: FakeFallbackLLM | None = None,
+    **config: Any,
+) -> ServicoClassificacao:
+    """`ServicoClassificacao` ligado a fakes (sem rede)."""
+    return ServicoClassificacao(
+        taxonomia=taxonomia_de_teste(),
+        config=config_de_teste(**config),
+        jev=jev,
+        fallback=fallback,
     )
