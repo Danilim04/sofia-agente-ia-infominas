@@ -520,18 +520,19 @@ def _periodo_do_dia(agora: datetime | None = None) -> str:
 _INSTRUCAO_TRANSFERENCIA = {
     "frustracao": (
         "- O cliente está MUITO irritado. Responda com UMA ou DUAS frases de empatia "
-        "(reconheça o transtorno, sem culpá-lo) e diga que está passando a conversa "
-        "para um atendente agora — o sistema faz a transferência. Não peça mais "
-        "dados e não prometa prazo."
+        '(reconheça o transtorno, sem culpá-lo) e diga "Vou te passar para um '
+        'atendente agora" — o sistema faz a transferência. Não peça mais dados, não '
+        'prometa prazo e NÃO use "encaminhei", "repassei" nem "estou '
+        'encaminhando" (afirmam uma ação que você não executou).'
     ),
     "pedido_cliente": (
-        "- O cliente pediu para falar com uma pessoa. Confirme em UMA frase que está "
-        "passando a conversa para um atendente — o sistema faz a transferência. Não "
-        "insista em continuar o atendimento."
+        "- O cliente pediu para falar com uma pessoa. Confirme em UMA frase "
+        '("Vou te passar para um atendente") — o sistema faz a transferência. Não '
+        'insista em continuar o atendimento nem use "encaminhei"/"repassei".'
     ),
     "confianca": (
         "- Não foi possível entender o assunto com segurança. Diga em UMA frase, com "
-        "simpatia, que vai passar a conversa para um atendente — o sistema faz a "
+        'simpatia, "Vou te passar para um atendente" — o sistema faz a '
         "transferência. Não tente adivinhar o problema."
     ),
 }

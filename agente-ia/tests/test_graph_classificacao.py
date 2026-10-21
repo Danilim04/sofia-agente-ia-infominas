@@ -196,7 +196,7 @@ def test_esclarecimento_persistindo_vira_indefinida_e_transfere_por_confianca():
     assert t2["classificacao"]["origem"] == "indefinida"
     assert t2["esclarecimentos"] == 1  # não pergunta de novo (máx. 1 por episódio)
     assert [a["origem"] for a in t2["acoes"]] == ["confianca"]
-    assert "passar a conversa para um atendente" in _sistema(llm, 1)
+    assert "Vou te passar para um atendente" in _sistema(llm, 1)
 
 
 def test_frustracao_alta_gera_acao_transferir_e_resposta_empatica():
@@ -430,3 +430,31 @@ def test_caminho_assincrono_do_grafo_classifica_igual():
     assert out["classificacao"]["categoria"] == "sem_conexao"
     assert [a["origem"] for a in out["acoes"]] == ["frustracao"]
     assert llm.invoke.call_count == 1
+
+
+# ===========================================================================
+# Revisão E2.2: a redação induzida pelo prompt sobrevive ao output_guardrail real
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "resposta",
+    [
+        "Poxa, imagino o transtorno de ficar sem internet. Vou te passar para um atendente agora.",
+        "Entendi, Maria. Vou te passar para um atendente agora.",
+    ],
+)
+def test_resposta_de_transferencia_induzida_pelo_prompt_passa_no_output_guardrail(resposta):
+    jev = FakeJEV(padrao=resp_jev(frustracao=(3, 0.9)))
+    grafo, _ = _grafo(servico_fake(jev), respostas=[AIMessage(content=resposta)])
+    out = _turno(grafo, "que absurdo, de novo sem internet")
+    assert [a["origem"] for a in out["acoes"]] == ["frustracao"]
+    assert _texto_de(out["messages"][-1].content) == resposta  # não foi trocada
+
+
+def test_prompt_de_transferencia_traz_a_frase_aceita_e_proibe_as_que_o_guardrail_barra():
+    grafo, llm = _grafo(servico_fake(FakeJEV(padrao=resp_jev(frustracao=(3, 0.9)))))
+    _turno(grafo, "que absurdo")
+    sistema = _sistema(llm)
+    assert "Vou te passar para um atendente" in sistema
+    assert "NÃO use" in sistema and "encaminhei" in sistema

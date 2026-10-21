@@ -367,3 +367,22 @@ def test_apresentacao_da_sofia_nao_e_mascarada_mas_a_do_cliente_sim():
     )
     assert "Eu sou a Sofia" in estado
     assert "Carlos" not in estado and "sou o <NOME>" in estado
+
+
+def test_mascarar_pii_nao_e_quadratico_com_texto_hostil():
+    import time
+
+    hostil = "a" * 200_000
+    inicio = time.perf_counter()
+    estado = estado_para_jev([Mensagem("cliente", hostil)])
+    assert time.perf_counter() - inicio < 1.0  # cortado ANTES de mascarar
+    assert len(estado) <= 2000 * 4 + 20
+
+
+def test_email_continua_mascarado_com_a_regex_limitada():
+    assert mascarar_pii("fale com joao.silva+x@exemplo.com.br hoje") == "fale com <EMAIL> hoje"
+
+
+def test_nome_de_contato_com_palavra_do_dominio_nao_apaga_o_assunto():
+    saida = mascarar_pii("minha net caiu, aqui é a Luz", nomes=["Net Fibra Luz Maria"])
+    assert "net caiu" in saida and "Maria" not in saida

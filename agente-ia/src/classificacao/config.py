@@ -88,6 +88,11 @@ class ConfigClassificacao(BaseSettings):
     #: pode fixar a categoria? Hipótese: sim, com `origem: llm`.
     fallback_fixa_sem_jev: bool = Field(True, alias="JEV_FALLBACK_FIXA_SEM_JEV")
 
+    #: Dentro da mesma categoria a prioridade só sobe (um "ok" calmo não rebaixa
+    #: um chamado já urgente). Hipótese de trabalho. TODO(P8/P9): validar com o
+    #: histórico real; `false` recalcula a cada reclamação.
+    prioridade_so_sobe: bool = Field(True, alias="JEV_PRIORIDADE_SO_SOBE")
+
     # --- Taxonomia ---
     taxonomia_path: Path = Field(RAIZ_AGENTE / "config" / "taxonomia.yaml", alias="TAXONOMIA_PATH")
 

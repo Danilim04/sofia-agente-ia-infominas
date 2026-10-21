@@ -10,7 +10,7 @@ Tabela implementada (cada linha tem teste em `tests/test_classificacao_roteador.
 | Sinal | Regra |
 |---|---|
 | intenção | conf ≥ alto → usa; baixo ≤ conf < alto → usa e `confirmar_intencao`; < baixo → fallback LLM |
-| categoria | conf ≥ alto → fixa (`jev`); baixo ≤ conf < alto → fallback LLM: concorda com a 1ª/2ª do JEV → fixa (`llm`), senão esclarecimento; < baixo → esclarecimento (máx. 1/episódio); persistindo → `indefinida` (+ `transferir(confianca)` ou triagem, P11) |
+| categoria (só em reclamação) | conf ≥ alto → fixa (`jev`); baixo ≤ conf < alto → fallback LLM: concorda com a 1ª/2ª do JEV → fixa (`llm`), senão esclarecimento; < baixo → esclarecimento (máx. 1/episódio); persistindo → `indefinida` (+ `transferir(confianca)` ou triagem, P11) |
 | prioridade | conf ≥ limiar → score do JEV; senão default da categoria/`media`; piso `prioridade_minima` da taxonomia vence |
 | frustração | nível ≥ 3 e conf ≥ 0.6 → `transferir(frustracao)`; nível ≥ 2 → tom cuidadoso |
 | malicioso | ≥ 0.80 bloqueia; 0.50–0.80 aviso no prompt (decidido no nó `classificar`) |
@@ -72,8 +72,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _CORRECOES = re.compile(
-    r"\b(na verdade|nao e isso|nao e esse|nao e essa|nao eh isso|me enganei|errei|"
-    r"me expressei mal|corrigindo|o problema e outro|nao,? (?:o problema|e sobre|e a respeito))\b"
+    r"\b(na verdade,? (?:e|era|foi|o problema|o assunto|se trata|quero|queria)\b|"
+    r"nao e isso|nao e esse|nao e essa|nao eh isso|me enganei|errei|"
+    r"me expressei mal|corrigindo|o problema e outro|nao,? (?:o problema|e sobre|e a respeito))"
 )
 
 
@@ -146,7 +147,7 @@ async def classificar(
             resposta = await jev.perguntar(estado, montar_perguntas(taxonomia))
         except Exception as exc:
             # Métrica `jev_indisponivel` (contador por log estruturado) — fail-soft.
-            logger.warning("jev_indisponivel erro=%s: %s", type(exc).__name__, exc)
+            logger.warning("jev_indisponivel erro=%s", type(exc).__name__)
     jev_ok = resposta is not None
     if disponibilidade is not None and disponibilidade.registrar(jev_ok):
         logger.error(
@@ -409,9 +410,11 @@ def _decidir_prioridade(
         prioridade, origem = piso, "regra"
 
     # Dentro da mesma categoria a prioridade só sobe (um "ok" calmo não rebaixa
-    # um chamado já tratado como urgente). Hipótese de trabalho.
+    # um chamado já tratado como urgente). Hipótese de trabalho TODO(P8/P9),
+    # configurável por JEV_PRIORIDADE_SO_SOBE.
     if (
-        anterior is not None
+        cfg.prioridade_so_sobe
+        and anterior is not None
         and anterior.categoria == categoria
         and ordem_prioridade(anterior.prioridade) > ordem_prioridade(prioridade)
     ):

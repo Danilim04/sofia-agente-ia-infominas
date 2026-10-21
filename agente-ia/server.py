@@ -518,7 +518,11 @@ async def classificar_mensagem(
 
 def _token_valido(recebido: str | None) -> bool:
     esperado = get_settings().infodesk_tools_token
-    return bool(esperado) and recebido is not None and hmac.compare_digest(recebido, esperado)
+    return (
+        bool(esperado)
+        and recebido is not None
+        and hmac.compare_digest(recebido.encode(), esperado.encode())
+    )
 
 
 @app.post("/classificar", response_model=ClassificarResponse)

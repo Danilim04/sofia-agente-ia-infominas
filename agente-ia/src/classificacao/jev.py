@@ -49,7 +49,31 @@ class ClienteJEV(Protocol):
 # Estado enviado ao JEV (PII mascarada)
 # ---------------------------------------------------------------------------
 
-_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+#: Partes limitadas (RFC: local ≤ 64, rótulo ≤ 63): sem isso a varredura é quadrática
+#: em palavras longas sem espaço e trava o event loop com texto hostil.
+_EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]{1,63}(?:\.[\w-]{1,63}){1,8}")
+#: Palavras do domínio que um nome de contato do WhatsApp pode conter ("Net Fibra",
+#: "Luz"): mascará-las apagaria o próprio assunto do cliente no estado enviado ao JEV.
+_PALAVRAS_DO_DOMINIO = frozenset(
+    {
+        "net",
+        "internet",
+        "fibra",
+        "wifi",
+        "wi-fi",
+        "luz",
+        "sinal",
+        "plano",
+        "tv",
+        "telecom",
+        "conexão",
+        "conexao",
+        "rede",
+        "link",
+        "digital",
+        "online",
+    }
+)
 #: Telefone brasileiro: DDI/DDD opcionais, 9º dígito opcional, separadores livres.
 _TELEFONE = re.compile(r"(?<!\d)(?:\+?55[\s-]?)?\(?\d{2}\)?[\s-]?9?\d{4}[-\s]?\d{4}(?!\d)")
 #: Sequência de ≥ 9 dígitos com um separador opcional entre eles (CPF, CNPJ,
@@ -96,7 +120,12 @@ def mascarar_pii(texto: str, nomes: Sequence[str] = (), *, apresentacao: bool = 
     saida = _SEQUENCIA_NUMERICA.sub(_substituir_sequencia, saida)
     if apresentacao:
         saida = _APRESENTACAO.sub(_mascarar_apresentacao, saida)
-    palavras = {p for nome in nomes for p in re.split(r"\s+", nome.strip()) if len(p) >= 3}
+    palavras = {
+        p
+        for nome in nomes
+        for p in re.split(r"\s+", nome.strip())
+        if len(p) >= 3 and p.lower() not in _PALAVRAS_DO_DOMINIO
+    }
     for palavra in sorted(palavras, key=len, reverse=True):
         saida = re.sub(rf"(?<!\w){re.escape(palavra)}(?!\w)", "<NOME>", saida, flags=re.IGNORECASE)
     return saida
@@ -111,11 +140,11 @@ def _mascarar_apresentacao(m: re.Match[str]) -> str:
     return (prefixo.group(0) if prefixo else "") + "<NOME>"
 
 
-def _linha(m: Mensagem, nomes: Sequence[str]) -> str:
+def _linha(m: Mensagem, nomes: Sequence[str], limite: int) -> str:
     rotulo = "Cliente" if m.autor == "cliente" else "Sofia"
-    texto = _ESPACOS.sub(
-        " ", mascarar_pii(m.texto, nomes, apresentacao=m.autor == "cliente")
-    ).strip()
+    # Corta ANTES de mascarar: o custo das regex não pode depender do tamanho que o cliente mandar.
+    bruto = m.texto[:limite]
+    texto = _ESPACOS.sub(" ", mascarar_pii(bruto, nomes, apresentacao=m.autor == "cliente")).strip()
     return f"{rotulo}: {texto}"
 
 
@@ -139,8 +168,9 @@ def estado_para_jev(
     if not recentes:
         return "Mensagem atual: "
     *historico, atual = recentes
-    linhas = [_linha(m, nomes) for m in historico]
-    texto_atual = _linha(atual, nomes).split(": ", 1)[1]
+    limite = max_tokens * CARACTERES_POR_TOKEN
+    linhas = [_linha(m, nomes, limite) for m in historico]
+    texto_atual = _linha(atual, nomes, limite).split(": ", 1)[1]
 
     orcamento = max_tokens * CARACTERES_POR_TOKEN
     rotulo_atual = "Mensagem atual: "

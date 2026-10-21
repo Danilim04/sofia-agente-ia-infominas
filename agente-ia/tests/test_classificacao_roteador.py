@@ -438,7 +438,8 @@ def test_prioridade_so_sobe_dentro_da_mesma_categoria():
         ("não é isso, é outra coisa", True),
         ("me enganei, desculpa", True),
         ("minha internet caiu", False),
-        ("na verdade nem sei", True),
+        ("na verdade nem sei", False),
+        ("na verdade, o assunto é outro", True),
         ("", False),
     ],
 )
@@ -491,3 +492,57 @@ def test_servico_padrao_com_chave_cria_o_cliente_real_com_modelo_pinado():
     )
     assert isinstance(servico.jev, JEVTypeSafe)
     assert servico.config.jev_model == "jev-1.13.0"
+
+
+# ===========================================================================
+# Revisão E2.2: categoria só se decide em RECLAMAÇÃO (02) · bordas · flag
+# ===========================================================================
+
+
+def test_duvida_de_cobranca_nao_fixa_fila_e_a_reclamacao_seguinte_define_a_categoria():
+    duvida = FakeJEV(
+        padrao=resp_jev(intencao=("duvida_informacao", 0.9), categoria=("cobranca", 0.9))
+    )
+    c1 = _rodar("como pego a 2ª via do boleto?", jev=duvida)
+    assert c1.categoria == "indefinida" and c1.origem == "indefinida"
+    assert c1.precisa_esclarecer is False and c1.acoes == ()
+
+    reclamacao = FakeJEV(padrao=resp_jev(categoria=("sem_conexao", 0.8)))
+    c2 = _rodar("aliás minha internet caiu", jev=reclamacao, anterior=c1)
+    assert (c2.categoria, c2.origem) == ("sem_conexao", "jev")
+
+
+def test_duvida_com_categoria_incerta_nao_gasta_chamada_de_llm():
+    fb = FakeFallbackLLM()
+    jev = FakeJEV(padrao=resp_jev(intencao=("duvida_informacao", 0.9), categoria=("cobranca", 0.5)))
+    _rodar("quanto custa o plano?", jev=jev, fallback=fb)
+    assert fb.chamadas == []
+
+
+@pytest.mark.parametrize("intencao", ["status_chamado", "outro", "duvida_informacao"])
+def test_so_reclamacao_troca_categoria_ja_fixada(intencao):
+    anterior = _fixa("sem_conexao")
+    jev = FakeJEV(padrao=resp_jev(intencao=(intencao, 0.95), categoria=("cobranca", 0.99)))
+    assert _rodar("x", jev=jev, anterior=anterior).categoria == "sem_conexao"
+
+
+def test_bordas_exatas_dos_limiares_de_intencao_e_categoria():
+    # intenção: 0.70 é "alto" (não confirma); 0.45 ainda usa o JEV (e confirma)
+    c = _rodar(jev=FakeJEV(padrao=resp_jev(intencao=("status_chamado", 0.70))))
+    assert c.confirmar_intencao is False and c.origens["intencao"] == "jev"
+    fb = FakeFallbackLLM()
+    c = _rodar(jev=FakeJEV(padrao=resp_jev(intencao=("status_chamado", 0.45))), fallback=fb)
+    assert c.confirmar_intencao is True and fb.chamadas == []
+    # categoria: 0.40 já é "entre" (consulta o fallback); 0.65 fixa direto
+    fb = FakeFallbackLLM(padrao=ResultadoFallback("reclamacao_problema", "lentidao"))
+    c = _rodar(
+        jev=FakeJEV(padrao=resp_jev(categoria=("lentidao", 0.40, "instabilidade"))), fallback=fb
+    )
+    assert len(fb.chamadas) == 1 and c.origem == "llm"
+
+
+def test_prioridade_so_sobe_pode_ser_desligada():
+    anterior = _fixa("lentidao", "urgente")
+    jev = FakeJEV(padrao=resp_jev(categoria=("lentidao", 0.9), prioridade=(0, 0.9)))
+    c = _rodar("tá, obrigado", jev=jev, anterior=anterior, JEV_PRIORIDADE_SO_SOBE=False)
+    assert c.prioridade == "baixa"

@@ -190,6 +190,7 @@ def test_classificar_responde_no_formato_do_contrato():
 def test_classificar_ecoa_o_contrato_na_forma_de_modelo():
     bruto = _contrato("classificar-response.json")
     assert ClassificarResponse.model_validate(bruto).model_dump(mode="json") == bruto
+    assert set(bruto["classificacao"]) == CLASSIFICACAO_CHAVES  # o contrato em si tem as 5 chaves
 
 
 def test_classificar_marca_seguranca_com_os_limiares_de_bloqueio():
@@ -285,3 +286,13 @@ def test_lifespan_monta_o_grafo_com_classificador(monkeypatch):
     monkeypatch.setattr(server, "_GRAPH", None)
     grafo = server._get_graph()
     assert "classificar" in grafo.get_graph().nodes
+
+
+def test_token_com_caractere_nao_ascii_e_403_e_nao_500(monkeypatch, token_configurado):
+    monkeypatch.setattr(server, "_SERVICO", servico_fake(FakeJEV(padrao=resp_jev())))
+    resp = TestClient(server.app).post(
+        "/classificar",
+        json=_contrato("classificar-request.json"),
+        headers={"X-Tools-Token": "tokén".encode("latin-1")},
+    )
+    assert resp.status_code == 403

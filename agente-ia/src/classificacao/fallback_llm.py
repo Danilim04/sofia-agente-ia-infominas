@@ -14,6 +14,7 @@ injetada (`llm_factory`), ligada a `get_classifier_llm` em `server.py`.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -51,6 +52,11 @@ def construir_schema(taxonomia: Taxonomia) -> type[BaseModel]:
         __doc__="Classificação do turno do cliente (opções fechadas).",
         **campos,
     )
+
+
+def _sem_delimitador(estado: str) -> str:
+    """O cliente não pode fechar a tag da transcrição para escapar do bloco de dado."""
+    return re.sub(r"</?\s*transcricao\s*>", "", estado, flags=re.IGNORECASE)
 
 
 def _descricao_intencao(nome: str) -> str:
@@ -94,13 +100,17 @@ class FallbackLLMEstruturado:
             bruto = await llm.ainvoke(
                 [
                     SystemMessage(content=self._prompt),
-                    HumanMessage(content=f"<transcricao>\n{estado}\n</transcricao>"),
+                    HumanMessage(
+                        content=f"<transcricao>\n{_sem_delimitador(estado)}\n</transcricao>"
+                    ),
                 ]
             )
             intencao = str(getattr(bruto, "intencao", INTENCAO_OUTRO))
             categoria = str(getattr(bruto, "categoria", CATEGORIA_INDEFINIDA))
         except Exception as exc:
-            logger.warning("fallback_llm_indisponivel erro=%s — usando outro/indefinida", exc)
+            logger.warning(
+                "fallback_llm_indisponivel erro=%s — usando outro/indefinida", type(exc).__name__
+            )
             return ResultadoFallback(INTENCAO_OUTRO, CATEGORIA_INDEFINIDA, ok=False)
         # Defesa em profundidade: o schema já restringe, mas um LLM/fake pode devolver outra coisa.
         if intencao not in INTENCOES:

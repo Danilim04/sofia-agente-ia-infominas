@@ -41,12 +41,12 @@ INTENCOES: Final[tuple[str, ...]] = (
     INTENCAO_OUTRO,
 )
 
-#: Intenções em que a categoria do problema é (re)calculada. Nas demais
-#: (saudação, "sim/ok", pedido de atendente) a categoria já fixada é herdada:
-#: um "ok" não pode apagar a classificação do episódio.
-INTENCOES_COM_CATEGORIA: Final[frozenset[str]] = frozenset(
-    {INTENCAO_RECLAMACAO, INTENCAO_DUVIDA, INTENCAO_STATUS, INTENCAO_OUTRO}
-)
+#: Intenções em que a categoria do problema é (re)calculada: SÓ reclamação
+#: (02: "categoria.confidence quando intenção = reclamação"). Nas demais
+#: (dúvida, status, saudação, "sim/ok", pedido de atendente) a categoria já
+#: fixada é herdada: uma dúvida de cobrança não pode virar a fila de uma
+#: reclamação de conexão feita depois, e um "ok" não apaga a classificação.
+INTENCOES_COM_CATEGORIA: Final[frozenset[str]] = frozenset({INTENCAO_RECLAMACAO})
 
 #: Ordem canônica das prioridades da Sofia (índice = nível do Score do JEV).
 PRIORIDADES: Final[tuple[str, ...]] = ("baixa", "media", "alta", "urgente")
