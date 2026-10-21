@@ -8,10 +8,23 @@ tool por nome, ele chama `efeito_pos_tool(nome, resultado, state)` depois de
 cada execução e aplica o delta devolvido.
 
 `EFEITOS` é o registro: nome da tool → função `(nome, resultado, state) ->
-delta`. Tool sem entrada não mexe no estado (no-op). O registro nasce VAZIO —
-E2.3 (tools do Infodesk) preenche: carimbar `proposta_chamado` no
-`preparar_abertura_chamado`, zerar no `abrir_chamado`, gravar `identificacao`
-no `informar_identificacao`.
+delta`. Tool sem entrada não mexe no estado (no-op). Efeitos das tools do
+Infodesk (E2.3), ao final deste módulo:
+
+- `preparar_abertura_chamado` ok → carimba `proposta_chamado` (`criada_em`,
+  `turno`); qualquer outro resultado zera a proposta (o estado reflete sempre
+  o último preparo);
+- `abrir_chamado` ok OU falha → consome (`proposta_chamado = None`). Depois de
+  uma tentativa que o gateway executou (mesmo sem resposta, `infodesk_indisponivel`)
+  não há segundo `abrir` com a mesma proposta no mesmo turno: o modelo teria de
+  preparar de novo, e o `preparar` do gateway devolve `chamado_aberto` se o ticket
+  existir (dedup) — "nunca retry em POST /tickets" (regra 3). Recusa da política
+  não chama o efeito: a proposta fica como estava;
+- `informar_identificacao` ok → grava `identificacao = {forma,
+  valor_mascarado}` — só o mascarado em `identificacao`. ATENÇÃO: o `AIMessage`
+  que chamou a tool leva o CPF/contrato em `tool_calls[].args` e vai para o
+  checkpoint e o trace como qualquer mensagem; mascarar isso é do checkpointer/nós
+  (fora da zona da E2.3) — TODO(follow-up da E2.3), nota no PR.
 
 Invariantes para quem registrar um efeito:
 - recebe o estado como leitura e devolve um dict NOVO (nunca muta `state`);
@@ -27,11 +40,17 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from langchain_core.messages import AIMessage
+
+from src.identity.contrato import mascarar_contrato
+from src.identity.cpf import cpf_valido, mascarar_cpf
+from src.tools.proposta import carimbar_proposta
+
 logger = logging.getLogger(__name__)
 
 Efeito = Callable[[str, Any, Mapping[str, Any]], Mapping[str, Any] | None]
 
-#: Registro de efeitos por nome de tool — preenchido em E2.3.
+#: Registro de efeitos por nome de tool (preenchido ao final do módulo).
 EFEITOS: dict[str, Efeito] = {}
 
 #: Chaves que um efeito NUNCA pode escrever: `messages` é do `tools_node`; a
@@ -62,3 +81,62 @@ def efeito_pos_tool(nome: str, resultado: Any, state: Mapping[str, Any]) -> dict
         for chave in bloqueadas:
             delta.pop(chave)
     return delta
+
+
+# ---------------------------------------------------------------------------
+# Efeitos das tools do Infodesk (E2.3)
+# ---------------------------------------------------------------------------
+
+
+def _ok(resultado: Any) -> bool:
+    """Sucesso = o gateway disse `status: true` (nunca texto do modelo)."""
+    return isinstance(resultado, Mapping) and resultado.get("status") is True
+
+
+def _efeito_preparar(nome: str, resultado: Any, state: Mapping[str, Any]) -> dict[str, Any]:
+    proposta = resultado.get("proposta") if _ok(resultado) else None
+    if isinstance(proposta, Mapping) and proposta:
+        return {"proposta_chamado": carimbar_proposta(proposta, state)}
+    return {"proposta_chamado": None}
+
+
+def _efeito_abrir(nome: str, resultado: Any, state: Mapping[str, Any]) -> dict[str, Any]:
+    return {"proposta_chamado": None}
+
+
+def _args_da_chamada(nome: str, state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Args propostos pelo modelo nas chamadas a `nome` do último `AIMessage`.
+
+    O resultado da tool não devolve o dado informado; a máscara é calculada a
+    partir dele aqui, em memória, e o dado em claro não vai a lugar nenhum.
+    """
+    for mensagem in reversed(list(state.get("messages") or [])):
+        if isinstance(mensagem, AIMessage):
+            return [
+                tc.get("args") or {} for tc in (mensagem.tool_calls or []) if tc.get("name") == nome
+            ]
+    return []
+
+
+def _efeito_identificacao(nome: str, resultado: Any, state: Mapping[str, Any]) -> dict[str, Any]:
+    if not _ok(resultado) or resultado.get("identificado") is not True:
+        return {}
+    forma = resultado.get("forma")
+    if forma not in ("cpf", "contrato"):
+        return {}
+    mascarado = mascarar_cpf("") if forma == "cpf" else mascarar_contrato("")
+    for args in _args_da_chamada(nome, state):
+        if forma == "cpf" and cpf_valido(args.get("cpf")):
+            mascarado = mascarar_cpf(args.get("cpf"))
+        elif forma == "contrato" and args.get("contrato"):
+            mascarado = mascarar_contrato(args.get("contrato"))
+    return {"identificacao": {"forma": forma, "valor_mascarado": mascarado}}
+
+
+EFEITOS.update(
+    {
+        "preparar_abertura_chamado": _efeito_preparar,
+        "abrir_chamado": _efeito_abrir,
+        "informar_identificacao": _efeito_identificacao,
+    }
+)

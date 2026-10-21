@@ -22,23 +22,46 @@ Este módulo é a fonte única de verdade sobre o que o agente pode fazer:
 Uma tool ausente deste mapa não recebe nem valida nada da sessão (tools puras
 de conteúdo). Auditoria de segurança das tools começa e termina neste arquivo.
 
-Estado desta etapa (E1.3): o MECANISMO fica (``PoliticaTool``,
-``aplicar_politica``, ``carimbar_proposta``, ``_exigir_proposta_confirmada``,
-``CONFIRMACOES_EXPLICITAS``); as ENTRADAS do domínio antigo saíram e
-``POLITICAS`` nasce vazio — E2.3 preenche com as 6 tools do Infodesk
-(`docs/plano/01-ferramentas.md`, seção D).
+Matriz de políticas das 6 tools do Infodesk (E2.3,
+`docs/plano/01-ferramentas.md`, seção D) no fim do módulo, em ``POLITICAS``.
+O carimbo da proposta mora em ``src/tools/proposta.py`` (a camada ``tools`` não
+pode importar a política) e é re-exportado aqui.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import HumanMessage
+
+from src.classificacao.config import ConfigClassificacao
+from src.classificacao.tipos import CATEGORIA_INDEFINIDA
+from src.identity.config import ident_exigir_cpf
+from src.identity.contrato import contrato_valido
+from src.identity.cpf import cpf_valido
+from src.tools import proposta as _proposta_mod
+from src.tools.proposta import carimbar_proposta, turno_atual
+from src.tools.validacao import (
+    DESCRICAO_MAX,
+    MOTIVOS_TRANSFERENCIA,
+    TITULO_MAX,
+    normalizar_numero_chamado,
+)
+
+__all__ = [
+    "CONFIRMACOES_EXPLICITAS",
+    "POLITICAS",
+    "PROPOSTA_VALIDADE",
+    "PoliticaTool",
+    "aplicar_politica",
+    "carimbar_proposta",
+    "eh_confirmacao_explicita",
+]
 
 Resolver = Callable[[Mapping[str, Any]], Any]
 Validador = Callable[[Any, Mapping[str, Any]], str | None]
@@ -79,6 +102,33 @@ def _proposta_da_sessao(state: Mapping[str, Any]) -> dict[str, Any] | None:
     """Proposta de chamado validada pelo dry-run do gateway (estado do grafo)."""
     proposta = state.get("proposta_chamado")
     return dict(proposta) if isinstance(proposta, Mapping) and proposta else None
+
+
+def classificacao_da_sessao(state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Classificação fixada pelo nó `classificar` (JEV/fallback) — as 5 chaves do
+    Contrato A. Mesa, departamento e prioridade de destino saem dela NO GATEWAY
+    (tabela da taxonomia); o modelo não escolhe nenhuma."""
+    c = state.get("classificacao")
+    if not isinstance(c, Mapping) or not c:
+        return None
+    return {k: c.get(k) for k in ("intencao", "categoria", "prioridade", "confianca", "origem")}
+
+
+def identificacao_da_sessao(state: Mapping[str, Any]) -> dict[str, str] | None:
+    """Visão MASCARADA da identificação do cliente: `{forma, valor_mascarado}`.
+
+    Prefere o `contato` que o gateway mandou (lookup por telefone, CPF ou
+    contrato em cache) e cai no registro feito NESTA conversa por
+    `informar_identificacao`. Nunca o dado em claro (regra 5 do CLAUDE.md); o
+    gateway resolve a identidade real pela tabela `contatos` via telefone.
+    """
+    for dado in (state.get("contato"), state.get("identificacao")):
+        if isinstance(dado, Mapping) and dado.get("forma"):
+            return {
+                "forma": str(dado["forma"]),
+                "valor_mascarado": str(dado.get("valor_mascarado") or ""),
+            }
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -201,17 +251,12 @@ def eh_confirmacao_explicita(texto: Any) -> bool:
 
 def _agora() -> datetime:
     """Relógio da política (UTC) — separado para os testes congelarem o tempo."""
-    return datetime.now(UTC)
+    return _proposta_mod.relogio()
 
 
 def _turno_atual(state: Mapping[str, Any]) -> int:
-    """Número do turno = quantidade de mensagens do cliente no histórico.
-
-    Derivado do histórico persistido (nunca de um contador que o modelo possa
-    influenciar): no turno N o `tools_node` vê N `HumanMessage`.
-    """
-    mensagens: Iterable[BaseMessage] = state.get("messages") or []
-    return sum(1 for m in mensagens if isinstance(m, HumanMessage))
+    """Número do turno (ver `src.tools.proposta.turno_atual`)."""
+    return turno_atual(state)
 
 
 def _ultima_mensagem_do_cliente(state: Mapping[str, Any]) -> str:
@@ -222,22 +267,6 @@ def _ultima_mensagem_do_cliente(state: Mapping[str, Any]) -> str:
                 return "".join(b.get("text", "") for b in conteudo if isinstance(b, dict))
             return "" if conteudo is None else str(conteudo)
     return ""
-
-
-def carimbar_proposta(
-    proposta: Mapping[str, Any],
-    state: Mapping[str, Any],
-    agora: datetime | None = None,
-) -> dict[str, Any]:
-    """Cópia da proposta aprovada pelo dry-run com `criada_em` (ISO 8601, UTC)
-    e `turno` (turno em que foi preparada). É esse carimbo que `abrir` confere.
-    """
-    quando = agora or _agora()
-    return {
-        **dict(proposta),
-        "criada_em": quando.astimezone(UTC).isoformat(),
-        "turno": _turno_atual(state),
-    }
 
 
 def _criada_em(proposta: Mapping[str, Any]) -> datetime | None:
@@ -253,7 +282,7 @@ def _criada_em(proposta: Mapping[str, Any]) -> datetime | None:
     return quando
 
 
-def _exigir_proposta_confirmada(state: Mapping[str, Any]) -> str | None:
+def exigir_proposta_confirmada(state: Mapping[str, Any]) -> str | None:
     """Abrir chamado exige proposta preparada, válida e confirmada AGORA.
 
     Cada recusa diz ao modelo o que fazer — nenhuma delas pede que ele
@@ -303,16 +332,183 @@ def _exigir_proposta_confirmada(state: Mapping[str, Any]) -> str | None:
     return None
 
 
+_exigir_proposta_confirmada = exigir_proposta_confirmada  # nome usado pelos fakes de teste
+
+
+# ---------------------------------------------------------------------------
+# Precondições de sessão do `preparar_abertura_chamado`
+# ---------------------------------------------------------------------------
+
+#: "chamado 4821", "protocolo nº 123456", "o protocolo é 20240001234", "chamado de
+#: número 4.821", "ordem de serviço 9981": o cliente está falando de um chamado
+#: EXISTENTE (regra ZB herdada) — não vira chamado novo. Aplicada sobre o texto
+#: normalizado (minúsculas, sem acento, pontuação vira espaço: "4.821" → "4 821").
+#: Palavra-chave + até alguns conectivos + número de 3+ dígitos (ou agrupado em
+#: milhares). "OS" solta NÃO entra: "tenho os 200 mega" não é protocolo.
+#: TODO(P9): o histórico real mostra como o cliente chama o número ("protocolo"?).
+_PROTOCOLO_CITADO = re.compile(
+    r"\b(?:chamado|protocolo|ticket|ordem de servico)"
+    r"(?:\s+(?:n|no|numero|de|e|eh|que))*"
+    r"\s+(?:\d{3,}|\d{1,3}(?:\s\d{3})+)\b"
+)
+
+
+def exigir_identificado(state: Mapping[str, Any]) -> str | None:
+    """Cliente identificado: por lookup do telefone OU por CPF/contrato validado.
+
+    ``contato.forma == "telefone"`` (lookup do Infodesk, ADR 0004 revisado) basta
+    quando ``IDENT_EXIGIR_CPF=false`` (default; TODO(N3): decisão da Infominas);
+    com ``true`` só CPF/contrato contam. A forma vem do gateway/da tool de
+    identificação — nunca de texto do modelo.
+    """
+    for dado in (state.get("contato"), state.get("identificacao")):
+        forma = dado.get("forma") if isinstance(dado, Mapping) else None
+        if forma in ("cpf", "contrato"):
+            return None
+        if forma == "telefone" and not ident_exigir_cpf():
+            return None
+    return (
+        "o cliente ainda não se identificou — peça o CPF ou o número do contrato e "
+        "registre com informar_identificacao antes de preparar o chamado"
+    )
+
+
+def _acao_indefinida() -> str:
+    try:
+        return ConfigClassificacao().acao_indefinida  # type: ignore[call-arg]
+    except Exception:
+        return "transferir"
+
+
+def exigir_categoria(state: Mapping[str, Any]) -> str | None:
+    """Categoria definida pelo JEV/fallback ou por esclarecimento — nunca pelo modelo.
+
+    ``indefinida`` só passa se a Infominas escolher a mesa de triagem
+    (``JEV_ACAO_INDEFINIDA=triagem``); no default o sistema transfere.
+    TODO(P11): decisão "transferir × triagem" para categoria indefinida.
+    """
+    classificacao = state.get("classificacao")
+    categoria = classificacao.get("categoria") if isinstance(classificacao, Mapping) else None
+    if categoria and categoria != CATEGORIA_INDEFINIDA:
+        return None
+    if categoria == CATEGORIA_INDEFINIDA and _acao_indefinida() == "triagem":
+        return None
+    return (
+        "a categoria do problema ainda não está definida — faça UMA pergunta de "
+        "esclarecimento ao cliente (o que está acontecendo, desde quando) antes de preparar"
+    )
+
+
+def exigir_sem_protocolo_citado(state: Mapping[str, Any]) -> str | None:
+    """Mensagem que cita um número de chamado é sobre chamado existente."""
+    if _PROTOCOLO_CITADO.search(_normalizar(_ultima_mensagem_do_cliente(state))):
+        return (
+            "o cliente citou o número de um chamado existente — não prepare um chamado "
+            "novo; use consultar_status_chamado e oriente a acompanhar por ele"
+        )
+    return None
+
+
+def _todas(*precondicoes: Precondicao) -> Precondicao:
+    """Primeira recusa vence; a ordem das precondições é a ordem do fluxo."""
+
+    def _exigir(state: Mapping[str, Any]) -> str | None:
+        for precondicao in precondicoes:
+            erro = precondicao(state)
+            if erro:
+                return erro
+        return None
+
+    return _exigir
+
+
+# ---------------------------------------------------------------------------
+# Validadores — args do LLM (defesa em profundidade; o gateway revalida)
+# ---------------------------------------------------------------------------
+
+
+def _vazio(valor: Any) -> bool:
+    return valor is None or str(valor).strip() == ""
+
+
+def validar_cpf(valor: Any, state: Mapping[str, Any]) -> str | None:
+    """CPF com 11 dígitos e dígitos verificadores corretos (vazio = não informado)."""
+    if _vazio(valor) or cpf_valido(valor):
+        return None
+    return "CPF inválido; peça para o cliente conferir os 11 dígitos e mandar de novo"
+
+
+def validar_contrato(valor: Any, state: Mapping[str, Any]) -> str | None:
+    """Contrato casa com `IDENT_CONTRATO_RE` (vazio = não informado)."""
+    if _vazio(valor) or contrato_valido(valor):
+        return None
+    return "número de contrato inválido; peça para o cliente conferir e mandar de novo"
+
+
+def validar_numero(valor: Any, state: Mapping[str, Any]) -> str | None:
+    """Número do chamado: só dígitos, 1 a 10."""
+    if normalizar_numero_chamado(valor) is not None:
+        return None
+    return "número de chamado inválido (só dígitos, até 10); peça para o cliente conferir"
+
+
+def validar_motivo(valor: Any, state: Mapping[str, Any]) -> str | None:
+    """Motivo da transferência: só os do enum do plano (A6)."""
+    if valor in MOTIVOS_TRANSFERENCIA:
+        return None
+    return f"motivo inválido; use um de: {', '.join(MOTIVOS_TRANSFERENCIA)}"
+
+
+def validar_titulo(valor: Any, state: Mapping[str, Any]) -> str | None:
+    texto = "" if valor is None else str(valor).strip()
+    if not texto or len(texto) > TITULO_MAX or "\n" in texto:
+        return f"título obrigatório, em uma linha e com até {TITULO_MAX} caracteres"
+    return None
+
+
+def validar_descricao(valor: Any, state: Mapping[str, Any]) -> str | None:
+    if _vazio(valor) or len(str(valor).strip()) > DESCRICAO_MAX:
+        return f"descrição obrigatória e com até {DESCRICAO_MAX} caracteres"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # A política em si — uma linha por tool exposta ao agente
 # ---------------------------------------------------------------------------
 
-#: Preenchido em E2.3 (tools do Infodesk): `informar_identificacao`,
-#: `preparar_abertura_chamado`, `abrir_chamado`, `consultar_status_chamado`,
-#: `listar_meus_chamados`, `transferir_para_atendente` — ver a matriz em
-#: `docs/plano/01-ferramentas.md` (seção D). Vazio nesta etapa porque
-#: `get_default_tools()` também está vazia: nenhuma tool sem política.
-POLITICAS: dict[str, PoliticaTool] = {}
+_SESSAO = {"telefone": _telefone_da_sessao, "conversation_id": _conversation_id_da_sessao}
+
+#: Matriz tool × política (`docs/plano/01-ferramentas.md`, seção D). Uma linha por
+#: tool exposta ao agente; `get_default_tools()` e este mapa têm as mesmas 6 chaves
+#: (`tests/test_tool_policy.py`).
+POLITICAS: dict[str, PoliticaTool] = {
+    "informar_identificacao": PoliticaTool(
+        injetar=dict(_SESSAO),
+        validar={"cpf": validar_cpf, "contrato": validar_contrato},
+    ),
+    "preparar_abertura_chamado": PoliticaTool(
+        injetar={
+            **_SESSAO,
+            "classificacao": classificacao_da_sessao,
+            "identificacao": identificacao_da_sessao,
+        },
+        validar={"titulo": validar_titulo, "descricao": validar_descricao},
+        exigir=_todas(exigir_identificado, exigir_categoria, exigir_sem_protocolo_citado),
+    ),
+    "abrir_chamado": PoliticaTool(
+        injetar={**_SESSAO, "proposta": _proposta_da_sessao},
+        exigir=exigir_proposta_confirmada,
+    ),
+    "consultar_status_chamado": PoliticaTool(
+        injetar={**_SESSAO, "identificacao": identificacao_da_sessao},
+        validar={"numero": validar_numero},
+    ),
+    "listar_meus_chamados": PoliticaTool(injetar=dict(_SESSAO)),
+    "transferir_para_atendente": PoliticaTool(
+        injetar={**_SESSAO, "classificacao": classificacao_da_sessao},
+        validar={"motivo": validar_motivo},
+    ),
+}
 
 
 def aplicar_politica(

@@ -18,10 +18,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated, Any
 from unittest.mock import MagicMock
 
+import httpx
 from langchain_core.messages import AIMessage
 from langchain_core.tools import InjectedToolArg, tool
 
@@ -327,3 +331,76 @@ def servico_fake(
         jev=jev,
         fallback=fallback,
     )
+
+
+# ---------------------------------------------------------------------------
+# Gateway falso das tools do Infodesk (E2.3): `httpx.post` monkeypatchado,
+# respondendo com os JSON de `contratos/tools-infodesk/`
+# ---------------------------------------------------------------------------
+
+RAIZ_CONTRATOS_TOOLS = Path(__file__).resolve().parents[2] / "contratos" / "tools-infodesk"
+
+#: URL base e token que a tool usa nos testes (`get_settings` trocado).
+GATEWAY_URL_DE_TESTE = "http://gateway.test"
+GATEWAY_TOKEN_DE_TESTE = "token-de-teste"
+
+
+def contrato_tools(caminho: str, arquivo: str) -> dict[str, Any]:
+    """JSON de `contratos/tools-infodesk/<caminho>/<arquivo>.json` (ex.: `ticket/abrir`, `ok`)."""
+    texto = (RAIZ_CONTRATOS_TOOLS / caminho / f"{arquivo}.json").read_text(encoding="utf-8")
+    return json.loads(texto)
+
+
+class FakeGateway:
+    """`httpx.post` falso para `src.tools.infodesk_tools._post`.
+
+    `respostas` mapeia o caminho (`ticket/preparar`) para: um `dict` (corpo, HTTP
+    200), uma exceção (levantada), `(status, texto)` (resposta crua) ou uma função
+    `payload -> dict`. Caminho sem resposta falha o teste (tool chamou o que não devia).
+    """
+
+    def __init__(self, respostas: Mapping[str, Any] | None = None) -> None:
+        self.respostas: dict[str, Any] = dict(respostas or {})
+        self.chamadas: list[dict[str, Any]] = []
+
+    def post(self, url: str, *, json: Any = None, headers: Any = None, timeout: Any = None):
+        prefixo = f"{GATEWAY_URL_DE_TESTE}/tools/infodesk/"
+        assert url.startswith(prefixo), f"URL fora do gateway: {url}"
+        caminho = url.removeprefix(prefixo)
+        self.chamadas.append(
+            {"caminho": caminho, "json": json, "headers": dict(headers or {}), "timeout": timeout}
+        )
+        if caminho not in self.respostas:
+            raise AssertionError(f"chamada inesperada ao gateway: {caminho}")
+        resposta = self.respostas[caminho]
+        if callable(resposta) and not isinstance(resposta, BaseException):
+            resposta = resposta(json)
+        if isinstance(resposta, BaseException):
+            raise resposta
+        pedido = httpx.Request("POST", url)
+        if isinstance(resposta, tuple):
+            status, texto = resposta
+            return httpx.Response(status, text=texto, request=pedido)
+        return httpx.Response(200, json=resposta, request=pedido)
+
+    def em(self, caminho: str) -> list[dict[str, Any]]:
+        """As chamadas feitas a `caminho`, em ordem."""
+        return [c for c in self.chamadas if c["caminho"] == caminho]
+
+
+def instalar_gateway_fake(monkeypatch, respostas: Mapping[str, Any] | None = None) -> FakeGateway:
+    """Troca `httpx.post` e `get_settings` das tools do Infodesk (desfeito pelo monkeypatch)."""
+    from src.tools import infodesk_tools
+
+    gateway = FakeGateway(respostas)
+    monkeypatch.setattr(infodesk_tools.httpx, "post", gateway.post)
+    monkeypatch.setattr(
+        infodesk_tools,
+        "get_settings",
+        lambda: SimpleNamespace(
+            infodesk_tools_base_url=GATEWAY_URL_DE_TESTE,
+            infodesk_tools_token=GATEWAY_TOKEN_DE_TESTE,
+            infodesk_tools_timeout=30.0,
+        ),
+    )
+    return gateway

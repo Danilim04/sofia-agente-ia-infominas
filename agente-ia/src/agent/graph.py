@@ -61,12 +61,12 @@ from src.classificacao import ServicoClassificacao
 
 
 def get_default_tools() -> list[BaseTool]:
-    """Tools canônicas expostas ao modelo.
+    """Tools canônicas expostas ao modelo: as 6 do Infodesk (E2.3).
 
-    VAZIA nesta etapa (E1.3): as tools do domínio antigo saíram e as 6 tools
-    do Infodesk (`docs/plano/01-ferramentas.md`, seção A) entram em E2.3 —
-    junto com as entradas correspondentes em `tool_policy.POLITICAS` e os
-    efeitos em `src/tools/efeitos.py`.
+    `docs/plano/01-ferramentas.md`, seção A: `informar_identificacao`,
+    `preparar_abertura_chamado`, `abrir_chamado`, `consultar_status_chamado`,
+    `listar_meus_chamados` e `transferir_para_atendente` — cada uma com a sua
+    entrada em `tool_policy.POLITICAS` e o seu efeito em `src/tools/efeitos.py`.
 
     Invariantes que esta lista sempre respeita: o agente não acessa a
     internet; a base de conhecimento NÃO é tool (o retrieval é etapa fixa do
@@ -74,7 +74,9 @@ def get_default_tools() -> list[BaseTool]:
     identidade/escopo nunca são argumentos do LLM (injetados e validados pela
     política); nenhum mock/harness entra aqui (`tests/test_default_tools.py`).
     """
-    return []
+    from src.tools.infodesk_tools import TOOLS_INFODESK
+
+    return list(TOOLS_INFODESK)
 
 
 def build_graph(
