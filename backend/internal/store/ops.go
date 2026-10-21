@@ -403,3 +403,68 @@ CREATE INDEX IF NOT EXISTS tickets_numero ON gw.tickets (numero);
 CREATE INDEX IF NOT EXISTS tickets_conversa ON gw.tickets (conversation_id);
 CREATE INDEX IF NOT EXISTS tickets_telefone ON gw.tickets (telefone);
 `
+
+// ---------------------------------------------------------------------------
+// Reconciliador (E3.3)
+// ---------------------------------------------------------------------------
+
+func (o *ops) DesmarcarEventosDepois(ctx context.Context, seq int64) (int, error) {
+	res, err := o.db.ExecContext(ctx, o.rebind(`DELETE FROM gw.processed_events WHERE seq > ?`), seq)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+func (o *ops) TicketsPendentes(ctx context.Context) ([]Ticket, error) {
+	rows, err := o.db.QueryContext(ctx, o.rebind(
+		`SELECT `+colunasTicket+` FROM gw.tickets WHERE status = ? ORDER BY created_at, chave_idempotencia`), TicketPendente)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Ticket
+	for rows.Next() {
+		t, err := lerTicket(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
+func (o *ops) FalharTicket(ctx context.Context, chave string) (bool, error) {
+	res, err := o.db.ExecContext(ctx, o.rebind(
+		`UPDATE gw.tickets SET status = ?, updated_at = ? WHERE chave_idempotencia = ? AND status = ?`),
+		TicketFalha, time.Now().UnixMilli(), chave, TicketPendente)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+func (o *ops) ConversasSemResposta(ctx context.Context, antes time.Time) ([]Conversa, error) {
+	rows, err := o.db.QueryContext(ctx, o.rebind(
+		`SELECT `+colunasConversa+` FROM gw.conversas
+		  WHERE estado = ? AND handled_by = ?
+		    AND ultima_msg_em IS NOT NULL AND ultima_msg_em < ?
+		    AND (ultima_resposta_em IS NULL OR ultima_resposta_em < ultima_msg_em)
+		  ORDER BY ultima_msg_em, conversation_id`),
+		EstadoBot, HandledByBotExterno, antes.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Conversa
+	for rows.Next() {
+		c, err := lerConversa(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *c)
+	}
+	return out, rows.Err()
+}

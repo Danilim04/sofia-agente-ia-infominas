@@ -48,6 +48,10 @@ const (
 	NomeCursorWebhook  = "infodesk_webhook"
 )
 
+// HandledByBotExterno é o `handledBy` de uma conversa conduzida pelo nosso bot
+// (mesmo valor de infodesk.ConduzidaPorBotExterno; o store não importa o infodesk).
+const HandledByBotExterno = "EXTERNAL_BOT"
+
 // Conversa é uma linha de `conversas`. Zero values significam "nulo".
 type Conversa struct {
 	ID                string
@@ -130,6 +134,13 @@ type Store interface {
 	// precisa poder ser reentregue).
 	DesmarcarEvento(ctx context.Context, eventID string) error
 
+	// DesmarcarEventosDepois desfaz MarkEvent de todo evento com seq > `seq`
+	// (as chaves genéricas de MarkProcessed, seq 0, ficam) e devolve quantos
+	// eram. É a recuperação de crash do reconciliador (E3.3): na subida, o que
+	// o webhook marcou como visto mas a fila em memória perdeu volta a poder
+	// ser entregue pelo feed.
+	DesmarcarEventosDepois(ctx context.Context, seq int64) (int, error)
+
 	// Cursor devolve o maior `seq` do feed já visto/processado (0 = nenhum).
 	Cursor(ctx context.Context, nome string) (int64, error)
 	// AvancarCursor grava seq só se for maior que o atual (nunca retrocede).
@@ -142,6 +153,12 @@ type Store interface {
 	// pode chamar o store (a transação segura a conexão). Devolve a conversa
 	// como ficou. A mudança não precisa preencher UpdatedAt: fn decide.
 	AtualizarConversa(ctx context.Context, id string, fn func(c *Conversa, existia bool) bool) (Conversa, error)
+
+	// ConversasSemResposta devolve as conversas em que a Sofia conduz
+	// (estado `bot`, handled_by EXTERNAL_BOT) e a última mensagem do cliente
+	// é anterior a `antes` e não foi respondida (`ultima_resposta_em` vazio ou
+	// anterior à mensagem): a entrada do vigia BOT_TIMEOUT_HANDOFF (E3.3).
+	ConversasSemResposta(ctx context.Context, antes time.Time) ([]Conversa, error)
 
 	// ObterContato devolve o contato do telefone se ainda não expirou em
 	// `agora`; expirado ou ausente = nil.
@@ -156,6 +173,12 @@ type Store interface {
 	ObterTicket(ctx context.Context, chave string) (*Ticket, error)
 	// ConcluirTicket marca o ticket como aberto com o número devolvido pelo Infodesk.
 	ConcluirTicket(ctx context.Context, chave string, numero int, raw string, reconciliado bool) error
+	// TicketsPendentes devolve os tickets com status `pendente`, do mais
+	// antigo ao mais novo (reconciliação por listagem, ADR 0005; E3.3).
+	TicketsPendentes(ctx context.Context) ([]Ticket, error)
+	// FalharTicket marca como `falha` um ticket que ainda está `pendente`
+	// (prazo de TICKET_PENDENTE_TTL esgotado); false se já não estava pendente.
+	FalharTicket(ctx context.Context, chave string) (bool, error)
 	// AtualizarStatusTicket aplica um evento ticket.* ao ticket local de
 	// `numero`; false se o número não é nosso.
 	AtualizarStatusTicket(ctx context.Context, numero int, statusInfodesk string, encerrado bool, quando time.Time) (bool, error)
