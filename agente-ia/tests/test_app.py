@@ -425,3 +425,14 @@ def test_taxonomia_dev_diz_no_topo_que_nao_e_o_mapeamento_real():
     assert "SÓ PARA DEV" in primeira
     assert "P1" in primeira
     assert carregar_taxonomia(TAXONOMIA_DEV).placeholder is True
+
+
+def test_painel_nao_quebra_a_tabela_com_quebra_de_linha_no_valor():
+    painel = formatar_classificacao({"categoria": "a\nb | c"})
+    assert "| categoria | a b \| c |" in painel
+
+
+def test_saudacao_dev_mostra_o_nome_abreviado():
+    out = saudacao_dev("Maria Souza")
+    assert "**Maria S.**" in out
+    assert "Souza" not in out

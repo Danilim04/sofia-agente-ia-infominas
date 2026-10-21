@@ -70,13 +70,21 @@ Simula o gateway falando com o cérebro, no mesmo processo
 3. Cada mensagem vai ao cérebro com `conversation_id` novo por sessão e
    `estado_conversa = "bot"`; a resposta chega em uma mensagem por bolha (`---`).
 4. Um passo "Contrato A" mostra `classificacao`, `acoes`, `fontes` e `erro` do
-   turno. O telefone aparece mascarado (`****0100`).
+   turno. O painel mascara o telefone (`****0100`).
 5. Uma ação `transferir` silencia a Sofia (como o gateway); `/encerrar` simula
    `conversation.finished` e `/trocar-telefone` simula outro cliente.
 
-As tools do Infodesk (identificar, abrir chamado, transferir) falam com o
-gateway; por isso suba a stack antes (ou use `--chainlit`, que já passa
-`INFODESK_TOOLS_*`).
+As tools do Infodesk falam com o gateway; por isso suba a stack antes (ou use
+`--chainlit`, que já passa `INFODESK_TOOLS_*`).
+
+**Limite:** o `conversation_id` do Chainlit não existe no store do gateway, e
+`consultar_chamado`/`listar_chamados` exigem a conversa lá. O Chainlit serve
+para classificação, conversa, `acoes` e preparar/abrir chamado; o fluxo
+completo de tools (posse de ticket) só vale pela UI do mock em `:9000`. O
+`erro` aparece no painel, mas o gateway repetiria a falha transitória e
+transferiria na definitiva — isso o Chainlit não simula. Requer `chainlit` 2.x
+(`cl.Action(payload=…)`); o `agente-ia/requirements.txt` ainda aceita 1.x —
+ajuste fora desta etapa.
 
 ## Windows
 

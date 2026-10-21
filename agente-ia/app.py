@@ -25,7 +25,8 @@ Simula o gateway Go falando com o cérebro pelo **Contrato A** completo
    chega como o WhatsApp a mostraria: uma mensagem por bolha (`---`).
 3. Depois de cada turno um **passo** do Chainlit mostra o que o gateway
    receberia além do texto: `classificacao`, `acoes`, `fontes` e `erro`. O
-   telefone só aparece mascarado (`****0001`).
+   painel mascara o telefone (`****0001`); o que o operador digita nas
+   perguntas iniciais continua visível para ele, como em qualquer chat.
 4. Uma ação `transferir` encerra a vez da Sofia (o gateway "cala" o bot): as
    mensagens seguintes não vão ao cérebro até `/encerrar` ou `/trocar-telefone`.
 
@@ -34,6 +35,13 @@ Comandos: `/trocar-telefone [<numero>]` (outro cliente na mesma sessão) e
 
 Sem streaming de tokens: o Contrato A devolve a resposta inteira, e o harness
 mostra o mesmo que o gateway veria.
+
+Limites (o gateway real faz mais): o `conversation_id` do harness não existe no
+store do gateway, então `consultar_chamado`/`listar_chamados` (que exigem a
+conversa lá) não funcionam por aqui — use a UI do mock em `:9000` para o fluxo
+completo de tools; e `erro` só aparece no painel (o gateway repetiria falha
+transitória e transferiria na definitiva). TODO(E4.1): o E2E cobre o fluxo
+completo pelo gateway.
 """
 
 from __future__ import annotations
@@ -96,7 +104,7 @@ def telefone_e164(telefone: Any) -> str:
 
 def mascarar_telefone(telefone: Any) -> str:
     """`****0001`: o mesmo formato do gateway (`mascararTelefone`). Tudo que o
-    harness mostra na tela passa por aqui — o telefone completo nunca aparece."""
+    harness mostra nos painéis passa por aqui (o que o operador digita é dele)."""
     digitos = normalizar_telefone(telefone)
     if len(digitos) <= 4:
         return "****"
@@ -185,7 +193,7 @@ def dividir_bolhas(reply: Any) -> list[str]:
 def saudacao_dev(nome_contato: Any, identificado: bool = False) -> str:
     """Mensagem de abertura do harness (NÃO é a saudação da Sofia — essa vem do
     grafo). Só confirma quem está simulado na sessão."""
-    nome = str(nome_contato or "").strip() or "cliente"
+    nome = abreviar_nome(nome_contato) or "cliente"
     if identificado:
         ident = (
             "Contato **identificado** pelo telefone (`contato.forma = telefone`): "
@@ -242,7 +250,11 @@ def formatar_fontes(fontes: Any) -> str | None:
 
 
 def _celula(valor: Any) -> str:
-    return "—" if valor in (None, "") else str(valor).replace("|", "\\|")
+    if valor in (None, ""):
+        return "—"
+    return " ".join(str(valor).split()).replace(
+        "|", "\\|"
+    )  # sem quebra de linha: não racha a tabela
 
 
 def formatar_classificacao(classificacao: Any) -> str:
@@ -340,7 +352,7 @@ async def _pedir_telefone() -> str:
     return await _perguntar(
         "Informe o **telefone** do cliente (simula o `data.contact.phone` do "
         "webhook do Infodesk). Ex.: `5531990000100` (Maria Souza no mock-infodesk) "
-        "ou `(31) 99000-0100` — com DDI `55`, como o Infodesk entrega."
+        "ou `+55 (31) 99000-0100` — com DDI `55`, como o Infodesk entrega."
     )
 
 

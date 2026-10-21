@@ -73,7 +73,7 @@ err()   { printf '%s\n' "${C_RED}✗${C_RST} $*" >&2; }
 
 # --------------------------------------------------------------------------
 # Configuração de dev: carrega CHAVE=valor sem `source` (não executa nada do
-# arquivo; tolera CRLF). Só exporta o que NÃO está no ambiente e não é vazio:
+# arquivo; tolera CRLF; sem comentário na mesma linha do valor). Só exporta o que NÃO está no ambiente e não é vazio:
 # o shell vence o arquivo, e um valor vazio nunca sobrescreve o agente-ia/.env.
 # --------------------------------------------------------------------------
 carregar_env() {
@@ -81,7 +81,10 @@ carregar_env() {
   while IFS= read -r linha || [[ -n "$linha" ]]; do
     linha="${linha%$'\r'}"
     [[ "$linha" =~ ^[[:space:]]*(#|$) ]] && continue
-    [[ "$linha" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    if ! [[ "$linha" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      warn "$(basename "$arquivo"): linha ignorada (use CHAVE=valor, sem export nem espaços): $linha"
+      continue
+    fi
     chave="${BASH_REMATCH[1]}"; valor="${BASH_REMATCH[2]}"
     valor="${valor#"${valor%%[![:space:]]*}"}"; valor="${valor%"${valor##*[![:space:]]}"}"
     if [[ "$valor" =~ ^\"(.*)\"$ || "$valor" =~ ^\'(.*)\'$ ]]; then valor="${BASH_REMATCH[1]}"; fi
@@ -178,6 +181,7 @@ command -v setsid >/dev/null 2>&1 && HAVE_SETSID=1
 
 cleanup() {
   trap '' INT TERM
+  trap - EXIT   # sem isto o EXIT roda o cleanup uma segunda vez
   echo
   info "Parando serviços..."
   for pid in "${PIDS[@]}"; do
@@ -269,7 +273,7 @@ start_service "cerebro" "
   cd '$ROOT_DIR/agente-ia'
   export INFODESK_TOOLS_BASE_URL='http://localhost:$BACKEND_PORT'
   export INFODESK_TOOLS_TOKEN='$TOOLS_API_TOKEN'
-  exec '$PY' -m uvicorn server:app --host 0.0.0.0 --port $BRAIN_PORT
+  exec '$PY' -m uvicorn server:app --host 127.0.0.1 --port $BRAIN_PORT
 "
 wait_ready "cerebro" "${PIDS[-1]}" 90 curl -fsS "http://localhost:${BRAIN_PORT}/health" \
   || { err "cérebro não respondeu em /health — abortando."; exit 1; }
@@ -285,6 +289,15 @@ info "compilando o gateway..."
 start_service "gateway" "
   cd '$ROOT_DIR/backend'
   export PORT='$BACKEND_PORT'
+  # Vazio conta como definido: o backend/.env não sobrescreve, então o gateway
+  # de dev nunca herda o Postgres, o webhook de alertas nem o token de um
+  # ambiente real. Estado de dev em SQLite próprio (o mock reinicia os números
+  # de ticket em 1001; apague scripts/.bin/gateway-dev.db para zerar).
+  export PG_URL=''
+  export ALERTA_WEBHOOK_URL=''
+  export WEBHOOK_TOKEN=''
+  export PUBLIC_BASE_URL=''
+  export DB_PATH='$(nativo "$BIN_DIR")/gateway-dev.db'
   export BRAIN_BASE_URL='http://localhost:$BRAIN_PORT'
   export TOOLS_API_TOKEN='$TOOLS_API_TOKEN'
   export INFODESK_BASE_URL='http://localhost:$MOCK_PORT/api'
