@@ -22,6 +22,7 @@ import (
 	"bot-infominas/internal/engine"
 	"bot-infominas/internal/infodesk"
 	"bot-infominas/internal/store"
+	"bot-infominas/internal/taxonomia"
 	"bot-infominas/internal/toolsapi"
 	"bot-infominas/internal/webhook"
 )
@@ -117,7 +118,15 @@ func run() int {
 	if cfg.ToolsAPIToken == "" {
 		log.Warn("TOOLS_API_TOKEN vazio: API de tools (/tools/infodesk/*) NÃO exposta")
 	} else {
-		toolsapi.New(cfg.ToolsAPIToken, log).Register(mux)
+		tx, err := carregarTaxonomia(ctx, idk, eng, log)
+		if err != nil {
+			log.Error("taxonomia inválida", "err", err)
+			return 1
+		}
+		toolsapi.New(toolsapi.Deps{
+			Token: cfg.ToolsAPIToken, Log: log, Store: st, Infodesk: idk, Taxonomia: tx,
+			Transferidor: eng, Alertas: eng.Vigia(), Opcoes: toolsapi.OpcoesDoAmbiente(cfg),
+		}).Register(mux)
 		log.Info("API de tools habilitada", "rota", "/tools/infodesk/*")
 	}
 
@@ -194,4 +203,32 @@ func parseLogLevel(s string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+// carregarTaxonomia lê config/taxonomia.yaml e resolve mesa/departamento/
+// prioridade/catálogo contra o Infodesk (E3.1). Com STRICT_TAXONOMIA=true uma
+// divergência derruba o boot; sem ele vira alerta `taxonomia_invalida` e só as
+// categorias afetadas ficam sem mapa. Infodesk fora do ar no boot não derruba o
+// gateway: a taxonomia tenta carregar de novo sob demanda.
+func carregarTaxonomia(ctx context.Context, idk *infodesk.Client, eng *engine.Engine, log *slog.Logger) (*taxonomia.Taxonomia, error) {
+	caminho := taxonomia.CaminhoDoAmbiente()
+	def, err := taxonomia.Ler(caminho)
+	if err != nil {
+		return nil, err
+	}
+	tx := taxonomia.Nova(def, idk, taxonomia.Opcoes{Strict: taxonomia.StrictDoAmbiente(), Log: log})
+	rel, err := tx.Carregar(ctx)
+	switch {
+	case errors.Is(err, taxonomia.ErrReferenciaIndisponivel):
+		log.Warn("taxonomia: referência do Infodesk indisponível no boot; tentarei de novo sob demanda", "err", err)
+		eng.Vigia().Aviso(toolsapi.AlertaTaxonomia, "Taxonomia não carregada no boot",
+			"Não consegui ler mesas/departamentos do Infodesk; os chamados ficam em 'referencia_indisponivel' até a próxima tentativa.", "")
+	case err != nil:
+		return nil, err
+	case len(rel.Problemas) > 0:
+		eng.Vigia().Aviso(toolsapi.AlertaTaxonomia, "Taxonomia diverge do Infodesk",
+			strings.Join(rel.Problemas, "; "), "")
+	}
+	log.Info("taxonomia pronta", "arquivo", caminho, "placeholder", def.Placeholder)
+	return tx, nil
 }
