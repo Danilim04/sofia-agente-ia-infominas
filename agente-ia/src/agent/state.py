@@ -15,8 +15,12 @@ Campos que PERSISTEM entre turnos (checkpointer por `conversation_id`):
   Injetado nas chamadas às tools (`/tools/infodesk/*`) para correlação no
   gateway — nunca é argumento do modelo.
 - `classificacao`: resultado do JEV (ou do fallback LLM) fixado para a
-  conversa — `{intencao, categoria, prioridade, confianca, origem}`.
-  Pegajosa: uma vez decidida, vale até o fim do episódio (E2.2 a preenche).
+  conversa — EXATAMENTE `{intencao, categoria, prioridade, confianca, origem}`
+  (as 5 chaves do Contrato A; `origem` ∈ jev|llm|esclarecimento|indefinida).
+  Pegajosa: uma vez decidida, só muda com correção explícita do cliente ou
+  confiança ≥ `JEV_LIMIAR_CATEGORIA_TROCA` (preenchida pelo nó `classificar`).
+- `esclarecimentos`: nº de perguntas de esclarecimento de categoria já feitas
+  no episódio (teto `JEV_MAX_ESCLARECIMENTOS`); zerado no fim do episódio.
 - `identificacao`: registro de que o cliente se identificou NESTA conversa
   pela tool de identificação (E2.3) — SÓ `{forma, valor_mascarado, hash?}`.
   O CPF/contrato em claro vai ao gateway dentro da tool e morre ali: este
@@ -37,9 +41,10 @@ zera `proposta_chamado`, `classificacao` e `identificacao`; o histórico de
 mensagens fica.
 
 Campos *reiniciados por turno* no `entry_node`: `seguranca`, `tentou_rag`,
-`fontes_usadas`, `rag_contexto` e `iteracoes_agente` — citações, contexto
-recuperado, veredito de segurança e contagem de iterações valem só para a
-resposta atual. `rag_contexto` é o bloco `<documento_externo>` montado pelo
+`fontes_usadas`, `rag_contexto`, `iteracoes_agente`, `acoes` e
+`sinais_classificacao` — citações, contexto recuperado, veredito de segurança,
+contagem de iterações, ações pedidas ao gateway (`transferir`) e os sinais do
+turno (intenção, esclarecer?, tom, avisos) valem só para a resposta atual. `rag_contexto` é o bloco `<documento_externo>` montado pelo
 nó `retrieve`: vive APENAS no system prompt do turno atual — nunca entra em
 `messages`, então não incha o histórico persistido.
 """
@@ -62,6 +67,9 @@ class AgentState(TypedDict):
     nome_contato: NotRequired[str | None]
     contato: NotRequired[dict[str, Any] | None]
     classificacao: NotRequired[dict[str, Any] | None]
+    esclarecimentos: NotRequired[int | None]
+    acoes: NotRequired[list[dict[str, Any]]]
+    sinais_classificacao: NotRequired[dict[str, Any] | None]
     identificacao: NotRequired[dict[str, Any] | None]
     proposta_chamado: NotRequired[dict[str, Any] | None]
     seguranca: NotRequired[dict[str, Any] | None]
