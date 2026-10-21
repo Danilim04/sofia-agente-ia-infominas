@@ -152,6 +152,8 @@ type fakeEngine struct {
 	transfer   []string
 	pedidos    []engine.Transferencia
 	transferID string
+	errReenvio error    // erro de ReenviarHandoff (nil = confirma)
+	reenvios   []string // conversas cujo handoff foi repetido
 }
 
 func (e *fakeEngine) HandleMensagem(_ context.Context, m engine.Inbound) {
@@ -312,4 +314,23 @@ func conversaDoBot(t *testing.T, st store.Store, id string, msgEm, respEm time.T
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// ReenviarHandoff imita a engine: registra a chamada e, se confirmou, apaga a marca.
+func (e *fakeEngine) ReenviarHandoff(ctx context.Context, h store.HandoffPendente) error {
+	e.mu.Lock()
+	e.reenvios = append(e.reenvios, h.ConversationID)
+	err := e.errReenvio
+	e.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	_, _ = e.st.LimparHandoffPendente(ctx, h.ConversationID)
+	return nil
+}
+
+func (e *fakeEngine) reenviadas() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string{}, e.reenvios...)
 }

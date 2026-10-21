@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -87,6 +88,45 @@ type Config struct {
 	// ToolsAPIToken: segredo compartilhado cérebro↔gateway (X-Tools-Token).
 	// Vazio = a API /tools/infodesk/* não é exposta.
 	ToolsAPIToken string
+
+	// Reconciliador (E3.3). Todos os defaults são hipóteses de trabalho
+	// configuráveis (docs/infodesk/05, 5.5; 07 itens A4, N1, W9) e nenhum é
+	// segredo.
+	ReconciliaAtivo      bool          // RECONCILIA_ATIVO (true): liga o loop
+	ReconciliaIntervalo  time.Duration // RECONCILIA_INTERVALO (60s): entre ciclos
+	ReconciliaRetroativo time.Duration // RECONCILIA_RETROATIVO (1h): janela da 1ª execução sem cursor
+	ReconciliaAtraso     time.Duration // RECONCILIA_ATRASO (2m): o cursor persistido anda este tempo atrás
+	ReconciliaBackoffMax time.Duration // RECONCILIA_BACKOFF_MAX (5m): teto da espera após RATE_LIMITED e entre repetições de handoff
+	ReconciliaSkew       time.Duration // RECONCILIA_SKEW (60s): tolerância entre o relógio do Infodesk e o nosso
+	BotTimeoutHandoff    time.Duration // BOT_TIMEOUT_HANDOFF (5m): conversa sem resposta há mais que isto vai a um humano
+	TicketPendenteTTL    time.Duration // TICKET_PENDENTE_TTL (10m): prazo para o ticket pendente aparecer na listagem
+
+	// Tools de ticket (E3.1; docs/infodesk/07).
+	TicketFinishConversa  bool          // TICKET_FINISH_CONVERSA (false): `finish` do POST /conversations/:id/ticket (07 C6)
+	TicketRodape          bool          // TICKET_RODAPE (true): rodapé "[Aberto pela Sofia · …]" na descrição (07 T8)
+	TransferirAposTicket  bool          // TRANSFERIR_APOS_TICKET (true): handoff depois do ticket aberto
+	TicketDedupJanela     time.Duration // TICKET_DEDUP_JANELA (24h): mesma categoria + telefone nesta janela = chamado já aberto
+	DedupConsultaInfodesk bool          // DEDUP_CONSULTA_INFODESK (true): consulta tickets abertos do telefone no Infodesk (07 T5)
+	IdentContratoRE       string        // IDENT_CONTRATO_RE (^\d{4,12}$): formato aceito de número de contrato
+	// IdentHashSal: sal do hash do CPF/contrato (IDENT_HASH_SAL). Vazio = usa o
+	// TOOLS_API_TOKEN, e rotacionar o token invalida os hashes já gravados.
+	IdentHashSal string
+	// StrictTaxonomia (STRICT_TAXONOMIA, false): divergência da taxonomia com o
+	// Infodesk derruba o boot. TaxonomiaPath (TAXONOMIA_PATH): arquivo da
+	// taxonomia; vazio = procura nos caminhos padrão (taxonomia.CaminhoDoAmbiente).
+	StrictTaxonomia bool
+	TaxonomiaPath   string
+}
+
+// Avisos lista o que, na configuração carregada, funciona mas merece atenção
+// no boot (o chamador loga cada um em WARN).
+func (c *Config) Avisos() []string {
+	var out []string
+	if c.ToolsAPIToken != "" && c.IdentHashSal == "" {
+		out = append(out, "IDENT_HASH_SAL vazio: o sal dos hashes de CPF/contrato cai no TOOLS_API_TOKEN; "+
+			"rotacionar o TOOLS_API_TOKEN invalida os hashes já gravados (defina um IDENT_HASH_SAL próprio em produção)")
+	}
+	return out
 }
 
 // Load lê o .env (se existir) e em seguida o ambiente, validando os obrigatórios.
@@ -112,6 +152,60 @@ func Load() (*Config, error) {
 		InfodeskNomeChave:        strings.TrimSpace(getenv("INFODESK_NOME_CHAVE", "")),
 		IdentExigirCPF:           getenvBool("IDENT_EXIGIR_CPF", false),
 		IdentLookupAmbiguo:       strings.ToLower(strings.TrimSpace(getenv("IDENT_LOOKUP_AMBIGUO", IdentAmbiguoPedirCPF))),
+		IdentContratoRE:          getenv("IDENT_CONTRATO_RE", `^\d{4,12}$`),
+		IdentHashSal:             os.Getenv("IDENT_HASH_SAL"),
+		TaxonomiaPath:            strings.TrimSpace(getenv("TAXONOMIA_PATH", "")),
+	}
+
+	// Chaves liga/desliga novas: valor que não é booleano derruba o boot (um
+	// STRICT_TAXONOMIA=ture silenciosamente desligado esconderia a divergência).
+	booleanos := []struct {
+		dst *bool
+		env string
+		def bool
+	}{
+		{&cfg.ReconciliaAtivo, "RECONCILIA_ATIVO", true},
+		{&cfg.TicketFinishConversa, "TICKET_FINISH_CONVERSA", false},
+		{&cfg.TicketRodape, "TICKET_RODAPE", true},
+		{&cfg.TransferirAposTicket, "TRANSFERIR_APOS_TICKET", true},
+		{&cfg.DedupConsultaInfodesk, "DEDUP_CONSULTA_INFODESK", true},
+		{&cfg.StrictTaxonomia, "STRICT_TAXONOMIA", false},
+	}
+	for _, b := range booleanos {
+		v, err := lerBool(b.env, b.def)
+		if err != nil {
+			return nil, err
+		}
+		*b.dst = v
+	}
+
+	// Durações estritamente positivas (0 ou negativo não tem sentido aqui).
+	positivas := []struct {
+		dst *time.Duration
+		env string
+		def string
+	}{
+		{&cfg.ReconciliaIntervalo, "RECONCILIA_INTERVALO", "60s"},
+		{&cfg.ReconciliaRetroativo, "RECONCILIA_RETROATIVO", "1h"},
+		{&cfg.ReconciliaAtraso, "RECONCILIA_ATRASO", "2m"},
+		{&cfg.ReconciliaBackoffMax, "RECONCILIA_BACKOFF_MAX", "5m"},
+		{&cfg.ReconciliaSkew, "RECONCILIA_SKEW", "60s"},
+		{&cfg.BotTimeoutHandoff, "BOT_TIMEOUT_HANDOFF", "5m"},
+		{&cfg.TicketPendenteTTL, "TICKET_PENDENTE_TTL", "10m"},
+		{&cfg.TicketDedupJanela, "TICKET_DEDUP_JANELA", "24h"},
+	}
+	for _, d := range positivas {
+		v, err := parseDuration(strings.TrimSpace(getenv(d.env, d.def)))
+		if err != nil {
+			return nil, fmt.Errorf("%s inválido: %w", d.env, err)
+		}
+		if v <= 0 {
+			return nil, fmt.Errorf("%s inválido (%s): precisa ser maior que zero", d.env, strings.TrimSpace(getenv(d.env, d.def)))
+		}
+		*d.dst = v
+	}
+	if _, err := regexp.Compile(cfg.IdentContratoRE); err != nil {
+		return nil, fmt.Errorf("IDENT_CONTRATO_RE inválido: %w", err)
 	}
 
 	duracoes := []struct {
@@ -131,7 +225,7 @@ func Load() (*Config, error) {
 		{&cfg.IdentTTL, "IDENT_TTL", "24h"},
 	}
 	for _, d := range duracoes {
-		v, err := parseDuration(getenv(d.env, d.def))
+		v, err := parseDuration(strings.TrimSpace(getenv(d.env, d.def)))
 		if err != nil {
 			return nil, fmt.Errorf("%s inválido: %w", d.env, err)
 		}
@@ -218,4 +312,20 @@ func loadDotEnv(path string) error {
 		}
 	}
 	return sc.Err()
+}
+
+// lerBool lê uma variável booleana; ausente ou vazia = def, texto que não é
+// booleano = erro citando a variável.
+func lerBool(key string, def bool) (bool, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return def, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "t", "sim", "yes", "on":
+		return true, nil
+	case "0", "false", "f", "nao", "não", "no", "off":
+		return false, nil
+	}
+	return def, fmt.Errorf("%s inválido (%q): use true ou false", key, v)
 }

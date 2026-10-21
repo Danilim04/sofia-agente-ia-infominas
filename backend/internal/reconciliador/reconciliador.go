@@ -9,9 +9,11 @@
 //     TICKET_PENDENTE_TTL (ADR 0005);
 //   - (b) o vigia BOT_TIMEOUT_HANDOFF transfere a conversa que o cliente
 //     escreveu e a Sofia não respondeu (docs/infodesk/07, N1).
+//   - (c) o handoff que a engine não conseguiu confirmar (marca no store) é
+//     repetido com backoff e alerta até o Infodesk aceitar (docs/plano/01, B).
 //
 // Nasce ligado (RECONCILIA_ATIVO=true). Chave sem `events:read` (403) não
-// derruba nada: alerta de configuração e o loop segue só com (a) e (b).
+// derruba nada: alerta de configuração e o loop segue só com (a), (b) e (c).
 package reconciliador
 
 import (
@@ -30,16 +32,17 @@ import (
 
 // Tipos de alerta do reconciliador (strings livres para alerta.Vigia.Aviso).
 const (
-	TipoFeedSemEscopo      = "reconciliador_sem_escopo"    // 403 no GET /events: chave sem events:read
-	TipoFeedFalhando       = "reconciliador_feed_falhando" // o feed falha há várias execuções seguidas
-	TipoTicketPendenteFalh = "ticket_pendente_falhou"      // pendente passou do TTL sem aparecer no Infodesk
-	TipoTicketNaoChecado   = "ticket_pendente_nao_checado" // TTL vencido e a listagem não respondeu
-	TipoBotSemResposta     = "bot_sem_resposta_handoff"    // vigia N1 transferiu uma conversa sem resposta
-	OrigemVigia            = "vigia"                       // Transferencia.Origem do vigia N1
-	entregaReconciliador   = "reconciliador"               // "delivery" informativo dos eventos do feed
-	falhasParaAlertarFeed  = 5                             // execuções seguidas com erro no feed antes do alerta
-	maxPaginasListaTickets = 5                             // páginas de GET /tickets por ticket pendente
-	limiteListaTickets     = 100                           // tamanho da página de GET /tickets (máx. da API)
+	TipoFeedSemEscopo        = "reconciliador_sem_escopo"    // 403 no GET /events: chave sem events:read
+	TipoFeedFalhando         = "reconciliador_feed_falhando" // o feed falha há várias execuções seguidas
+	TipoTicketPendenteFalh   = "ticket_pendente_falhou"      // pendente passou do TTL sem aparecer no Infodesk
+	TipoTicketNaoChecado     = "ticket_pendente_nao_checado" // TTL vencido e a listagem não respondeu
+	TipoBotSemResposta       = "bot_sem_resposta_handoff"    // vigia N1 transferiu uma conversa sem resposta
+	TipoHandoffNaoConfirmado = "handoff_nao_confirmado"      // o handoff repetido pelo vigia continua falhando
+	OrigemVigia              = engine.OrigemVigia            // Transferencia.Origem do vigia N1
+	entregaReconciliador     = "reconciliador"               // "delivery" informativo dos eventos do feed
+	falhasParaAlertarFeed    = 5                             // execuções seguidas com erro no feed antes do alerta
+	maxPaginasListaTickets   = 5                             // páginas de GET /tickets por ticket pendente
+	limiteListaTickets       = 100                           // tamanho da página de GET /tickets (máx. da API)
 )
 
 // Infodesk é o que o reconciliador usa do cliente da API (*infodesk.Client).
@@ -58,6 +61,9 @@ type Receptor interface {
 // *engine.Engine).
 type Transferidor interface {
 	TransferirParaHumano(ctx context.Context, convID string, t engine.Transferencia) string
+	// ReenviarHandoff repete UMA vez o handoff de uma marca de "handoff não
+	// confirmado" e a apaga se der certo.
+	ReenviarHandoff(ctx context.Context, h store.HandoffPendente) error
 }
 
 // Reconciliador roda o feed, a reconciliação de tickets e o vigia.
@@ -164,6 +170,7 @@ func (r *Reconciliador) Executar(ctx context.Context) time.Duration {
 	}{
 		{"feed", r.feed},
 		{"tickets_pendentes", r.ticketsPendentes},
+		{"handoffs_pendentes", r.handoffsPendentes},
 		{"vigia", r.vigiaSemResposta},
 	}
 	for _, p := range passos {
