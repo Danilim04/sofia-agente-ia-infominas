@@ -166,3 +166,89 @@ func TestTransitorio_Helpers(t *testing.T) {
 		t.Error("a sentinela é transitória")
 	}
 }
+
+func TestHTTPError_CodeDecideTransitorio(t *testing.T) {
+	casos := []struct {
+		nome   string
+		status int
+		code   string
+		quer   bool
+	}{
+		// Transitórios pelo code.
+		{"rateLimited", 429, CodeRateLimited, true},
+		{"internalError", 500, CodeInternalError, true},
+		// Definitivos / configuração pelo code (06-erros.md).
+		{"unauthorized", 401, CodeUnauthorized, false},
+		{"forbidden", 403, CodeForbidden, false},
+		{"notFound", 404, CodeNotFound, false},
+		{"validation", 400, CodeValidationError, false},
+		{"invalidReference", 400, CodeInvalidReference, false},
+		{"conflict", 409, CodeConflict, false},
+		{"janelaWhatsAppFechada", 409, CodeWhatsAppWindowClosed, false},
+		{"whatsappNaoConfigurado", 409, CodeWhatsAppNotConfigured, false},
+		{"templateNaoEncontrado", 404, CodeTemplateNotFound, false},
+		{"templateNaoAprovado", 422, CodeTemplateNotApproved, false},
+		{"templateParams", 422, CodeTemplateParamsMismatch, false},
+		{"midiaUrl", 400, CodeMediaURLRequired, false},
+		{"midiaDownload", 422, CodeMediaDownloadFailed, false},
+		// O code vence o status quando o conhecemos.
+		{"codeDefinitivoEm5xx", 503, CodeNotFound, false},
+		{"codeTransitorioEm4xx", 400, CodeRateLimited, true},
+		// Fallback por status HTTP quando o code vem vazio.
+		{"semCode429", 429, "", true},
+		{"semCode500", 500, "", true},
+		{"semCode502", 502, "", true},
+		{"semCode503", 503, "", true},
+		{"semCode504", 504, "", true},
+		{"semCode400", 400, "", false},
+		{"semCode401", 401, "", false},
+		{"semCode404", 404, "", false},
+		{"semCode409", 409, "", false},
+		// Code desconhecido também cai no status.
+		{"desconhecido503", 503, "NOVO_CODIGO_DA_API", true},
+		{"desconhecido429", 429, "NOVO_CODIGO_DA_API", true},
+		{"desconhecido400", 400, "NOVO_CODIGO_DA_API", false},
+		{"desconhecido422", 422, "NOVO_CODIGO_DA_API", false},
+	}
+	for _, cs := range casos {
+		t.Run(cs.nome, func(t *testing.T) {
+			e := &HTTPError{Status: cs.status, Code: cs.code}
+			if e.Transitorio() != cs.quer || errors.Is(e, ErrTransitorio) != cs.quer || Transitorio(e) != cs.quer {
+				t.Errorf("Transitorio = %v, quer %v", e.Transitorio(), cs.quer)
+			}
+		})
+	}
+}
+
+func TestHTTPError_ErrorIncluiCode(t *testing.T) {
+	e := &HTTPError{Status: 409, Code: CodeWhatsAppWindowClosed, Rota: "/conversations/c1/messages", Mensagem: "janela fechada"}
+	if quer := "infodesk /conversations/c1/messages: status http 409 [WHATSAPP_WINDOW_CLOSED]: janela fechada"; e.Error() != quer {
+		t.Errorf("Error() = %q, quer %q", e.Error(), quer)
+	}
+	if quer := "infodesk /desks: status http 429 [RATE_LIMITED]"; (&HTTPError{Status: 429, Code: CodeRateLimited, Rota: "/desks"}).Error() != quer {
+		t.Errorf("sem mensagem: %q", (&HTTPError{Status: 429, Code: CodeRateLimited, Rota: "/desks"}).Error())
+	}
+}
+
+func TestExtrairCode(t *testing.T) {
+	casos := map[string]string{
+		`{"statusCode":409,"code":"WHATSAPP_WINDOW_CLOSED","message":"x","lastInboundAt":"2026-10-18T09:12:00.000Z"}`: "WHATSAPP_WINDOW_CLOSED",
+		`{"statusCode":429,"code":"RATE_LIMITED","message":"x"}`:                                                      "RATE_LIMITED",
+		`{"statusCode":401,"message":"Chave inválida"}`:                                                               "", // formato antigo, sem code
+		`{"code":null}`:                              "",
+		`{"code":42}`:                                "",
+		`{"code":""}`:                                "",
+		`{"code":"minusculo"}`:                       "",
+		`{"code":"COM ESPACO"}`:                      "",
+		`{"code":"SQL'; DROP TABLE"}`:                "",
+		`{"code":"` + strings.Repeat("A", 80) + `"}`: "", // longo demais
+		`<html>erro</html>`:                          "",
+		``:                                           "",
+		`[1,2]`:                                      "",
+	}
+	for corpo, quer := range casos {
+		if got := extrairCode([]byte(corpo)); got != quer {
+			t.Errorf("%.60q: code = %q, quer %q", corpo, got, quer)
+		}
+	}
+}

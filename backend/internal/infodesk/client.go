@@ -1,31 +1,28 @@
 // Package infodesk é o cliente Go da API de integração do Infodesk (Infominas
 // Desk) e o ÚNICO pacote do gateway que fala HTTP com ela. Também traz os
-// tipos do webhook e a verificação da assinatura HMAC. Fonte: docs/infodesk/
-// (convertido do PDF oficial de 5 páginas); o que o PDF não responde está em
-// docs/infodesk/07-pontos-ambiguos.md e aparece aqui como hipótese de
-// trabalho marcada com o item (T1, C1, W3…) e `TODO(P3)`.
+// tipos do webhook/feed de eventos e a verificação da assinatura HMAC. Fonte:
+// docs/infodesk/ (convertido do PDF oficial v1 de 2026-10-19); o que o PDF
+// não responde está em docs/infodesk/07-pontos-ambiguos.md e aparece aqui
+// como hipótese de trabalho marcada com o item (T10, C6, D3…).
 //
 // O que a Infominas NÃO documenta e como este pacote lida com isso:
 //
-//   - Resposta de POST /tickets e GET /tickets/:number (T1): só `number` é
-//     garantido e o tipo dele é desconhecido. Ticket guarda Number como string
-//     (decodifica número ou string) e o resto em Bruto (map).
-//   - Schema de GET /conversations e GET /conversations/:id (C1, C2):
-//     devolvidos como map/[]map sem tipar; a listagem aceita array puro ou
-//     envelope {data|items|conversations|results: [...]}.
+//   - Base URL (A6): configurável, sem default; GET /me no boot valida.
+//   - Listas de referência (D3, D5): aceitam array puro ou `{data,
+//     nextCursor}`; Mesa traz as listas com tolerância e o objeto em Bruto.
+//   - Resposta de POST /conversations/:id/ticket (T11): assume-se o objeto
+//     `ticket`; um envelope `{ticket: {...}}` também é aceito.
 //   - Corpo de POST /conversations/:id/finish (C5): nenhum documentado; envia
 //     `{}`.
-//   - 5xx e Retry-After (A4): tratados como transitórios; Retry-After é
-//     exposto em HTTPError.RetryAfter — o cliente nunca dorme nem repete.
-//   - Payload de conversation.started/finished (W1): só `conversationId` é
-//     assumido (DecodificarIDConversa). Mídia (W3): body vazio = mídia.
-//   - Escopo dos endpoints de referência (A3): 403 neles é erro de
-//     configuração, como nos demais.
+//   - `note` do handoff (08): obrigatoriedade e limite não ditos; vazio é
+//     omitido.
+//   - 5xx e Retry-After (A4): 429/5xx são transitórios; Retry-After é exposto
+//     em HTTPError.RetryAfter — o cliente nunca dorme nem repete.
 //
 // Regras herdadas do plano: nenhum retry dentro do cliente (em especial em
-// CriarTicket — ADR 0005); erro do Infodesk nunca chega cru ao cliente final
-// nem ao LLM (HTTPError.Mensagem já é higienizada); a chave de API nunca
-// aparece em erro ou log.
+// CriarTicket e CriarTicketDaConversa — ADR 0005); erro do Infodesk nunca
+// chega cru ao cliente final nem ao LLM (HTTPError.Mensagem já é higienizada);
+// a chave de API nunca aparece em erro ou log.
 package infodesk
 
 import (
@@ -37,20 +34,26 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 // PrefixoRotas é o prefixo de versão da API; Options.BaseURL é a raiz antes
-// dele (https://infodesk.infominas.net/api). Se BaseURL já vier com o prefixo
-// (como em INFODESK_BASE_URL do plano), ele não é duplicado.
+// dele. Se BaseURL já vier com o prefixo (como em INFODESK_BASE_URL do plano),
+// ele não é duplicado. A base real (a capa do PDF e o guia antigo divergem) é
+// a copiada da tela Configurações › Integrações — ver docs/infodesk/07 item A6.
 const PrefixoRotas = "/integration/v1"
 
 const (
 	timeoutPadrao  = 15 * time.Second
 	cacheTTLPadrao = 10 * time.Minute
 	respostaMax    = 8 << 20 // bytes lidos de uma resposta 2xx
+	// maxPaginasReferencia limita quantas páginas uma lista de referência
+	// percorre seguindo nextCursor (limit padrão 50 → 2500 itens): trava de
+	// segurança contra cursor que nunca acaba.
+	maxPaginasReferencia = 50
 )
 
 // Options configura o cliente. Zero values recebem defaults em New.
@@ -58,8 +61,8 @@ type Options struct {
 	BaseURL  string           // raiz da API (sem /integration/v1 ou com — ambos aceitos)
 	APIKey   string           // chave ik_live_… — vai em Authorization: Bearer
 	HTTP     *http.Client     // opcional (default: timeout 15 s)
-	Now      func() time.Time // opcional (default: time.Now); injetável para o cache
-	CacheTTL time.Duration    // validade do cache de mesas/departamentos/atendentes (default 10 min)
+	Now      func() time.Time // opcional (default: time.Now); injetável para o cache e o Retry-After
+	CacheTTL time.Duration    // validade do cache de mesas/catálogo/departamentos/atendentes (default 10 min)
 }
 
 // Client fala com o Infodesk. Seguro para uso concorrente.
@@ -106,28 +109,75 @@ func New(o Options) *Client {
 }
 
 // ---------------------------------------------------------------------------
-// Conversas (04-conversas.md)
+// Chave e contatos (01-autenticacao.md, 04-conversas.md)
 // ---------------------------------------------------------------------------
 
-// EnviarMensagem faz POST /conversations/:id/messages com `{body}`. Só texto:
-// mídia, templates e botões não são documentados. Quebra em bolhas, formato
-// WhatsApp e retry com dedup ficam no chamador (engine).
-func (c *Client) EnviarMensagem(ctx context.Context, convID, body string) error {
+// Me faz GET /me: identidade da chave. No boot, o gateway exige
+// HandlesConversations e os escopos mínimos, e guarda OrganizationID para
+// conferir os webhooks (07 W5).
+func (c *Client) Me(ctx context.Context) (Me, error) {
+	var out Me
+	if err := c.do(ctx, http.MethodGet, "/me", nil, nil, &out); err != nil {
+		return Me{}, err
+	}
+	return out, nil
+}
+
+// Lookup faz GET /contacts/lookup?phone=: identifica o telefone (solicitantes,
+// clientIds, chamados abertos, conversa ativa). Escopo contacts:read; 403 aqui
+// é configuração, mas quem chama decide degradar para o fallback de CPF. O
+// telefone é PII: vai só na query, nunca em erro ou log deste pacote.
+func (c *Client) Lookup(ctx context.Context, phone string) (Lookup, error) {
+	if strings.TrimSpace(phone) == "" {
+		return Lookup{}, ErrIDVazio
+	}
+	var out Lookup
+	if err := c.do(ctx, http.MethodGet, "/contacts/lookup", url.Values{"phone": {phone}}, nil, &out); err != nil {
+		return Lookup{}, err
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Conversas (04-conversas.md, 08-bot-externo.md)
+// ---------------------------------------------------------------------------
+
+// EnviarMensagem faz POST /conversations/:id/messages com `{"text": …}`. Com
+// interna=true acrescenta `"internal": true` e grava NOTA INTERNA (só a
+// equipe vê, nada vai ao WhatsApp do cliente). Só texto: mídia e templates
+// não são usados na v1. Quebra em bolhas, formato WhatsApp e dedup ficam no
+// chamador (engine). 409 WHATSAPP_WINDOW_CLOSED é definitivo.
+func (c *Client) EnviarMensagem(ctx context.Context, convID, texto string, interna bool) error {
 	if err := exigirID(convID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(body) == "" {
+	if strings.TrimSpace(texto) == "" {
 		return ErrCorpoVazio
 	}
-	return c.do(ctx, http.MethodPost, rotaConversa(convID, "messages"), nil, map[string]string{"body": body}, nil)
+	corpo := corpoMensagem{Text: texto, Internal: interna}
+	return c.do(ctx, http.MethodPost, rotaConversa(convID, "messages"), nil, corpo, nil)
+}
+
+type corpoMensagem struct {
+	Text     string `json:"text"`
+	Internal bool   `json:"internal,omitempty"`
+}
+
+// Handoff faz POST /conversations/:id/handoff: caminho ÚNICO de transferência
+// para humano (ADR 0007). O bot sai, a conversa volta à fila e os atendentes
+// são notificados. A resposta não é documentada e é ignorada.
+func (c *Client) Handoff(ctx context.Context, convID string, h Handoff) error {
+	if err := exigirID(convID); err != nil {
+		return err
+	}
+	return c.do(ctx, http.MethodPost, rotaConversa(convID, "handoff"), nil, h, nil)
 }
 
 // TransferirDepartamento faz POST /conversations/:id/department com
-// `{departmentId}`. É o caminho de "transferir para fila" do plano (C4).
-// deptID vazio é ErrIDVazio — nunca vira `null` por acidente, porque `null`
-// REMOVE a conversa de qualquer departamento (ver RemoverDepartamento): um
-// nome ausente na tabela de roteamento tem de falhar, não tirar o cliente da
-// fila.
+// `{departmentId}`: muda de fila SEM soltar o bot. Não é transferência para
+// humano (use Handoff). deptID vazio é ErrIDVazio — nunca vira `null` por
+// acidente, porque `null` REMOVE a conversa de qualquer departamento (ver
+// RemoverDepartamento).
 func (c *Client) TransferirDepartamento(ctx context.Context, convID, deptID string) error {
 	if err := exigirID(convID); err != nil {
 		return err
@@ -138,8 +188,8 @@ func (c *Client) TransferirDepartamento(ctx context.Context, convID, deptID stri
 	return c.do(ctx, http.MethodPost, rotaConversa(convID, "department"), nil, map[string]string{"departmentId": deptID}, nil)
 }
 
-// RemoverDepartamento envia `{"departmentId": null}` ("ou null para remover",
-// texto literal do PDF). Implementado por completude; não usado na v1.
+// RemoverDepartamento envia `{"departmentId": null}` ("null remove", 04).
+// Implementado por completude; não usado na v1.
 func (c *Client) RemoverDepartamento(ctx context.Context, convID string) error {
 	if err := exigirID(convID); err != nil {
 		return err
@@ -148,7 +198,7 @@ func (c *Client) RemoverDepartamento(ctx context.Context, convID string) error {
 }
 
 // Atribuir faz POST /conversations/:id/assign com `{userId}`. Implementado,
-// não usado na v1 (plano: roteamento é por departamento).
+// não usado na v1 (roteamento é por departamento; 07 C10).
 func (c *Client) Atribuir(ctx context.Context, convID, userID string) error {
 	if err := exigirID(convID); err != nil {
 		return err
@@ -159,8 +209,9 @@ func (c *Client) Atribuir(ctx context.Context, convID, userID string) error {
 	return c.do(ctx, http.MethodPost, rotaConversa(convID, "assign"), nil, map[string]string{"userId": userID}, nil)
 }
 
-// Encerrar faz POST /conversations/:id/finish. Corpo não documentado (C5):
-// envia `{}`. Implementado, não chamado na v1 (C6).
+// Encerrar faz POST /conversations/:id/finish ("sem mensagem ao cliente").
+// Corpo não documentado (C5): envia `{}`. Implementado, não chamado na v1
+// (decisão de negócio — ver docs/infodesk/07 item C6).
 func (c *Client) Encerrar(ctx context.Context, convID string) error {
 	if err := exigirID(convID); err != nil {
 		return err
@@ -168,71 +219,136 @@ func (c *Client) Encerrar(ctx context.Context, convID string) error {
 	return c.do(ctx, http.MethodPost, rotaConversa(convID, "finish"), nil, map[string]any{}, nil)
 }
 
-// Conversas faz GET /conversations?tab=&departmentId= (ambos opcionais). O
-// schema do item não é documentado (C1), por isso []map[string]any; aceita
-// array puro ou envelope com a lista em data/items/conversations/results.
-// TODO(P3): tipar quando a Infominas enviar o JSON real.
-func (c *Client) Conversas(ctx context.Context, tab, deptID string) ([]map[string]any, error) {
-	q := url.Values{}
-	if strings.TrimSpace(tab) != "" {
-		q.Set("tab", tab)
+// VincularSolicitante faz POST /conversations/:id/requester com `{id}`: liga o
+// solicitante à conversa (o cliente vem junto). Best-effort antes de abrir o
+// ticket quando o Lookup identificou. requesterID vazio é ErrIDVazio — `null`
+// (desvincular) não é oferecido.
+func (c *Client) VincularSolicitante(ctx context.Context, convID, requesterID string) error {
+	if err := exigirID(convID); err != nil {
+		return err
 	}
-	if strings.TrimSpace(deptID) != "" {
-		q.Set("departmentId", deptID)
+	if err := exigirID(requesterID); err != nil {
+		return err
 	}
-	var raw json.RawMessage
-	if err := c.do(ctx, http.MethodGet, "/conversations", q, nil, &raw); err != nil {
-		return nil, err
-	}
-	return listaDeConversas("/conversations", raw)
+	return c.do(ctx, http.MethodPost, rotaConversa(convID, "requester"), nil, map[string]string{"id": requesterID}, nil)
 }
 
-// Conversa faz GET /conversations/:id (conversa com mensagens). Schema não
-// documentado (C2): map cru. TODO(P3).
-func (c *Client) Conversa(ctx context.Context, id string) (map[string]any, error) {
-	if err := exigirID(id); err != nil {
-		return nil, err
+// Conversas faz GET /conversations com os filtros dados e devolve UMA página
+// (`{data, nextCursor}`). O reconciliador usa Eventos, não esta listagem; ela
+// serve ao vigia BOT_TIMEOUT_HANDOFF (07 N1) e a diagnóstico.
+func (c *Client) Conversas(ctx context.Context, f FiltroConversas) (Pagina[Conversa], error) {
+	q := url.Values{}
+	setNaoVazio(q, "tab", f.Tab)
+	setNaoVazio(q, "status", f.Status)
+	setNaoVazio(q, "channel", f.Channel)
+	setNaoVazio(q, "assignedUserId", f.AssignedUserID)
+	setNaoVazio(q, "departmentId", f.DepartmentID)
+	setNaoVazio(q, "phone", f.Phone)
+	if f.BotActive != nil {
+		q.Set("botActive", strconv.FormatBool(*f.BotActive))
 	}
-	var out map[string]any
+	if !f.UpdatedSince.IsZero() {
+		q.Set("updatedSince", f.UpdatedSince.UTC().Format(time.RFC3339))
+	}
+	setLimiteECursor(q, f.Limit, f.Cursor)
+	return paginaDe[Conversa](ctx, c, "/conversations", q)
+}
+
+// Conversa faz GET /conversations/:id. handledBy/botActive vêm tipados; o
+// resto (whatsappWindow, recentMessages…) fica em Bruto. É a checagem "o bot
+// ainda conduz?" quando um evento reentregue é mais velho que o estado local
+// (07 W9).
+func (c *Client) Conversa(ctx context.Context, id string) (Conversa, error) {
+	if err := exigirID(id); err != nil {
+		return Conversa{}, err
+	}
+	var out Conversa
 	if err := c.do(ctx, http.MethodGet, rotaConversa(id, ""), nil, nil, &out); err != nil {
-		return nil, err
+		return Conversa{}, err
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Eventos (05-webhooks.md, seção 5.5)
+// ---------------------------------------------------------------------------
+
+// Eventos faz GET /events?after=<seq>&limit=: o feed retroativo, no MESMO
+// envelope do webhook. Escopo events:read (403 = chave sem o escopo). limit <=
+// 0 usa o padrão da API. O cursor só deve avançar depois que a página foi
+// processada: guarde Data[i].Seq / NextAfter no chamador.
+func (c *Client) Eventos(ctx context.Context, after int64, limit int) (FeedEventos, error) {
+	q := url.Values{"after": {strconv.FormatInt(after, 10)}}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var raw struct {
+		Data      []Evento `json:"data"`
+		NextAfter int64    `json:"nextAfter"`
+		HasMore   bool     `json:"hasMore"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/events", q, nil, &raw); err != nil {
+		return FeedEventos{}, err
+	}
+	return FeedEventos{Data: raw.Data, NextAfter: raw.NextAfter, HasMore: raw.HasMore}, nil
 }
 
 // ---------------------------------------------------------------------------
 // Dados de referência (02-dados-referencia.md) — cache em memória com TTL
 // ---------------------------------------------------------------------------
 
-// Mesas faz GET /desks (cache TTL).
+// Mesas faz GET /desks (mesas ativas; cache TTL). Aceita array puro ou
+// `{data, nextCursor}` — ver docs/infodesk/07 item D3.
 func (c *Client) Mesas(ctx context.Context) ([]Referencia, error) {
-	return cacheado(ctx, c, "/desks", func(ctx context.Context) ([]Referencia, error) {
-		var out []Referencia
-		err := c.do(ctx, http.MethodGet, "/desks", nil, nil, &out)
+	return cacheado(ctx, c, "/desks", cloneSlice[Referencia], func(ctx context.Context) ([]Referencia, error) {
+		return listaCompleta[Referencia](ctx, c, "/desks", nil)
+	})
+}
+
+// Mesa faz GET /desks/:id (cache TTL): statuses, etapas, prioridades e itens
+// de catálogo da mesa. É de onde a taxonomia resolve `priorityId` e
+// `catalogItemId` por nome.
+func (c *Client) Mesa(ctx context.Context, id string) (Mesa, error) {
+	if err := exigirID(id); err != nil {
+		return Mesa{}, err
+	}
+	return cacheado(ctx, c, "/desks/"+id, Mesa.clonar, func(ctx context.Context) (Mesa, error) {
+		var out Mesa
+		err := c.do(ctx, http.MethodGet, "/desks/"+url.PathEscape(id), nil, nil, &out)
 		return out, err
 	})
 }
 
-// Departamentos faz GET /departments (cache TTL).
+// Catalogo faz GET /catalog?deskId= (serviços da mesa → `catalogItemId` do
+// ticket; cache TTL). Só id e name são garantidos — ver docs/infodesk/07 item
+// D5. Aceita array puro ou `{data, nextCursor}` (D3).
+func (c *Client) Catalogo(ctx context.Context, deskID string) ([]Referencia, error) {
+	if err := exigirID(deskID); err != nil {
+		return nil, err
+	}
+	return cacheado(ctx, c, "/catalog?deskId="+deskID, cloneSlice[Referencia], func(ctx context.Context) ([]Referencia, error) {
+		return listaCompleta[Referencia](ctx, c, "/catalog", url.Values{"deskId": {deskID}})
+	})
+}
+
+// Departamentos faz GET /departments (departamentos de CHAT; cache TTL).
+// Aceita array puro ou `{data, nextCursor}` — ver docs/infodesk/07 item D3.
 func (c *Client) Departamentos(ctx context.Context) ([]Referencia, error) {
-	return cacheado(ctx, c, "/departments", func(ctx context.Context) ([]Referencia, error) {
-		var out []Referencia
-		err := c.do(ctx, http.MethodGet, "/departments", nil, nil, &out)
-		return out, err
+	return cacheado(ctx, c, "/departments", cloneSlice[Referencia], func(ctx context.Context) ([]Referencia, error) {
+		return listaCompleta[Referencia](ctx, c, "/departments", nil)
 	})
 }
 
-// Atendentes faz GET /users (cache TTL). Email é PII.
+// Atendentes faz GET /users (cache TTL). Email é PII. Aceita array puro ou
+// `{data, nextCursor}` — ver docs/infodesk/07 item D3.
 func (c *Client) Atendentes(ctx context.Context) ([]Atendente, error) {
-	return cacheado(ctx, c, "/users", func(ctx context.Context) ([]Atendente, error) {
-		var out []Atendente
-		err := c.do(ctx, http.MethodGet, "/users", nil, nil, &out)
-		return out, err
+	return cacheado(ctx, c, "/users", cloneSlice[Atendente], func(ctx context.Context) ([]Atendente, error) {
+		return listaCompleta[Atendente](ctx, c, "/users", nil)
 	})
 }
 
-// InvalidarCache descarta mesas, departamentos e atendentes em cache; a
-// próxima chamada volta à API.
+// InvalidarCache descarta mesas, catálogos, departamentos e atendentes em
+// cache; a próxima chamada volta à API. Chamar ao receber INVALID_REFERENCE.
 func (c *Client) InvalidarCache() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -240,24 +356,25 @@ func (c *Client) InvalidarCache() {
 }
 
 // cacheado devolve o valor em cache se ainda válido (relógio injetado), senão
-// busca e guarda. Devolve cópias: o chamador não altera o cache. Falha não é
-// cacheada.
-func cacheado[E any](ctx context.Context, c *Client, chave string, buscar func(context.Context) ([]E, error)) ([]E, error) {
+// busca e guarda. Devolve cópias (clonar): o chamador não altera o cache.
+// Falha não é cacheada.
+func cacheado[T any](ctx context.Context, c *Client, chave string, clonar func(T) T, buscar func(context.Context) (T, error)) (T, error) {
 	c.mu.Lock()
 	if e, ok := c.cache[chave]; ok && c.now().Before(e.exp) {
-		if v, ok := e.valor.([]E); ok {
+		if v, ok := e.valor.(T); ok {
 			c.mu.Unlock()
-			return slices.Clone(v), nil
+			return clonar(v), nil
 		}
 	}
 	c.mu.Unlock()
 
 	v, err := buscar(ctx)
 	if err != nil {
-		return nil, err
+		var zero T
+		return zero, err
 	}
 	c.mu.Lock()
-	c.cache[chave] = entradaCache{valor: slices.Clone(v), exp: c.now().Add(c.cacheTTL)}
+	c.cache[chave] = entradaCache{valor: clonar(v), exp: c.now().Add(c.cacheTTL)}
 	c.mu.Unlock()
 	return v, nil
 }
@@ -268,11 +385,11 @@ func cacheado[E any](ctx context.Context, c *Client, chave string, buscar func(c
 
 // CriarTicket faz POST /tickets UMA vez: a API não tem chave de idempotência,
 // então nenhuma falha é repetida aqui. Erro de rede após o envio é ambíguo
-// (o ticket pode existir): o chamador registra "pendente" (ADR 0005) e alerta.
-// 2xx sem `number` reconhecível devolve o Ticket (Bruto preenchido) junto com
-// ErrTicketSemNumero. Regra para o chamador: QUALQUER erro depois do envio
-// (rede, 5xx, resposta ilegível, sem número) é "pendente" — Transitorio()
-// serve para alertar, nunca para repetir este POST.
+// (o ticket pode existir): o chamador registra "pendente" (ADR 0005) e
+// reconcilia por ListarTickets. 2xx sem `number` reconhecível devolve o Ticket
+// (Bruto preenchido) junto com ErrTicketSemNumero. Regra para o chamador:
+// QUALQUER erro depois do envio (rede, 5xx, resposta ilegível, sem número) é
+// "pendente" — Transitorio() serve para alertar, nunca para repetir este POST.
 func (c *Client) CriarTicket(ctx context.Context, t NovoTicket) (Ticket, error) {
 	if strings.TrimSpace(t.DeskID) == "" {
 		return Ticket{}, fmt.Errorf("%w: deskId", ErrCampoObrigatorio)
@@ -284,15 +401,52 @@ func (c *Client) CriarTicket(ctx context.Context, t NovoTicket) (Ticket, error) 
 	if err := c.do(ctx, http.MethodPost, "/tickets", nil, t, &out); err != nil {
 		return Ticket{}, err
 	}
-	if out.Number == "" {
+	if out.Number == 0 {
 		return out, ErrTicketSemNumero
 	}
 	return out, nil
 }
 
-// Ticket faz GET /tickets/:number. 404 = número desconhecido (definitivo).
-func (c *Client) Ticket(ctx context.Context, number string) (Ticket, error) {
-	if err := exigirID(number); err != nil {
+// CriarTicketDaConversa faz POST /conversations/:id/ticket UMA vez (mesma
+// regra de CriarTicket: sem idempotência, nenhum retry, qualquer erro depois
+// do envio é "pendente"). A transcrição da conversa entra na descrição e o
+// chamado sai vinculado à conversa. Assume-se que a resposta é o objeto
+// `ticket` e que herda cliente/solicitante da conversa — ver docs/infodesk/07
+// item T11; o que acontece se a conversa já tem `ticketNumber` é ABERTO (item
+// T12): quem chama confere `ticketNumber` local antes.
+func (c *Client) CriarTicketDaConversa(ctx context.Context, convID string, t NovoTicketDaConversa) (Ticket, error) {
+	if err := exigirID(convID); err != nil {
+		return Ticket{}, err
+	}
+	if strings.TrimSpace(t.DeskID) == "" {
+		return Ticket{}, fmt.Errorf("%w: deskId", ErrCampoObrigatorio)
+	}
+	if strings.TrimSpace(t.Title) == "" {
+		return Ticket{}, fmt.Errorf("%w: title", ErrCampoObrigatorio)
+	}
+	var out Ticket
+	if err := c.do(ctx, http.MethodPost, rotaConversa(convID, "ticket"), nil, t, &out); err != nil {
+		return Ticket{}, err
+	}
+	if out.Number == 0 {
+		// ver docs/infodesk/07 item T11: tolera o objeto embrulhado em `ticket`.
+		if inner, ok := out.Bruto["ticket"].(map[string]any); ok {
+			if b, err := json.Marshal(inner); err == nil {
+				var t2 Ticket
+				if json.Unmarshal(b, &t2) == nil && t2.Number != 0 {
+					return t2, nil
+				}
+			}
+		}
+		return out, ErrTicketSemNumero
+	}
+	return out, nil
+}
+
+// Ticket faz GET /tickets/:number. 404 NOT_FOUND = número desconhecido
+// (definitivo).
+func (c *Client) Ticket(ctx context.Context, number int) (Ticket, error) {
+	if err := exigirNumero(number); err != nil {
 		return Ticket{}, err
 	}
 	var out Ticket
@@ -302,17 +456,47 @@ func (c *Client) Ticket(ctx context.Context, number string) (Ticket, error) {
 	return out, nil
 }
 
+// ListarTickets faz GET /tickets com os filtros dados e devolve UMA página
+// (`{data, nextCursor}`; sem Status a API lista só os abertos). Serve ao
+// "já tenho chamado?" e à reconciliação de um POST sem resposta (ADR 0005).
+func (c *Client) ListarTickets(ctx context.Context, f FiltroTickets) (Pagina[Ticket], error) {
+	q := url.Values{}
+	setNaoVazio(q, "phone", f.Phone)
+	setNaoVazio(q, "status", f.Status)
+	setNaoVazio(q, "deskId", f.DeskID)
+	setLimiteECursor(q, f.Limit, f.Cursor)
+	return paginaDe[Ticket](ctx, c, "/tickets", q)
+}
+
 // ResponderTicket faz POST /tickets/:number/reply com `{body}`: vai ao
 // solicitante pelos canais do ticket, como resposta de atendente. Implementado,
 // não usado na v1 (T7: risco de duplicar a conversa do WhatsApp).
-func (c *Client) ResponderTicket(ctx context.Context, number, body string) error {
-	if err := exigirID(number); err != nil {
+func (c *Client) ResponderTicket(ctx context.Context, number int, body string) error {
+	if err := exigirNumero(number); err != nil {
 		return err
 	}
 	if strings.TrimSpace(body) == "" {
 		return ErrCorpoVazio
 	}
-	return c.do(ctx, http.MethodPost, rotaTicket(number, "reply"), nil, map[string]string{"body": body}, nil)
+	return c.do(ctx, http.MethodPost, rotaTicket(number, "reply"), nil, corpoTicket{Body: body}, nil)
+}
+
+// NotaInterna faz POST /tickets/:number/notes com `{body}`: nota interna do
+// chamado, visível só para a equipe (nada vai ao cliente).
+func (c *Client) NotaInterna(ctx context.Context, number int, body string) error {
+	if err := exigirNumero(number); err != nil {
+		return err
+	}
+	if strings.TrimSpace(body) == "" {
+		return ErrCorpoVazio
+	}
+	return c.do(ctx, http.MethodPost, rotaTicket(number, "notes"), nil, corpoTicket{Body: body}, nil)
+}
+
+// corpoTicket é o corpo de /tickets/:number/reply e /notes — nestas rotas o
+// campo é `body` (03-tickets.md); só as mensagens de conversa usam `text`.
+type corpoTicket struct {
+	Body string `json:"body"`
 }
 
 // ---------------------------------------------------------------------------
@@ -377,41 +561,100 @@ func (c *Client) do(ctx context.Context, metodo, rota string, query url.Values, 
 }
 
 // erroHTTP monta o *HTTPError: lê no máximo corpoErroLeituraMax bytes,
-// higieniza e captura Retry-After (sem dormir).
+// extrai o `code`, higieniza a mensagem e captura Retry-After (sem dormir).
 func (c *Client) erroHTTP(rota string, resp *http.Response) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, corpoErroLeituraMax))
-	e := &HTTPError{Status: resp.StatusCode, Rota: rota, Mensagem: higienizarCorpo(raw)}
+	e := &HTTPError{Status: resp.StatusCode, Code: extrairCode(raw), Rota: rota, Mensagem: higienizarCorpo(raw)}
 	if ra := resp.Header.Get("Retry-After"); ra != "" {
 		e.RetryAfter = analisarRetryAfter(ra, c.now())
 	}
 	return e
 }
 
-// listaDeConversas aceita `[...]` ou `{data|items|conversations|results: [...]}`.
-func listaDeConversas(rota string, raw json.RawMessage) ([]map[string]any, error) {
+// ---------------------------------------------------------------------------
+// Listas paginadas
+// ---------------------------------------------------------------------------
+
+// paginaDe faz um GET e devolve UMA página de lista.
+func paginaDe[T any](ctx context.Context, c *Client, rota string, q url.Values) (Pagina[T], error) {
+	var raw json.RawMessage
+	if err := c.do(ctx, http.MethodGet, rota, q, nil, &raw); err != nil {
+		return Pagina[T]{}, err
+	}
+	itens, prox, err := decodificarLista[T](rota, raw)
+	if err != nil {
+		return Pagina[T]{}, err
+	}
+	return Pagina[T]{Data: itens, NextCursor: prox}, nil
+}
+
+// listaCompleta percorre TODAS as páginas de uma lista de referência
+// (idempotente, GET), seguindo nextCursor até acabar ou até
+// maxPaginasReferencia. Array puro conta como uma página só.
+func listaCompleta[T any](ctx context.Context, c *Client, rota string, base url.Values) ([]T, error) {
+	var todos []T
+	cursor := ""
+	for range maxPaginasReferencia {
+		q := url.Values{}
+		for k, v := range base {
+			q[k] = slices.Clone(v)
+		}
+		setNaoVazio(q, "cursor", cursor)
+		p, err := paginaDe[T](ctx, c, rota, q)
+		if err != nil {
+			return nil, err
+		}
+		todos = append(todos, p.Data...)
+		if p.NextCursor == "" || p.NextCursor == cursor {
+			return todos, nil
+		}
+		cursor = p.NextCursor
+	}
+	return nil, &ErroResposta{Rota: rota, Motivo: "paginação sem fim"}
+}
+
+// decodificarLista aceita `[...]` ou `{data: [...], nextCursor: "…"|null}`.
+func decodificarLista[T any](rota string, raw json.RawMessage) ([]T, string, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) > 0 && raw[0] == '[' {
-		var lista []map[string]any
-		if err := json.Unmarshal(raw, &lista); err != nil {
-			return nil, &ErroResposta{Rota: rota, Motivo: "lista com item que não é objeto"}
+		var itens []T
+		if err := json.Unmarshal(raw, &itens); err != nil {
+			return nil, "", &ErroResposta{Rota: rota, Motivo: "lista com item inválido"}
 		}
-		return lista, nil
+		return itens, "", nil
 	}
-	var env map[string]json.RawMessage
+	var env struct {
+		Data       json.RawMessage `json:"data"`
+		NextCursor json.RawMessage `json:"nextCursor"`
+	}
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil, &ErroResposta{Rota: rota, Motivo: "nem lista nem objeto"}
+		return nil, "", &ErroResposta{Rota: rota, Motivo: "nem lista nem objeto"}
 	}
-	for _, chave := range []string{"data", "items", "conversations", "results"} {
-		v, ok := env[chave]
-		if !ok {
-			continue
-		}
-		var lista []map[string]any
-		if err := json.Unmarshal(v, &lista); err == nil {
-			return lista, nil
-		}
+	if d := bytes.TrimSpace(env.Data); len(d) == 0 || d[0] != '[' {
+		return nil, "", &ErroResposta{Rota: rota, Motivo: "objeto sem `data` em lista"}
 	}
-	return nil, &ErroResposta{Rota: rota, Motivo: "objeto sem lista reconhecível (ver docs/infodesk/07 C1)"}
+	var itens []T
+	if err := json.Unmarshal(env.Data, &itens); err != nil {
+		return nil, "", &ErroResposta{Rota: rota, Motivo: "lista com item inválido"}
+	}
+	var prox string
+	if len(env.NextCursor) > 0 {
+		_ = json.Unmarshal(env.NextCursor, &prox) // null ou tipo estranho = fim
+	}
+	return itens, prox, nil
+}
+
+func setNaoVazio(q url.Values, chave, valor string) {
+	if strings.TrimSpace(valor) != "" {
+		q.Set(chave, valor)
+	}
+}
+
+func setLimiteECursor(q url.Values, limite int, cursor string) {
+	if limite > 0 {
+		q.Set("limit", strconv.Itoa(limite))
+	}
+	setNaoVazio(q, "cursor", cursor)
 }
 
 func rotaConversa(id, acao string) string {
@@ -422,8 +665,8 @@ func rotaConversa(id, acao string) string {
 	return r
 }
 
-func rotaTicket(number, acao string) string {
-	r := "/tickets/" + url.PathEscape(number)
+func rotaTicket(number int, acao string) string {
+	r := "/tickets/" + strconv.Itoa(number)
 	if acao != "" {
 		r += "/" + acao
 	}
@@ -433,6 +676,13 @@ func rotaTicket(number, acao string) string {
 func exigirID(id string) error {
 	if strings.TrimSpace(id) == "" {
 		return ErrIDVazio
+	}
+	return nil
+}
+
+func exigirNumero(n int) error {
+	if n <= 0 {
+		return ErrNumeroInvalido
 	}
 	return nil
 }

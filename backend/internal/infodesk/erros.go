@@ -27,6 +27,8 @@ var (
 	ErrIDVazio = errors.New("infodesk: identificador vazio")
 	// ErrCorpoVazio: tentativa de enviar mensagem/resposta sem texto.
 	ErrCorpoVazio = errors.New("infodesk: corpo da mensagem vazio")
+	// ErrNumeroInvalido: número de chamado <= 0 (o número é inteiro positivo).
+	ErrNumeroInvalido = errors.New("infodesk: número de chamado inválido")
 	// ErrCampoObrigatorio: NovoTicket sem deskId ou title (03-tickets.md).
 	ErrCampoObrigatorio = errors.New("infodesk: campo obrigatório ausente")
 	// ErrTicketSemNumero: o Infodesk aceitou o POST /tickets (2xx) mas a
@@ -34,6 +36,47 @@ var (
 	// criado: o chamador deve tratar como "pendente" (ADR 0005), nunca repetir.
 	ErrTicketSemNumero = errors.New("infodesk: ticket criado sem número na resposta")
 )
+
+// Códigos de erro estáveis da API v1 (docs/infodesk/06-erros.md): "decida pelo
+// `code`; a `message` é para leitura humana".
+const (
+	CodeValidationError        = "VALIDATION_ERROR"
+	CodeInvalidReference       = "INVALID_REFERENCE"
+	CodeUnauthorized           = "UNAUTHORIZED"
+	CodeForbidden              = "FORBIDDEN"
+	CodeNotFound               = "NOT_FOUND"
+	CodeTemplateNotFound       = "TEMPLATE_NOT_FOUND"
+	CodeConflict               = "CONFLICT"
+	CodeWhatsAppWindowClosed   = "WHATSAPP_WINDOW_CLOSED"
+	CodeWhatsAppNotConfigured  = "WHATSAPP_NOT_CONFIGURED"
+	CodeTemplateNotApproved    = "TEMPLATE_NOT_APPROVED"
+	CodeTemplateParamsMismatch = "TEMPLATE_PARAMS_MISMATCH"
+	CodeMediaURLRequired       = "MEDIA_URL_REQUIRED"
+	CodeMediaDownloadFailed    = "MEDIA_DOWNLOAD_FAILED"
+	CodeRateLimited            = "RATE_LIMITED"
+	CodeInternalError          = "INTERNAL_ERROR"
+)
+
+// transitorioPorCode classifica os códigos documentados: true = vale repetir
+// (só em operação idempotente); false = definitivo ou erro de configuração.
+// Código fora da tabela cai no fallback por status HTTP.
+var transitorioPorCode = map[string]bool{
+	CodeRateLimited:            true,
+	CodeInternalError:          true,
+	CodeUnauthorized:           false,
+	CodeForbidden:              false,
+	CodeNotFound:               false,
+	CodeValidationError:        false,
+	CodeInvalidReference:       false,
+	CodeConflict:               false,
+	CodeWhatsAppWindowClosed:   false,
+	CodeWhatsAppNotConfigured:  false,
+	CodeTemplateNotFound:       false,
+	CodeTemplateNotApproved:    false,
+	CodeTemplateParamsMismatch: false,
+	CodeMediaURLRequired:       false,
+	CodeMediaDownloadFailed:    false,
+}
 
 // HTTPError é uma resposta >= 400 do Infodesk. Mensagem já vem higienizada
 // (sem e-mail, sem sequências de 7+ dígitos, truncada): pode ir ao log,
@@ -43,21 +86,35 @@ var (
 // como "sem identificadores", não como "sem PII".
 type HTTPError struct {
 	Status     int
+	Code       string // `code` estável da API (CodeXxx); "" quando ausente ou irreconhecível
 	Mensagem   string
 	Rota       string        // rota relativa (sem base, sem query)
-	RetryAfter time.Duration // do header Retry-After, quando presente (0 = ausente)
+	RetryAfter time.Duration // do header Retry-After, quando presente (0 = ausente; ver docs/infodesk/07 item A4)
 }
 
 func (e *HTTPError) Error() string {
-	if e.Mensagem == "" {
-		return fmt.Sprintf("infodesk %s: status http %d", e.Rota, e.Status)
+	cod := ""
+	if e.Code != "" {
+		cod = " [" + e.Code + "]"
 	}
-	return fmt.Sprintf("infodesk %s: status http %d: %s", e.Rota, e.Status, e.Mensagem)
+	if e.Mensagem == "" {
+		return fmt.Sprintf("infodesk %s: status http %d%s", e.Rota, e.Status, cod)
+	}
+	return fmt.Sprintf("infodesk %s: status http %d%s: %s", e.Rota, e.Status, cod, e.Mensagem)
 }
 
-// Transitorio informa se vale repetir: 429 e 5xx. 401/403 são erro de
-// configuração (alerta), 404 e demais 4xx são definitivos (06-erros.md).
+// Transitorio informa se vale repetir. Decide pelo `code` (06-erros.md):
+// RATE_LIMITED e INTERNAL_ERROR são transitórios; UNAUTHORIZED, FORBIDDEN,
+// NOT_FOUND, VALIDATION_ERROR, INVALID_REFERENCE, CONFLICT,
+// WHATSAPP_WINDOW_CLOSED (e os demais códigos documentados) são definitivos.
+// Sem `code` — ou com um código que não conhecemos — cai no status HTTP:
+// 429 e 5xx (inclusive 502/503/504, não documentados) são transitórios, o
+// resto é definitivo. Transitório não autoriza repetir POST /tickets nem
+// POST /conversations/:id/ticket (ADR 0005).
 func (e *HTTPError) Transitorio() bool {
+	if t, ok := transitorioPorCode[e.Code]; ok {
+		return t
+	}
 	return e.Status == http.StatusTooManyRequests || e.Status >= 500
 }
 
@@ -114,10 +171,31 @@ var (
 	reNumero = regexp.MustCompile(`\d(?:[\s().\-/]{0,2}\d){6,}`)
 )
 
-// higienizarCorpo extrai a `message` do envelope {statusCode, message}
+// reCode é o formato aceito para `code`: caixa alta com _ (SCREAMING_SNAKE).
+// Qualquer outra coisa vira "" — o valor vem de fora e vai parar em log e
+// em Error().
+var reCode = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+
+// extrairCode lê `code` do envelope de erro {statusCode, code, message}
+// (06-erros.md). Ausente, não-string ou fora do formato = "".
+func extrairCode(raw []byte) string {
+	var env struct {
+		Code any `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return ""
+	}
+	if s, ok := env.Code.(string); ok && reCode.MatchString(s) {
+		return s
+	}
+	return ""
+}
+
+// higienizarCorpo extrai a `message` do envelope {statusCode, code, message}
 // (06-erros.md) — ou usa o corpo cru quando não é esse formato — e devolve o
-// texto higienizado para log. Formato de validação com vários campos não está
-// documentado: `message` pode ser string ou lista; ambos são aceitos.
+// texto higienizado para log. O formato do array `errors` de VALIDATION_ERROR
+// não está documentado (docs/infodesk/06): `message` pode ser string ou lista;
+// ambos são aceitos, `errors` é ignorado.
 func higienizarCorpo(raw []byte) string {
 	texto := string(raw)
 	var env struct {
