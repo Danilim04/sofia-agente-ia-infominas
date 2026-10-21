@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -70,8 +71,20 @@ type chamada struct {
 }
 
 var chamadas = []chamada{
+	{"Me", http.MethodGet, "/me", true, `{"organizationId":"o1","keyId":"k1","name":"Sofia","scopes":["tickets:read"],"handlesConversations":true}`,
+		func(ctx context.Context, c *Client) error { _, err := c.Me(ctx); return err }},
+	{"Lookup", http.MethodGet, "/contacts/lookup", true, `{"phone":"+5531990000000","requesters":[],"clientIds":[],"openTickets":[],"conversation":null}`,
+		func(ctx context.Context, c *Client) error { _, err := c.Lookup(ctx, "+5531990000000"); return err }},
 	{"EnviarMensagem", http.MethodPost, "/conversations/c1/messages", false, `{}`,
-		func(ctx context.Context, c *Client) error { return c.EnviarMensagem(ctx, "c1", "oi") }},
+		func(ctx context.Context, c *Client) error { return c.EnviarMensagem(ctx, "c1", "oi", false) }},
+	{"NotaDaConversa", http.MethodPost, "/conversations/c1/messages", false, `{}`,
+		func(ctx context.Context, c *Client) error { return c.EnviarMensagem(ctx, "c1", "resumo", true) }},
+	{"Handoff", http.MethodPost, "/conversations/c1/handoff", false, `{}`,
+		func(ctx context.Context, c *Client) error {
+			return c.Handoff(ctx, "c1", Handoff{Note: "resumo"})
+		}},
+	{"VincularSolicitante", http.MethodPost, "/conversations/c1/requester", false, `{}`,
+		func(ctx context.Context, c *Client) error { return c.VincularSolicitante(ctx, "c1", "r1") }},
 	{"TransferirDepartamento", http.MethodPost, "/conversations/c1/department", false, `{}`,
 		func(ctx context.Context, c *Client) error { return c.TransferirDepartamento(ctx, "c1", "d1") }},
 	{"RemoverDepartamento", http.MethodPost, "/conversations/c1/department", false, `{}`,
@@ -86,19 +99,37 @@ var chamadas = []chamada{
 		func(ctx context.Context, c *Client) error { _, err := c.Departamentos(ctx); return err }},
 	{"Atendentes", http.MethodGet, "/users", true, `[{"id":"u1","username":"ana","email":"a@x.com"}]`,
 		func(ctx context.Context, c *Client) error { _, err := c.Atendentes(ctx); return err }},
-	{"CriarTicket", http.MethodPost, "/tickets", true, `{"number":"123"}`,
+	{"Mesa", http.MethodGet, "/desks/m1", true, `{"id":"m1","name":"Suporte","statuses":[],"stages":[],"priorities":[],"catalogItems":[]}`,
+		func(ctx context.Context, c *Client) error { _, err := c.Mesa(ctx, "m1"); return err }},
+	{"Catalogo", http.MethodGet, "/catalog", true, `[{"id":"i1","name":"Impressora"}]`,
+		func(ctx context.Context, c *Client) error { _, err := c.Catalogo(ctx, "m1"); return err }},
+	{"CriarTicket", http.MethodPost, "/tickets", true, `{"number":123}`,
 		func(ctx context.Context, c *Client) error {
 			_, err := c.CriarTicket(ctx, NovoTicket{DeskID: "m1", Title: "t"})
 			return err
 		}},
+	{"CriarTicketDaConversa", http.MethodPost, "/conversations/c1/ticket", true, `{"number":123}`,
+		func(ctx context.Context, c *Client) error {
+			_, err := c.CriarTicketDaConversa(ctx, "c1", NovoTicketDaConversa{DeskID: "m1", Title: "t"})
+			return err
+		}},
 	{"Ticket", http.MethodGet, "/tickets/123", true, `{"number":123}`,
-		func(ctx context.Context, c *Client) error { _, err := c.Ticket(ctx, "123"); return err }},
+		func(ctx context.Context, c *Client) error { _, err := c.Ticket(ctx, 123); return err }},
+	{"ListarTickets", http.MethodGet, "/tickets", true, `{"data":[{"number":123}],"nextCursor":null}`,
+		func(ctx context.Context, c *Client) error {
+			_, err := c.ListarTickets(ctx, FiltroTickets{Phone: "+5531990000000", Status: "open"})
+			return err
+		}},
 	{"ResponderTicket", http.MethodPost, "/tickets/123/reply", false, `{}`,
-		func(ctx context.Context, c *Client) error { return c.ResponderTicket(ctx, "123", "ok") }},
-	{"Conversas", http.MethodGet, "/conversations", true, `[{"id":"c1"}]`,
-		func(ctx context.Context, c *Client) error { _, err := c.Conversas(ctx, "", ""); return err }},
+		func(ctx context.Context, c *Client) error { return c.ResponderTicket(ctx, 123, "ok") }},
+	{"NotaInterna", http.MethodPost, "/tickets/123/notes", false, `{}`,
+		func(ctx context.Context, c *Client) error { return c.NotaInterna(ctx, 123, "nota") }},
+	{"Conversas", http.MethodGet, "/conversations", true, `{"data":[{"id":"c1"}],"nextCursor":null}`,
+		func(ctx context.Context, c *Client) error { _, err := c.Conversas(ctx, FiltroConversas{}); return err }},
 	{"Conversa", http.MethodGet, "/conversations/c1", true, `{"id":"c1"}`,
 		func(ctx context.Context, c *Client) error { _, err := c.Conversa(ctx, "c1"); return err }},
+	{"Eventos", http.MethodGet, "/events", true, `{"data":[],"nextAfter":0,"hasMore":false}`,
+		func(ctx context.Context, c *Client) error { _, err := c.Eventos(ctx, 0, 500); return err }},
 }
 
 func TestClient_SucessoRotasEHeaders(t *testing.T) {
@@ -133,21 +164,36 @@ func TestClient_SucessoRotasEHeaders(t *testing.T) {
 
 func TestClient_ErrosHTTP(t *testing.T) {
 	casos := []struct {
+		nome        string
 		status      int
 		corpo       string
+		code        string
 		transitorio bool
 		mensagem    string
 	}{
-		{http.StatusUnauthorized, `{"statusCode":401,"message":"Chave inválida"}`, false, "Chave inválida"},
-		{http.StatusForbidden, `{"statusCode":403,"message":"Escopo insuficiente. Necessário: tickets:write."}`, false, "Escopo insuficiente. Necessário: tickets:write."},
-		{http.StatusNotFound, `{"statusCode":404,"message":"Não encontrado"}`, false, "Não encontrado"},
-		{http.StatusTooManyRequests, `{"statusCode":429,"message":"Limite"}`, true, "Limite"},
-		{http.StatusInternalServerError, `<html>erro</html>`, true, "<html>erro</html>"},
-		{http.StatusBadGateway, ``, true, ""},
+		// Formato v1: `code` estável (06-erros.md).
+		{"401", http.StatusUnauthorized, `{"statusCode":401,"code":"UNAUTHORIZED","message":"Chave inválida"}`, CodeUnauthorized, false, "Chave inválida"},
+		{"403", http.StatusForbidden, `{"statusCode":403,"code":"FORBIDDEN","message":"Escopo insuficiente. Necessário: tickets:write."}`, CodeForbidden, false, "Escopo insuficiente. Necessário: tickets:write."},
+		{"404", http.StatusNotFound, `{"statusCode":404,"code":"NOT_FOUND","message":"Não encontrado"}`, CodeNotFound, false, "Não encontrado"},
+		{"429", http.StatusTooManyRequests, `{"statusCode":429,"code":"RATE_LIMITED","message":"Limite"}`, CodeRateLimited, true, "Limite"},
+		{"500", http.StatusInternalServerError, `{"statusCode":500,"code":"INTERNAL_ERROR","message":"erro"}`, CodeInternalError, true, "erro"},
+		{"400Validation", http.StatusBadRequest, `{"statusCode":400,"code":"VALIDATION_ERROR","message":"corpo inválido","errors":[{"campo":"title"}]}`, CodeValidationError, false, `corpo inválido [errors: [{"campo":"title"}]]`},
+		{"400InvalidReference", http.StatusBadRequest, `{"statusCode":400,"code":"INVALID_REFERENCE","message":"deskId inexistente"}`, CodeInvalidReference, false, "deskId inexistente"},
+		{"409Conflict", http.StatusConflict, `{"statusCode":409,"code":"CONFLICT","message":"chamado preso a outro atendimento"}`, CodeConflict, false, "chamado preso a outro atendimento"},
+		{"409JanelaFechada", http.StatusConflict, `{"statusCode":409,"code":"WHATSAPP_WINDOW_CLOSED","message":"janela fechada","lastInboundAt":"2026-10-18T09:12:00.000Z"}`, CodeWhatsAppWindowClosed, false, "janela fechada"},
+		// Sem `code` (formato antigo ou proxy no meio): decide o status.
+		{"401SemCode", http.StatusUnauthorized, `{"statusCode":401,"message":"Chave inválida"}`, "", false, "Chave inválida"},
+		{"404SemCode", http.StatusNotFound, `{"statusCode":404,"message":"Não encontrado"}`, "", false, "Não encontrado"},
+		{"429SemCode", http.StatusTooManyRequests, `{"statusCode":429,"message":"Limite"}`, "", true, "Limite"},
+		{"500Html", http.StatusInternalServerError, `<html>erro</html>`, "", true, "<html>erro</html>"},
+		{"502Vazio", http.StatusBadGateway, ``, "", true, ""},
+		// `code` que não conhecemos: também cai no status.
+		{"503CodeNovo", http.StatusServiceUnavailable, `{"statusCode":503,"code":"MANUTENCAO","message":"volte já"}`, "MANUTENCAO", true, "volte já"},
+		{"422CodeNovo", http.StatusUnprocessableEntity, `{"statusCode":422,"code":"REGRA_NOVA","message":"não"}`, "REGRA_NOVA", false, "não"},
 	}
 	for _, ch := range chamadas {
 		for _, cs := range casos {
-			t.Run(ch.nome+"/"+http.StatusText(cs.status), func(t *testing.T) {
+			t.Run(ch.nome+"/"+cs.nome, func(t *testing.T) {
 				s := novoServidor(t, responderJSON(cs.status, cs.corpo))
 				err := ch.exec(context.Background(), s.cliente())
 				var he *HTTPError
@@ -156,6 +202,9 @@ func TestClient_ErrosHTTP(t *testing.T) {
 				}
 				if he.Status != cs.status {
 					t.Errorf("Status = %d, esperado %d", he.Status, cs.status)
+				}
+				if he.Code != cs.code {
+					t.Errorf("Code = %q, esperado %q", he.Code, cs.code)
 				}
 				if he.Rota != ch.caminho {
 					t.Errorf("Rota = %q, esperado %q", he.Rota, ch.caminho)
@@ -203,7 +252,7 @@ func TestClient_JSONInvalidoECorpoVazio(t *testing.T) {
 
 func TestClient_MetodosSemSaidaIgnoramCorpo(t *testing.T) {
 	s := novoServidor(t, responderJSON(http.StatusCreated, `isto não é json`))
-	if err := s.cliente().EnviarMensagem(context.Background(), "c1", "oi"); err != nil {
+	if err := s.cliente().EnviarMensagem(context.Background(), "c1", "oi", false); err != nil {
 		t.Fatalf("2xx com corpo irrelevante deve ser sucesso: %v", err)
 	}
 }
@@ -231,7 +280,7 @@ func TestClient_RetryAfter(t *testing.T) {
 				_, _ = io.WriteString(w, `{"statusCode":429,"message":"Limite de requisições excedido"}`)
 			})
 			c := s.cliente(func(o *Options) { o.Now = func() time.Time { return agora } })
-			err := c.EnviarMensagem(context.Background(), "c1", "oi")
+			err := c.EnviarMensagem(context.Background(), "c1", "oi", false)
 			var he *HTTPError
 			if !errors.As(err, &he) {
 				t.Fatalf("esperado *HTTPError, veio %v", err)
@@ -338,8 +387,8 @@ func TestClient_CriarTicket(t *testing.T) {
 		if err != nil {
 			t.Fatalf("erro: %v", err)
 		}
-		if tk.Number != "4521" {
-			t.Errorf("Number = %q", tk.Number)
+		if tk.Number != 4521 {
+			t.Errorf("Number = %d", tk.Number)
 		}
 		if tk.Bruto["status"] != "OPEN" {
 			t.Errorf("Bruto não preservado: %v", tk.Bruto)
@@ -359,11 +408,33 @@ func TestClient_CriarTicket(t *testing.T) {
 			}
 		}
 	})
-	t.Run("numeroString", func(t *testing.T) {
+	t.Run("numeroComoTextoNumerico", func(t *testing.T) {
+		s := novoServidor(t, responderJSON(http.StatusOK, `{"number":"4521"}`))
+		tk, err := s.cliente().CriarTicket(context.Background(), NovoTicket{DeskID: "m1", Title: "t"})
+		if err != nil || tk.Number != 4521 {
+			t.Fatalf("Number = %d, err = %v", tk.Number, err)
+		}
+	})
+	t.Run("numeroNaoNumericoEhSemNumero", func(t *testing.T) {
 		s := novoServidor(t, responderJSON(http.StatusOK, `{"number":"INF-77"}`))
 		tk, err := s.cliente().CriarTicket(context.Background(), NovoTicket{DeskID: "m1", Title: "t"})
-		if err != nil || tk.Number != "INF-77" {
-			t.Fatalf("Number = %q, err = %v", tk.Number, err)
+		if !errors.Is(err, ErrTicketSemNumero) || tk.Number != 0 || tk.Bruto["number"] != "INF-77" {
+			t.Fatalf("tk = %+v, err = %v", tk, err)
+		}
+	})
+	t.Run("objetoCompletoDoPDF", func(t *testing.T) {
+		s := novoServidor(t, responderJSON(http.StatusCreated, ticketPDF))
+		tk, err := s.cliente().CriarTicket(context.Background(), NovoTicket{DeskID: "m1", Title: "t"})
+		if err != nil || tk.Number != 4521 || !tk.Status.IsOpen || tk.ConversationID != "c1d2" || tk.Requester == nil {
+			t.Fatalf("tk = %+v, err = %v", tk, err)
+		}
+	})
+	t.Run("aceita200e201", func(t *testing.T) {
+		for _, st := range []int{http.StatusOK, http.StatusCreated} {
+			s := novoServidor(t, responderJSON(st, `{"number":5}`))
+			if tk, err := s.cliente().CriarTicket(context.Background(), NovoTicket{DeskID: "m1", Title: "t"}); err != nil || tk.Number != 5 {
+				t.Errorf("status %d: tk = %+v, err = %v", st, tk, err)
+			}
 		}
 	})
 	t.Run("semNumero", func(t *testing.T) {
@@ -394,9 +465,9 @@ func TestClient_CriarTicket(t *testing.T) {
 }
 
 func TestClient_Ticket(t *testing.T) {
-	s := novoServidor(t, responderJSON(http.StatusOK, `{"number":"88","title":"x"}`))
-	tk, err := s.cliente().Ticket(context.Background(), "88")
-	if err != nil || tk.Number != "88" || tk.Bruto["title"] != "x" {
+	s := novoServidor(t, responderJSON(http.StatusOK, `{"number":88,"title":"x","messages":[{"id":"m1"}]}`))
+	tk, err := s.cliente().Ticket(context.Background(), 88)
+	if err != nil || tk.Number != 88 || tk.Bruto["title"] != "x" {
 		t.Fatalf("tk = %+v, err = %v", tk, err)
 	}
 	if s.ultima.Load().caminho != PrefixoRotas+"/tickets/88" {
@@ -501,40 +572,73 @@ func TestClient_FalhaNaoEntraNoCache(t *testing.T) {
 }
 
 func TestClient_Conversas(t *testing.T) {
-	t.Run("queryEArrayPuro", func(t *testing.T) {
-		s := novoServidor(t, responderJSON(http.StatusOK, `[{"id":"c1"},{"id":"c2"}]`))
-		lista, err := s.cliente().Conversas(context.Background(), "entrada", "d1")
-		if err != nil || len(lista) != 2 || lista[1]["id"] != "c2" {
-			t.Fatalf("lista = %v, err = %v", lista, err)
+	t.Run("queryEEnvelopeComCursor", func(t *testing.T) {
+		s := novoServidor(t, responderJSON(http.StatusOK, `{"data":[{"id":"c1","handledBy":"EXTERNAL_BOT","botActive":true},{"id":"c2"}],"nextCursor":"cur2"}`))
+		bot := true
+		desde := time.Date(2026, 10, 19, 12, 30, 0, 0, time.FixedZone("BRT", -3*3600))
+		pag, err := s.cliente().Conversas(context.Background(), FiltroConversas{
+			Tab: "entrada", Status: "PENDING", Channel: "WHATSAPP", AssignedUserID: "none", DepartmentID: "d1",
+			BotActive: &bot, Phone: "+5531990000000", UpdatedSince: desde, Limit: 100, Cursor: "cur1",
+		})
+		if err != nil || len(pag.Data) != 2 || pag.Data[1].ID != "c2" || pag.NextCursor != "cur2" {
+			t.Fatalf("pag = %+v, err = %v", pag, err)
 		}
-		q := s.ultima.Load().query
-		if !strings.Contains(q, "tab=entrada") || !strings.Contains(q, "departmentId=d1") {
-			t.Errorf("query = %q", q)
+		if pag.Data[0].HandledBy != ConduzidaPorBotExterno || !pag.Data[0].BotActive {
+			t.Errorf("conversa tipada: %+v", pag.Data[0])
+		}
+		q, err := url.ParseQuery(s.ultima.Load().query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		quer := map[string]string{
+			"tab": "entrada", "status": "PENDING", "channel": "WHATSAPP", "assignedUserId": "none", "departmentId": "d1",
+			"botActive": "true", "phone": "+5531990000000", "updatedSince": "2026-10-19T15:30:00Z", "limit": "100", "cursor": "cur1",
+		}
+		for k, v := range quer {
+			if q.Get(k) != v {
+				t.Errorf("query[%s] = %q, quer %q", k, q.Get(k), v)
+			}
+		}
+		if len(q) != len(quer) {
+			t.Errorf("query com chaves a mais: %v", q)
+		}
+		if !strings.Contains(s.ultima.Load().query, "phone=%2B5531990000000") {
+			t.Errorf("o + do telefone precisa ir escapado: %q", s.ultima.Load().query)
+		}
+	})
+	t.Run("botActiveFalseEhEnviado", func(t *testing.T) {
+		s := novoServidor(t, responderJSON(http.StatusOK, `{"data":[]}`))
+		nao := false
+		if _, err := s.cliente().Conversas(context.Background(), FiltroConversas{BotActive: &nao}); err != nil {
+			t.Fatal(err)
+		}
+		if s.ultima.Load().query != "botActive=false" {
+			t.Errorf("query = %q", s.ultima.Load().query)
+		}
+	})
+	t.Run("arrayPuroEUltimaPagina", func(t *testing.T) {
+		s := novoServidor(t, responderJSON(http.StatusOK, `[{"id":"c1"},{"id":"c2"}]`))
+		pag, err := s.cliente().Conversas(context.Background(), FiltroConversas{})
+		if err != nil || len(pag.Data) != 2 || pag.NextCursor != "" {
+			t.Fatalf("pag = %+v, err = %v", pag, err)
 		}
 	})
 	t.Run("semFiltros", func(t *testing.T) {
-		s := novoServidor(t, responderJSON(http.StatusOK, `[]`))
-		lista, err := s.cliente().Conversas(context.Background(), "", "")
-		if err != nil || len(lista) != 0 {
-			t.Fatalf("lista = %v, err = %v", lista, err)
+		s := novoServidor(t, responderJSON(http.StatusOK, `{"data":[],"nextCursor":null}`))
+		pag, err := s.cliente().Conversas(context.Background(), FiltroConversas{})
+		if err != nil || len(pag.Data) != 0 || pag.NextCursor != "" {
+			t.Fatalf("pag = %+v, err = %v", pag, err)
 		}
 		if s.ultima.Load().query != "" {
 			t.Errorf("query inesperada: %q", s.ultima.Load().query)
 		}
 	})
-	t.Run("envelope", func(t *testing.T) {
-		for _, corpo := range []string{`{"data":[{"id":"c1"}]}`, `{"items":[{"id":"c1"}]}`, `{"total":1,"results":[{"id":"c1"}]}`} {
-			s := novoServidor(t, responderJSON(http.StatusOK, corpo))
-			lista, err := s.cliente().Conversas(context.Background(), "", "")
-			if err != nil || len(lista) != 1 || lista[0]["id"] != "c1" {
-				t.Errorf("%s: lista = %v, err = %v", corpo, lista, err)
-			}
-		}
-	})
 	t.Run("formatoDesconhecido", func(t *testing.T) {
-		for _, corpo := range []string{`{"foo":1}`, `[1,2]`, `"x"`, `{"data":"x"}`} {
+		// O formato antigo com chaves `items`/`results`/`conversations` morreu:
+		// a v1 só tem `{data, nextCursor}` (06-erros.md, Paginação).
+		for _, corpo := range []string{`{"foo":1}`, `[1,2]`, `"x"`, `{"data":"x"}`, `{"items":[{"id":"c1"}]}`, `{"results":[{"id":"c1"}]}`, `null`} {
 			s := novoServidor(t, responderJSON(http.StatusOK, corpo))
-			_, err := s.cliente().Conversas(context.Background(), "", "")
+			_, err := s.cliente().Conversas(context.Background(), FiltroConversas{})
 			var er *ErroResposta
 			if !errors.As(err, &er) {
 				t.Errorf("%s: esperado *ErroResposta, veio %v", corpo, err)
@@ -544,10 +648,14 @@ func TestClient_Conversas(t *testing.T) {
 }
 
 func TestClient_Conversa(t *testing.T) {
-	s := novoServidor(t, responderJSON(http.StatusOK, `{"id":"c1","messages":[{"id":"m1","sender":"CLIENT"}]}`))
+	s := novoServidor(t, responderJSON(http.StatusOK, `{"id":"c1","handledBy":"AGENT","botActive":false,"assignedUserId":"u1",
+	  "whatsappWindow":{"open":true},"recentMessages":[{"id":"m1","sender":"CLIENT"}]}`))
 	conv, err := s.cliente().Conversa(context.Background(), "c1")
-	if err != nil || conv["id"] != "c1" {
-		t.Fatalf("conv = %v, err = %v", conv, err)
+	if err != nil || conv.ID != "c1" || conv.HandledBy != ConduzidaPorAtendente || conv.BotActive || conv.AssignedUserID != "u1" {
+		t.Fatalf("conv = %+v, err = %v", conv, err)
+	}
+	if _, ok := conv.Bruto["recentMessages"]; !ok {
+		t.Errorf("recentMessages deveria estar em Bruto: %v", conv.Bruto)
 	}
 }
 
@@ -556,9 +664,27 @@ func TestClient_CorposDasAcoesDeConversa(t *testing.T) {
 	c := s.cliente()
 	ctx := context.Background()
 
-	_ = c.EnviarMensagem(ctx, "c1", "Olá! 😊")
-	if got := s.ultima.Load().corpo; got != `{"body":"Olá! 😊"}` {
+	_ = c.EnviarMensagem(ctx, "c1", "Olá! 😊", false)
+	// O campo é `text`, não `body` (mudança da API v1; 04-conversas.md).
+	if got := s.ultima.Load().corpo; got != `{"text":"Olá! 😊"}` {
 		t.Errorf("messages: %q", got)
+	}
+	_ = c.EnviarMensagem(ctx, "c1", "Resumo da triagem", true)
+	if got := s.ultima.Load().corpo; got != `{"text":"Resumo da triagem","internal":true}` {
+		t.Errorf("nota interna: %q", got)
+	}
+	_ = c.NotaInterna(ctx, 55, "Cliente confirmou.")
+	if r := s.ultima.Load(); r.caminho != PrefixoRotas+"/tickets/55/notes" || r.corpo != `{"body":"Cliente confirmou."}` {
+		t.Errorf("nota do chamado: %s %q", r.caminho, r.corpo)
+	}
+	_ = c.VincularSolicitante(ctx, "c1", "r7")
+	if got := s.ultima.Load().corpo; got != `{"id":"r7"}` {
+		t.Errorf("requester: %q", got)
+	}
+	dep := "d9"
+	_ = c.Handoff(ctx, "c1", Handoff{DepartmentID: &dep, Note: "Cliente Maria. Chamado #4521."})
+	if got := s.ultima.Load().corpo; got != `{"departmentId":"d9","note":"Cliente Maria. Chamado #4521."}` {
+		t.Errorf("handoff: %q", got)
 	}
 	_ = c.TransferirDepartamento(ctx, "c1", "d9")
 	if got := s.ultima.Load().corpo; got != `{"departmentId":"d9"}` {
@@ -576,7 +702,7 @@ func TestClient_CorposDasAcoesDeConversa(t *testing.T) {
 	if got := s.ultima.Load().corpo; got != `{}` {
 		t.Errorf("finish: %q", got)
 	}
-	_ = c.ResponderTicket(ctx, "55", "Já estamos verificando.")
+	_ = c.ResponderTicket(ctx, 55, "Já estamos verificando.")
 	if got := s.ultima.Load().corpo; got != `{"body":"Já estamos verificando."}` {
 		t.Errorf("reply: %q", got)
 	}
@@ -590,18 +716,18 @@ func TestClient_ValidacoesLocais(t *testing.T) {
 		err  error
 		quer error
 	}{
-		"mensagemSemConversa":       {c.EnviarMensagem(ctx, " ", "oi"), ErrIDVazio},
-		"mensagemVazia":             {c.EnviarMensagem(ctx, "c1", "  "), ErrCorpoVazio},
+		"mensagemSemConversa":       {c.EnviarMensagem(ctx, " ", "oi", false), ErrIDVazio},
+		"mensagemVazia":             {c.EnviarMensagem(ctx, "c1", "  ", false), ErrCorpoVazio},
 		"transferirSemConversa":     {c.TransferirDepartamento(ctx, "", "d1"), ErrIDVazio},
 		"transferirSemDepartamento": {c.TransferirDepartamento(ctx, "c1", " "), ErrIDVazio},
 		"removerSemConversa":        {c.RemoverDepartamento(ctx, ""), ErrIDVazio},
 		"atribuirSemConversa":       {c.Atribuir(ctx, "", "u1"), ErrIDVazio},
 		"atribuirSemUsuario":        {c.Atribuir(ctx, "c1", ""), ErrIDVazio},
 		"encerrarSemConversa":       {c.Encerrar(ctx, ""), ErrIDVazio},
-		"responderSemNumero":        {c.ResponderTicket(ctx, "", "x"), ErrIDVazio},
-		"responderVazio":            {c.ResponderTicket(ctx, "1", ""), ErrCorpoVazio},
+		"responderSemNumero":        {c.ResponderTicket(ctx, 0, "x"), ErrNumeroInvalido},
+		"responderVazio":            {c.ResponderTicket(ctx, 1, ""), ErrCorpoVazio},
 	}
-	if _, err := c.Ticket(ctx, ""); !errors.Is(err, ErrIDVazio) {
+	if _, err := c.Ticket(ctx, 0); !errors.Is(err, ErrNumeroInvalido) {
 		t.Errorf("Ticket vazio: %v", err)
 	}
 	if _, err := c.Conversa(ctx, ""); !errors.Is(err, ErrIDVazio) {
@@ -622,17 +748,26 @@ func TestClient_IDsSaoEscapadosNaRota(t *testing.T) {
 	c := s.cliente()
 	ctx := context.Background()
 
-	_ = c.EnviarMensagem(ctx, "a/b c", "oi")
+	_ = c.EnviarMensagem(ctx, "a/b c", "oi", false)
 	if got := s.ultima.Load().uri; got != PrefixoRotas+"/conversations/a%2Fb%20c/messages" {
 		t.Errorf("RequestURI = %q", got)
 	}
 	// Um id malicioso não pode subir na árvore de rotas.
-	_ = c.EnviarMensagem(ctx, "../tickets", "oi")
+	_ = c.EnviarMensagem(ctx, "../tickets", "oi", false)
 	if got := s.ultima.Load().uri; got != PrefixoRotas+"/conversations/..%2Ftickets/messages" || strings.Contains(got, "/../") {
 		t.Errorf("RequestURI = %q", got)
 	}
-	_, _ = c.Ticket(ctx, "1/../2")
-	if got := s.ultima.Load().uri; got != PrefixoRotas+"/tickets/1%2F..%2F2" {
+	_, _ = c.Ticket(ctx, 12)
+	if got := s.ultima.Load().uri; got != PrefixoRotas+"/tickets/12" {
+		t.Errorf("RequestURI = %q", got)
+	}
+	_, _ = c.Mesa(ctx, "1/../2")
+	if got := s.ultima.Load().uri; got != PrefixoRotas+"/desks/1%2F..%2F2" {
+		t.Errorf("RequestURI = %q", got)
+	}
+	// deskId vai na query, escapado.
+	_, _ = c.Catalogo(ctx, "a&b=c")
+	if got := s.ultima.Load().uri; got != PrefixoRotas+"/catalog?deskId=a%26b%3Dc" {
 		t.Errorf("RequestURI = %q", got)
 	}
 }
@@ -670,7 +805,7 @@ func TestClient_ChaveNaoVazaNoErro(t *testing.T) {
 	const chave = "ik_live_teste"
 	t.Run("HTTPError", func(t *testing.T) {
 		s := novoServidor(t, responderJSON(http.StatusUnauthorized, `{"statusCode":401,"message":"Chave inválida"}`))
-		err := s.cliente().EnviarMensagem(context.Background(), "c1", "oi")
+		err := s.cliente().EnviarMensagem(context.Background(), "c1", "oi", false)
 		if strings.Contains(err.Error(), chave) {
 			t.Errorf("chave de API vazou no erro: %q", err.Error())
 		}
@@ -679,7 +814,7 @@ func TestClient_ChaveNaoVazaNoErro(t *testing.T) {
 		s := novoServidor(t, responderJSON(http.StatusOK, `[]`))
 		url := s.srv.URL
 		s.srv.Close()
-		_, err := New(Options{BaseURL: url, APIKey: chave}).Conversas(context.Background(), "entrada", "d1")
+		_, err := New(Options{BaseURL: url, APIKey: chave}).Conversas(context.Background(), FiltroConversas{Tab: "entrada", DepartmentID: "d1"})
 		if strings.Contains(err.Error(), chave) {
 			t.Errorf("chave de API vazou no erro de rede: %q", err.Error())
 		}

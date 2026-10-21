@@ -1,8 +1,10 @@
-"""Pipeline de ingestão da base de conhecimento: docs Markdown → chunks → ChromaDB.
+"""Pipeline de ingestão da base de conhecimento: docs Markdown → chunks → ChromaDB (só dev).
+
+O índice de produção é o pgvector, alimentado por `python -m src.rag.sync`.
 
 Pode ser executado como CLI:
 
-    python -m src.rag.ingest [--docs-dir docs] [--persist-dir ./chroma_db]
+    python -m src.rag.ingest [--docs-dir docs/base] [--persist-dir ./chroma_db]
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ from langchain_text_splitters import (
     MarkdownHeaderTextSplitter,
     RecursiveCharacterTextSplitter,
 )
+
+from src.rag.fonte import DIR_DOCS_BASE, separar_front_matter
 
 if TYPE_CHECKING:
     from langchain_chroma import Chroma
@@ -52,7 +56,7 @@ def load_markdown_dir(docs_dir: Path) -> list[Document]:
     if not docs_dir.is_dir():
         raise FileNotFoundError(
             f"Diretório de docs não encontrado em {docs_dir}. "
-            "Coloque os arquivos .md de conhecimento em docs/ antes de rodar a ingestão."
+            "Coloque os arquivos .md de conhecimento em docs/base/ antes de rodar a ingestão."
         )
 
     md_files = sorted(docs_dir.glob("*.md"))
@@ -69,9 +73,10 @@ def load_markdown_dir(docs_dir: Path) -> list[Document]:
         if not texto:
             logger.warning("Pulando %s (arquivo vazio).", md.name)
             continue
-        for secao in splitter.split_text(texto):
+        meta, corpo = separar_front_matter(texto)
+        for secao in splitter.split_text(corpo):
             secao.metadata = {
-                "source": md.name,
+                "source": meta.get("titulo") or md.name,
                 "secao": _secao_de(secao.metadata),
             }
             documents.append(secao)
@@ -177,8 +182,8 @@ def _cli() -> None:
     parser.add_argument(
         "--docs-dir",
         type=Path,
-        default=settings.docs_dir,
-        help="Diretório com os .md de conhecimento (default: DOCS_DIR do .env).",
+        default=DIR_DOCS_BASE,
+        help="Diretório com os .md de conhecimento (default: agente-ia/docs/base).",
     )
     parser.add_argument(
         "--persist-dir",
