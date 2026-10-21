@@ -93,3 +93,9 @@ destino do `handoff` (08). Pendência 07, D6.
 4. Decisão da Infominas: para cada categoria da Sofia, **qual mesa, qual item
    de catálogo (se exigido), qual departamento e qual prioridade** — e quais
    campos a organização exige no `POST /tickets` (07, T10).
+
+**Atualização 2026-10-21:** os itens 1–3 são feitos de uma vez por
+`scripts/descobrir-taxonomia.py` com a chave da API (10, §7), que também gera
+um rascunho da taxonomia a partir do catálogo — cada item de catálogo já
+carrega a mesa padrão (`defaultDeskId`) no código do Infodesk (10, §2). O
+item 4 virou o questionário de 10, §8.
