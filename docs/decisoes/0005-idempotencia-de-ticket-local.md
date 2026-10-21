@@ -1,8 +1,39 @@
 # 0005 — Idempotência e dedup de tickets no gateway
 
-- **Estado:** aceita (2026-10-19)
-- **Etapa:** planejamento (E3.1)
-- **Pendências relacionadas:** P3, T5, T8
+- **Estado:** aceita (2026-10-19); **revisada em 2026-10-20** (seção "Revisão" abaixo; a chave local continua)
+- **Etapa:** planejamento (E3.1, E3.3)
+- **Pendências relacionadas:** P3 (respondida em 2026-10-19), T5 (respondida), T8 (respondida), `docs/infodesk/07` T11, T12
+
+## Revisão 2026-10-20 — API v1: listagem existe, idempotência não
+
+`POST /tickets` e `POST /conversations/:id/ticket` continuam **sem chave de
+idempotência** (`docs/infodesk/03`), então a tabela `tickets` com
+`chave_idempotencia`, o `INSERT … pendente` antes do POST e a regra "nunca
+reenviar o POST" **permanecem**. O que muda:
+
+1. **Reconciliação por listagem** passa a existir: `GET
+   /tickets?phone=<E.164>&status=open` casando `ticket.conversationId ==
+   conversation_id` (preferido) ou `title` + `createdAt ≥ proposta.criada_em`.
+   O gateway faz essa busca **imediatamente** após um POST sem resposta
+   (antes de responder à tool) e o reconciliador (E3.3) repete pelos
+   `pendente` até `TICKET_PENDENTE_TTL` (10 min) → `aberto` ou `falha` +
+   alerta. Um `pendente` nunca mais depende de reconciliação à mão.
+2. O ticket nasce por `POST /conversations/:id/ticket` (`period: session`,
+   `finish: false`), que já grava `conversationId` no objeto — é isso que
+   torna o casamento da reconciliação determinístico.
+3. Dedup de negócio em `preparar` consulta também o Infodesk
+   (`GET /tickets?phone=&status=open`, `DEDUP_CONSULTA_INFODESK=true`), não só
+   a tabela local; "meus chamados" lista o Infodesk por telefone ∪ local.
+4. `number` é inteiro; `tickets.numero` idem. `ticket.*` por webhook/feed
+   atualiza `status_infodesk`/`encerrado` (o humano fechar deixa de ser
+   invisível).
+5. Em aberto (`07`): o que o Desk faz se a conversa **já tem**
+   `ticketNumber` (T12) — até lá o gateway checa `conversas.ticket_number`
+   antes de abrir; e se o ticket pela conversa herda os vínculos (T11).
+
+O texto original segue; "até existir listagem (P3)" está superado.
+
+---
 
 ## Contexto
 

@@ -1,8 +1,8 @@
 # 0003 — Infodesk substitui Chatwoot/Evolution; o estado bot/humano é nosso
 
-- **Estado:** aceita (2026-10-19)
+- **Estado:** aceita (2026-10-19); **parcialmente substituída por [0007](0007-handoff-caminho-unico-para-humano.md) (2026-10-20)** — a parte "transferência = `/department`", "reconciliação por polling de `GET /conversations`" e "humano que assume não é detectado" caducou com a API v1 (`docs/infodesk/`, README "O que mudou"). O que segue vale: `internal/infodesk` é o único que fala com a API e o estado `bot/transferida/encerrada` é nosso. O texto abaixo descreve o guia antigo e **não** foi reescrito (regra do README dos ADRs).
 - **Etapa:** planejamento (E1.1, E1.2, E2.1)
-- **Pendências relacionadas:** P3, P5, P11
+- **Pendências relacionadas:** P3, P5, P11 (P3 e P5 respondidas em 2026-10-19)
 
 ## Contexto
 
