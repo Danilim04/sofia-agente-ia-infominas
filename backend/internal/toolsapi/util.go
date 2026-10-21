@@ -218,6 +218,23 @@ func (h *Handler) sessao(ctx context.Context, convID, telCorpo string) (conv, te
 	return conv, tel, true
 }
 
+// sessaoEstrita exige que a conversa exista no store: consultar/listar expõem dado
+// de ticket e a posse não pode ser decidida por um telefone vindo só do corpo.
+func (h *Handler) sessaoEstrita(ctx context.Context, convID, telCorpo string) (conv, tel string, ok bool) {
+	conv = strings.TrimSpace(convID)
+	if conv == "" {
+		return "", "", false
+	}
+	c, err := h.d.Store.ObterConversa(ctx, conv)
+	if err != nil || c == nil || c.Telefone == "" {
+		if err != nil {
+			h.log.Error("ler conversa", "conversation_id", conv, "err", err)
+		}
+		return conv, "", false
+	}
+	return h.sessao(ctx, conv, telCorpo)
+}
+
 func (h *Handler) alertar(tipo, titulo, texto, convID string) {
 	if h.d.Alertas == nil {
 		return

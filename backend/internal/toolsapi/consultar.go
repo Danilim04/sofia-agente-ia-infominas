@@ -29,7 +29,7 @@ func (h *Handler) handleConsultar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	conv, tel, ok := h.sessao(ctx, req.ConversationID, req.Telefone)
+	conv, tel, ok := h.sessaoEstrita(ctx, req.ConversationID, req.Telefone)
 	if !ok {
 		responderRecusa(w, "posse_nao_verificada", txtPosseNaoVerificada)
 		return
@@ -177,7 +177,7 @@ func (h *Handler) handleListar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	conv, tel, ok := h.sessao(ctx, req.ConversationID, req.Telefone)
+	conv, tel, ok := h.sessaoEstrita(ctx, req.ConversationID, req.Telefone)
 	if !ok {
 		responderRecusa(w, "chamados_indisponiveis", txtChamadosIndisponiveis)
 		return

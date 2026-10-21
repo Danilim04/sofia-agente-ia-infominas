@@ -383,8 +383,8 @@ func TestAbrir_ConversaJaTemChamado_NaoAbreOutro(t *testing.T) {
 	a.identificadoPorCPF()
 	_, _ = a.st.AtualizarConversa(context.Background(), convTeste, func(c *store.Conversa, _ bool) bool { c.TicketNumber = 777; return true })
 	out, chave := a.abrir("sem_conexao")
-	if out["status"] != true || out["numero"] != "777" || a.idk.totalPosts() != 0 {
-		t.Fatalf("T12: devolve o existente sem POST: %+v (POSTs=%d)", out, a.idk.totalPosts())
+	if out["status"] != false || out["motivo"] != "em_andamento" || a.idk.totalPosts() != 0 || len(a.tr.chamadas) != 0 {
+		t.Fatalf("T12: recusa (não diz que abriu), sem POST e sem handoff: %+v (POSTs=%d)", out, a.idk.totalPosts())
 	}
 	if tk, _ := a.st.ObterTicket(context.Background(), chave); tk != nil {
 		t.Fatalf("nenhuma linha nova: %+v", tk)
@@ -444,7 +444,6 @@ func TestAbrir_ErrosDefinitivosDoInfodesk(t *testing.T) {
 		{"403 escopo", &infodesk.HTTPError{Status: 403, Code: infodesk.CodeForbidden}, "escopo_insuficiente", "chave_sem_escopo"},
 		{"401", &infodesk.HTTPError{Status: 401, Code: infodesk.CodeUnauthorized}, "escopo_insuficiente", "chave_sem_escopo"},
 		{"invalid reference", &infodesk.HTTPError{Status: 400, Code: infodesk.CodeInvalidReference}, "infodesk_indisponivel", AlertaConfiguracao},
-		{"conflict", &infodesk.HTTPError{Status: 409, Code: infodesk.CodeConflict}, "infodesk_indisponivel", AlertaConfiguracao},
 	}
 	for _, c := range casos {
 		a := novoAmb(t)
@@ -805,5 +804,56 @@ func TestAbrir_ConcorrenteComAMesmaChaveFazUmSoPost(t *testing.T) {
 		if !ok && !andamento {
 			t.Fatalf("resposta %d: %+v", i, r)
 		}
+	}
+}
+
+// Recusa definitiva (4xx): a mesma chave NÃO fica "em andamento" — nada foi criado.
+func TestAbrir_RecusaDefinitivaNaoViraEmAndamentoNoRetry(t *testing.T) {
+	a := novoAmb(t)
+	a.conversa(convTeste, telTeste)
+	a.identificadoPorCPF()
+	a.idk.postErr = &infodesk.HTTPError{Status: 400, Code: infodesk.CodeValidationError}
+	a.abrir("sem_conexao")
+	listagens := a.idk.listCalls
+	out, _ := a.abrir("sem_conexao")
+	if out["motivo"] != "infodesk_indisponivel" || a.idk.totalPosts() != 1 || a.idk.listCalls != listagens {
+		t.Fatalf("retry após 4xx: %+v (POSTs=%d)", out, a.idk.totalPosts())
+	}
+}
+
+// 409 pode significar "a conversa já tem ticket": o ticket pode existir → reconcilia.
+func TestAbrir_Conflict409EAmbiguoEReconcilia(t *testing.T) {
+	a := novoAmb(t)
+	a.conversa(convTeste, telTeste)
+	a.identificadoPorCPF()
+	a.idk.postErr = &infodesk.HTTPError{Status: 409, Code: infodesk.CodeConflict}
+	a.idk.listados = []infodesk.Ticket{ticketDoInfodesk(48500, convTeste, "x")}
+	out, _ := a.abrir("sem_conexao")
+	if out["status"] != true || out["numero"] != "48500" || a.idk.totalPosts() != 1 {
+		t.Fatalf("409: %+v", out)
+	}
+}
+
+// Sem createdAt não dá para provar que o ticket da conversa é o nosso.
+func TestAbrir_ReconciliacaoExigeCreatedAt(t *testing.T) {
+	a := novoAmb(t)
+	a.conversa(convTeste, telTeste)
+	a.identificadoPorCPF()
+	a.idk.postErr = &infodesk.ErroRede{Rota: "/x", Err: errors.New("timeout")}
+	a.idk.listados = []infodesk.Ticket{ticketJSON(map[string]any{"number": 1, "conversationId": convTeste})}
+	if out, _ := a.abrir("sem_conexao"); out["motivo"] != "infodesk_indisponivel" {
+		t.Fatalf("%+v", out)
+	}
+}
+
+// Consultar/listar não decidem posse por telefone vindo só do corpo.
+func TestConsultarEListar_ExigemConversaNoStore(t *testing.T) {
+	a := novoAmb(t) // sem semear a conversa
+	a.idk.tickets[4521] = ticketAlheio(4521, map[string]any{"contactPhone": telTeste})
+	if out := consultar(a, "4521"); out["motivo"] != "posse_nao_verificada" {
+		t.Fatalf("consultar: %+v", out)
+	}
+	if _, out := listar(a); out["motivo"] != "chamados_indisponiveis" {
+		t.Fatalf("listar: %+v", out)
 	}
 }

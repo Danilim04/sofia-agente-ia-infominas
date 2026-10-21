@@ -36,6 +36,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -46,6 +47,9 @@ type Handler struct {
 	log   *slog.Logger
 	d     Deps
 	op    Opcoes
+	// recusadas: chaves de idempotência que o Infodesk recusou de forma
+	// definitiva (4xx). Memória do processo; o store ainda não grava `falha`.
+	recusadas sync.Map
 }
 
 // New cria o handler. Sem Deps.Token a API recusa tudo.

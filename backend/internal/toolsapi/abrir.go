@@ -21,7 +21,16 @@ import (
 // handoff). O contexto é desligado do da requisição do cérebro: se o cérebro
 // desistir de esperar, o POST já enviado precisa terminar de ser registrado
 // (senão o ticket existiria no Infodesk sem linha `aberto` aqui).
-const abrirTeto = 60 * time.Second
+const abrirTeto = 25 * time.Second
+
+// Orçamento: o cérebro espera ~30 s por tool (INFODESK_TOOLS_TIMEOUT). Até o
+// POST e a reconciliação valem os 25 s acima; o handoff final tem a sua folga
+// (posTeto) para a conversa nunca ficar sem atendente por falta de prazo, e o
+// vínculo do solicitante (best-effort) não pode gastar mais que vinculoTeto.
+const (
+	posTeto     = 10 * time.Second
+	vinculoTeto = 5 * time.Second
+)
 
 // Origens de transferência próprias desta etapa (a engine trata origem
 // desconhecida com o texto genérico da nota).
@@ -104,12 +113,15 @@ func (h *Handler) handleAbrir(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Defesa (docs/infodesk/07 T12): a conversa já tem chamado vinculado. Não
-	// abre outro — devolve o existente como se fosse a repetição.
+	// abre outro e NÃO diz que abriu: recusa (sem handoff) para o LLM não
+	// anunciar um chamado que o cliente não confirmou. O `preparar` já devolve
+	// `chamado_aberto` com o número; chegar aqui é corrida/estado anômalo.
+	// TODO(T12): quando a Infominas disser o que o Desk faz nesse caso, revisar.
 	if c, err := h.d.Store.ObterConversa(ctx, a.conv); err != nil {
 		h.log.Error("abrir: ler conversa", "conversation_id", a.conv, "err", err)
 	} else if c != nil && c.TicketNumber > 0 {
 		h.log.Warn("abrir: a conversa já tem chamado; não abre outro (T12)", "conversation_id", a.conv, "numero", c.TicketNumber)
-		writeJSON(w, http.StatusOK, h.sucessoAbrir(ctx, a, c.TicketNumber))
+		responderRecusa(w, "em_andamento", txtEmAndamento)
 		return
 	}
 
@@ -198,6 +210,8 @@ func (h *Handler) vincularSolicitante(ctx context.Context, a *abertura) {
 	if a.contato == nil || a.contato.RequesterID == "" {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, vinculoTeto)
+	defer cancel()
 	if err := h.d.Infodesk.VincularSolicitante(ctx, a.conv, a.contato.RequesterID); err != nil {
 		h.log.Warn("abrir: vincular solicitante falhou; seguindo sem o vínculo", "conversation_id", a.conv, "erro", descreverErro(err))
 	}
@@ -222,7 +236,9 @@ func (h *Handler) sucessoAbrir(ctx context.Context, a *abertura, numero int) map
 	h.gravarNumeroNaConversa(ctx, a, numero)
 	transferido := false
 	if *h.op.TransferirAposTicket {
-		id := h.d.Transferidor.TransferirParaHumano(ctx, a.conv, engine.Transferencia{
+		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), posTeto)
+		defer cancel()
+		id := h.d.Transferidor.TransferirParaHumano(pctx, a.conv, engine.Transferencia{
 			Origem:  origemTicketAberto,
 			Causa:   "chamado aberto; atendente assume (TRANSFERIR_APOS_TICKET)",
 			Detalhe: "chamado nº " + strconv.Itoa(numero),
@@ -281,12 +297,22 @@ func (h *Handler) abrirRepetido(ctx context.Context, a *abertura) map[string]any
 	case l.Status == store.TicketFalha:
 		return h.indisponivelAoAbrir(ctx, a, "ticket desta chave já foi dado como falha")
 	}
+	// O Infodesk recusou esta chave de forma definitiva (4xx): nada foi criado e
+	// não há o que reconciliar nem o que "aguardar". Marcador em memória porque
+	// o store ainda não tem como gravar `falha` (TODO(E3.1-store)); após
+	// reinício vale a regra do TTL abaixo.
+	if _, recusada := h.recusadas.Load(a.chave); recusada {
+		return h.indisponivelAoAbrir(ctx, a, "o Infodesk recusou a abertura desta proposta")
+	}
 	// pendente: a primeira chamada ainda pode estar em curso, ou o POST ficou sem resposta.
 	tk, achou, err := h.reconciliar(ctx, a)
 	switch {
 	case achou:
 		return h.concluirAbertura(ctx, a, tk, true)
-	case err == nil && h.agora().Sub(l.CreatedAt) < h.op.TicketPendenteTTL:
+	case h.agora().Sub(l.CreatedAt) < h.op.TicketPendenteTTL:
+		if err != nil {
+			h.log.Warn("abrir: listagem falhou durante o TTL; segue em andamento", "conversation_id", a.conv, "erro", descreverErro(err))
+		}
 		return recusa("em_andamento", txtEmAndamento)
 	}
 	h.alertarPendente(a)
@@ -299,7 +325,11 @@ func (h *Handler) abrirRepetido(ctx context.Context, a *abertura) map[string]any
 // novo POST.
 func (h *Handler) falhaDoPOST(ctx context.Context, a *abertura, err error) map[string]any {
 	var he *infodesk.HTTPError
-	if errors.As(err, &he) && he.Status >= 400 && he.Status < 500 && he.Status != http.StatusTooManyRequests {
+	// 409 CONFLICT pode ser "a conversa já tem ticket" (T12): o ticket PODE
+	// existir, então é ambíguo e se resolve por listagem como o 5xx.
+	if errors.As(err, &he) && he.Status >= 400 && he.Status < 500 &&
+		he.Status != http.StatusTooManyRequests && he.Code != infodesk.CodeConflict {
+		h.recusadas.Store(a.chave, struct{}{})
 		h.log.Error("abrir: o Infodesk recusou o ticket", "conversation_id", a.conv, "status", he.Status, "code", he.Code,
 			"campos", camposCitados(he.Mensagem), "rota", he.Rota)
 		switch he.Code {
@@ -345,7 +375,9 @@ func (h *Handler) alertarPendente(a *abertura) {
 // sem ninguém: a conversa vai a um atendente pelo caminho único (aviso do
 // gateway + handoff com nota por código). Idempotente na engine.
 func (h *Handler) indisponivelAoAbrir(ctx context.Context, a *abertura, causa string) map[string]any {
-	h.d.Transferidor.TransferirParaHumano(ctx, a.conv, engine.Transferencia{
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), posTeto)
+	defer cancel()
+	h.d.Transferidor.TransferirParaHumano(pctx, a.conv, engine.Transferencia{
 		Origem:   origemTicketPendente,
 		Causa:    "não foi possível registrar o chamado: " + causa,
 		Mensagem: MsgFalhaAoAbrir,
@@ -392,7 +424,9 @@ func casaComAbertura(tk infodesk.Ticket, a *abertura, desde time.Time) bool {
 	}
 	criado := parseInstante(str(tk.Bruto, "createdAt"))
 	if tk.ConversationID == a.conv {
-		return criado.IsZero() || !criado.Before(desde)
+		// Sem `createdAt` não dá para distinguir de um ticket anterior da
+		// mesma conversa: não casa (o reconciliador/atendente resolvem).
+		return !criado.IsZero() && !criado.Before(desde)
 	}
 	if tk.ConversationID != "" {
 		return false
