@@ -147,8 +147,8 @@ func TestAcaoTransferirMapeiaOrigemESanitizaMotivo(t *testing.T) {
 		if !ok || tr.Origem != quer {
 			t.Errorf("origem %q → %+v ok=%v", origem, tr, ok)
 		}
-		if strings.ContainsAny(tr.Detalhe, "\n\x00") || len([]rune(tr.Detalhe)) > 200 {
-			t.Errorf("motivo mal higienizado: %q", tr.Detalhe)
+		if tr.Detalhe != "" || strings.Contains(tr.Causa, "xxx") {
+			t.Errorf("o motivo (texto do LLM) não pode ir ao registro: %+v", tr)
 		}
 	}
 	if _, ok := acaoTransferir([]map[string]any{{"tipo": "outra"}}); ok {
@@ -257,5 +257,72 @@ func TestAdaptadorInfodesk(t *testing.T) {
 	}
 	if m, err := tr.LerConversa(ctx, "c"); err != nil || m["id"] != "x" {
 		t.Fatalf("LerConversa: %v %v", m, err)
+	}
+}
+
+// Handoff com falha transitória repete até 2×; definitiva não repete.
+func TestHandoffRepeteSoEmFalhaTransitoria(t *testing.T) {
+	e, _, tr, _ := engineCompleta(t)
+	rel := comRelogioFalso(e)
+	tr.handoffErros = []error{&infodesk.HTTPError{Status: 503}, &infodesk.HTTPError{Status: 429, Code: infodesk.CodeRateLimited}}
+	e.TransferirParaHumano(context.Background(), "c-h1", Transferencia{Origem: OrigemCliente})
+	if len(tr.transferida("c-h1")) != 1 || len(rel.esperas) != 2 {
+		t.Fatalf("o 3º handoff devia passar: handoffs=%v esperas=%v", tr.transferida("c-h1"), rel.esperas)
+	}
+
+	e2, st2, tr2, _ := engineCompleta(t)
+	notif := comNotificadorFalso(e2)
+	tr2.handoffErros = []error{&infodesk.HTTPError{Status: 403, Code: infodesk.CodeForbidden}}
+	e2.TransferirParaHumano(context.Background(), "c-h2", Transferencia{Origem: OrigemCliente})
+	if len(tr2.transferida("c-h2")) != 0 || len(notif.doTipo("handoff_falhou")) != 1 {
+		t.Fatalf("definitivo não repete e alerta: %v %+v", tr2.transferida("c-h2"), notif.alertas)
+	}
+	if c, _ := st2.ObterConversa(context.Background(), "c-h2"); c == nil || c.Estado != store.EstadoTransferida {
+		t.Fatalf("o bot cala mesmo assim: %+v", c)
+	}
+}
+
+// Um atendente que assume ENQUANTO o aviso é enviado não tem a conversa
+// devolvida à fila: o handoff é cancelado e o estado do evento vence.
+func TestHandoffCanceladoSeHumanoAssumiuDuranteOAviso(t *testing.T) {
+	e, st, tr, _ := engineCompleta(t)
+	ctx := context.Background()
+	tr.aoEnviar = func() {
+		v := vistaDe("c-h3", infodesk.ConduzidaPorAtendente, time.Now().Add(time.Hour))
+		v.Atribuida = true
+		_, _ = e.AplicarConversa(ctx, v)
+	}
+	e.TransferirParaHumano(ctx, "c-h3", Transferencia{Origem: OrigemCliente})
+	if len(tr.transferida("c-h3")) != 0 {
+		t.Fatal("o atendente já conduz: nada de handoff")
+	}
+	if c, _ := st.ObterConversa(ctx, "c-h3"); c.HandledBy != "AGENT" || c.Estado != store.EstadoTransferida {
+		t.Fatalf("conversa: %+v", c)
+	}
+}
+
+// finished que chega durante o turno não é pisado pelo estado transferida.
+func TestMarcarEstadoNaoPisaEstadoAlheio(t *testing.T) {
+	e, st, _, _ := engineCompleta(t)
+	ctx := context.Background()
+	fim := vistaDe("c-h4", infodesk.ConduzidaPorBotExterno, time.Now().Add(time.Hour))
+	fim.Encerrada = true
+	_, _ = e.AplicarConversa(ctx, fim)
+	if e.marcarEstado(ctx, "c-h4", store.EstadoTransferida) {
+		t.Fatal("encerrada não vira transferida")
+	}
+	if c, _ := st.ObterConversa(ctx, "c-h4"); c.Estado != store.EstadoEncerrada {
+		t.Fatalf("estado: %+v", c)
+	}
+}
+
+// INTERNAL_BOT cala a Sofia mas não conta como "humano assumiu".
+func TestInternalBotCalaSemContarHumano(t *testing.T) {
+	e, _, _, _ := engineCompleta(t)
+	ctx := context.Background()
+	_, _ = e.AplicarConversa(ctx, vistaDe("c-h5", infodesk.ConduzidaPorBotExterno, t0))
+	res, _ := e.AplicarConversa(ctx, vistaDe("c-h5", infodesk.ConduzidaPorBotInterno, t0.Add(time.Minute)))
+	if res.Estado != store.EstadoTransferida || res.HumanoAssumiu || e.Vigia().Contagem("humano_assumiu_sem_handoff") != 0 {
+		t.Fatalf("INTERNAL_BOT: %+v", res)
 	}
 }

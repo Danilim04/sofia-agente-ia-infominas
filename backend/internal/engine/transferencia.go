@@ -11,6 +11,7 @@ import (
 
 	"bot-infominas/internal/alerta"
 	"bot-infominas/internal/brain"
+	"bot-infominas/internal/infodesk"
 	"bot-infominas/internal/store"
 )
 
@@ -172,17 +173,26 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 		e.send(ctx, convID, msg)
 	}
 
-	// Estado ANTES da chamada: mensagens que chegarem durante o handoff já
-	// encontram a conversa muda.
+	// Entre o aviso (pausas de bolha, rede) e o handoff um atendente pode ter
+	// assumido ou a conversa ter sido encerrada: não devolve à fila o que
+	// outro já conduz. O estado vai ANTES da chamada, para as mensagens que
+	// chegarem durante o handoff já encontrarem a conversa muda.
+	if !e.botConduz(ctx, convID) {
+		e.log.Info("handoff cancelado: a conversa deixou de ser do bot durante a transferência",
+			"id_ocorrencia", id, "conversation_id", convID)
+		return id
+	}
 	nota := e.montarNota(ctx, convID, t, id)
-	e.marcarEstado(ctx, convID, store.EstadoTransferida)
+	if !e.marcarEstado(ctx, convID, store.EstadoTransferida) {
+		return id
+	}
 
 	dept := strings.TrimSpace(e.cfg.DepartamentoHumanoPadrao)
 	if dept == "" {
 		e.log.Warn("transferir: DEPARTAMENTO_HUMANO_PADRAO vazio — handoff sem departamento (distribuição automática)",
 			"id_ocorrencia", id, "conversation_id", convID)
 	}
-	if err := e.tr.Handoff(ctx, convID, dept, nota); err != nil {
+	if err := e.handoffComRetry(ctx, convID, dept, nota); err != nil {
 		e.log.Error("transferir: handoff falhou; conversa fica muda localmente",
 			"id_ocorrencia", id, "conversation_id", convID, "departamento", dept, "err", err)
 		e.vigia.Aviso(alerta.TipoHandoffFalhou, "Handoff para o atendente falhou",
@@ -191,6 +201,26 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 	e.log.Info("conversa transferida para atendimento humano",
 		"id_ocorrencia", id, "conversation_id", convID, "origem", t.Origem, "departamento", dept)
 	return id
+}
+
+// handoffComRetry repete o handoff só em falha transitória (5xx, rede, 429):
+// ele é idempotente — ao contrário de POST /tickets — e, se falhar de vez, o
+// cliente fica sem ninguém até o vigia N1 (E3.3).
+func (e *Engine) handoffComRetry(ctx context.Context, convID, dept, nota string) error {
+	var err error
+	for tentativa := 0; ; tentativa++ {
+		if err = e.tr.Handoff(ctx, convID, dept, nota); err == nil {
+			return nil
+		}
+		if !infodesk.Transitorio(err) || tentativa >= len(e.esperasEnvio) {
+			return err
+		}
+		e.log.Warn("handoff transitório falhou; nova tentativa",
+			"conversation_id", convID, "tentativa", tentativa+1, "err", err)
+		if !e.dormir(ctx, e.esperasEnvio[tentativa]) {
+			return err
+		}
+	}
 }
 
 // motivosDaNota traduz a origem da transferência para o texto fixo da nota

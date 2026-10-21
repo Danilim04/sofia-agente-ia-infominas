@@ -37,15 +37,17 @@ type handoffFeito struct {
 // fakeInfodesk satisfaz Transporte sem rede, registrando o que a engine
 // pediu ao Infodesk (mensagens, handoffs, lookups).
 type fakeInfodesk struct {
-	mu          sync.Mutex
-	msgs        []msgEnviada
-	handoffs    []handoffFeito
-	enviarErr   error
-	handoffErr  error
-	enviarErros []error // falhas em sequência para EnviarMensagem (consumidas uma por chamada)
-	lookups     map[string]infodesk.Lookup
-	lookupErr   error
-	nLookups    int
+	mu           sync.Mutex
+	msgs         []msgEnviada
+	handoffs     []handoffFeito
+	enviarErr    error
+	handoffErr   error
+	enviarErros  []error // falhas em sequência para EnviarMensagem (consumidas uma por chamada)
+	handoffErros []error // idem para Handoff
+	aoEnviar     func()  // chamado dentro de EnviarMensagem (simula evento concorrente)
+	lookups      map[string]infodesk.Lookup
+	lookupErr    error
+	nLookups     int
 }
 
 func novoFakeInfodesk() *fakeInfodesk {
@@ -53,6 +55,9 @@ func novoFakeInfodesk() *fakeInfodesk {
 }
 
 func (f *fakeInfodesk) EnviarMensagem(_ context.Context, convID, texto string) error {
+	if f.aoEnviar != nil {
+		f.aoEnviar() // fora do lock: o gancho pode chamar a engine
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.enviarErros) > 0 {
@@ -70,6 +75,11 @@ func (f *fakeInfodesk) EnviarMensagem(_ context.Context, convID, texto string) e
 func (f *fakeInfodesk) Handoff(_ context.Context, convID, deptID, note string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if len(f.handoffErros) > 0 {
+		err := f.handoffErros[0]
+		f.handoffErros = f.handoffErros[1:]
+		return err
+	}
 	if f.handoffErr != nil {
 		return f.handoffErr
 	}

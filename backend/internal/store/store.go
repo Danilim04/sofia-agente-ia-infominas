@@ -39,8 +39,14 @@ const (
 	EstadoEncerrada   = "encerrada"   // episódio terminou
 )
 
-// NomeCursorInfodesk é o `eventos_cursor.nome` do feed GET /events.
-const NomeCursorInfodesk = "infodesk"
+// Nomes de `eventos_cursor`. O do reconciliador (feed GET /events, E3.3) só
+// avança depois de processar a página; o do webhook guarda o maior `seq` que
+// o webhook viu — serve de ponto de partida do reconciliador na 1ª execução e
+// NUNCA o faz pular um intervalo perdido.
+const (
+	NomeCursorInfodesk = "infodesk"
+	NomeCursorWebhook  = "infodesk_webhook"
+)
 
 // Conversa é uma linha de `conversas`. Zero values significam "nulo".
 type Conversa struct {

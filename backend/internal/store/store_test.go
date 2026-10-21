@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -497,5 +498,45 @@ func TestStorePostgresMigraDeliveryIDParaEventID(t *testing.T) {
 	}
 	if fresh, err := pg.MarkEvent(ctx, "evt_000000000123", 123); err != nil || !fresh {
 		t.Fatalf("evento novo: fresh=%v err=%v", fresh, err)
+	}
+}
+
+// TestStoreAtualizarConversaConcorrenteNaoPerdeEscrita: N atualizações
+// simultâneas de uma conversa NOVA (o caso em que SELECT FOR UPDATE não
+// trava) somam todas — nenhuma sobrescreve a outra.
+func TestStoreAtualizarConversaConcorrenteNaoPerdeEscrita(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			id := unico("conc")
+			const n = 12
+			var wg sync.WaitGroup
+			for i := 0; i < n; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := st.AtualizarConversa(ctx, id, func(c *Conversa, _ bool) bool {
+						c.TicketNumber++
+						return true
+					})
+					if err != nil {
+						t.Errorf("atualizar: %v", err)
+					}
+				}()
+			}
+			wg.Wait()
+			got, _ := st.ObterConversa(ctx, id)
+			if got == nil || got.TicketNumber != n {
+				t.Fatalf("esperava %d incrementos, veio %+v", n, got)
+			}
+			// fn que não grava numa conversa inexistente não deixa marcador.
+			outra := unico("fantasma")
+			if _, err := st.AtualizarConversa(ctx, outra, func(*Conversa, bool) bool { return false }); err != nil {
+				t.Fatal(err)
+			}
+			if c, _ := st.ObterConversa(ctx, outra); c != nil {
+				t.Fatalf("não podia ficar linha: %+v", c)
+			}
+		})
 	}
 }

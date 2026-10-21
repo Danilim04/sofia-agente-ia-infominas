@@ -89,7 +89,8 @@ func (e *Engine) AplicarConversa(ctx context.Context, v ConversaVista) (Resultad
 		case v.Handoff:
 			c.Estado = store.EstadoTransferida
 		case v.humanoConduz():
-			if c.Estado == store.EstadoBot {
+			// INTERNAL_BOT também cala a Sofia, mas não é "humano assumiu".
+			if c.Estado == store.EstadoBot && (v.Atribuida || v.HandledBy == infodesk.ConduzidaPorAtendente || v.HandledBy == infodesk.ConduzidaPorFila) {
 				res.HumanoAssumiu = true
 			}
 			c.Estado = store.EstadoTransferida
@@ -170,11 +171,18 @@ func (e *Engine) botConduz(ctx context.Context, convID string) bool {
 }
 
 // marcarEstado grava uma mudança de estado NOSSA (handoff feito, janela do
-// WhatsApp fechada). Usa o relógio local; eventos mais velhos que ele não
-// rebaixam o estado.
-func (e *Engine) marcarEstado(ctx context.Context, convID, estado string) {
+// WhatsApp fechada) e diz se gravou. Só transita a partir de `bot`: se um
+// evento concorrente (finished, assigned) já levou a conversa a outro estado,
+// ele vence e nada é regravado. Usa o relógio local; eventos mais velhos que
+// ele não rebaixam o estado.
+func (e *Engine) marcarEstado(ctx context.Context, convID, estado string) bool {
 	agora := e.agora()
+	gravou := false
 	_, err := e.st.AtualizarConversa(ctx, convID, func(c *store.Conversa, _ bool) bool {
+		if c.Estado != store.EstadoBot && c.Estado != "" {
+			return false
+		}
+		gravou = true
 		c.Estado = estado
 		if estado == store.EstadoEncerrada {
 			zerarEpisodio(c)
@@ -184,7 +192,13 @@ func (e *Engine) marcarEstado(ctx context.Context, convID, estado string) {
 	})
 	if err != nil {
 		e.log.Error("gravar estado da conversa", "conversation_id", convID, "estado", estado, "err", err)
+		return false
 	}
+	if !gravou {
+		e.log.Info("estado da conversa não regravado: outro evento já a tirou do bot",
+			"conversation_id", convID, "estado_pedido", estado)
+	}
+	return gravou
 }
 
 // registrarResposta guarda quando a Sofia respondeu (`ultima_resposta_em`):

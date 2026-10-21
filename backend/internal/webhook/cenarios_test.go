@@ -47,7 +47,7 @@ func TestRajadaViraUmTurno(t *testing.T) {
 		c.UltimaMsgID != "m-3" || c.UltimaRespostaEm.IsZero() || c.Telefone != telefoneTeste {
 		t.Fatalf("conversa gravada: %+v", c)
 	}
-	if seq, _ := a.st.Cursor(context.Background(), store.NomeCursorInfodesk); seq != a.seq {
+	if seq, _ := a.st.Cursor(context.Background(), store.NomeCursorWebhook); seq != a.seq {
 		t.Fatalf("eventos_cursor devia estar no maior seq (%d), veio %d", a.seq, seq)
 	}
 }
@@ -434,7 +434,7 @@ func TestDataErroAlerta(t *testing.T) {
 	if a.br.total() != 0 {
 		t.Fatal("evento ilegível não vira turno")
 	}
-	if seq2, _ := a.st.Cursor(context.Background(), store.NomeCursorInfodesk); seq2 != seq {
+	if seq2, _ := a.st.Cursor(context.Background(), store.NomeCursorWebhook); seq2 != seq {
 		t.Fatalf("o cursor avança mesmo assim (evento já dedupado): %d", seq2)
 	}
 }
@@ -534,5 +534,61 @@ func TestConversaIniciadaSoRegistra(t *testing.T) {
 	}
 	if a.br.total() != 0 || len(a.idk.mensagens("c-140")) != 0 {
 		t.Fatal("conversation.started não gera resposta")
+	}
+}
+
+// Grupo e canal que não é WhatsApp não criam estado local nem registram
+// ultima_msg_* (o vigia N1 da E3.3 leria isso).
+func TestGrupoECanalForaDoBotNaoCriamConversa(t *testing.T) {
+	a := novoAmbiente(t)
+	grupo := convJSON("c-150", "EXTERNAL_BOT", t0)
+	grupo["contact"] = map[string]any{"name": "Grupo", "phone": "", "groupJid": "120363@g.us"}
+	id, seq := a.proximo()
+	a.enviar(evt(id, seq, "message.received", t0, map[string]any{
+		"conversation": grupo, "message": msgJSON("m-g", "c-150", "CLIENT", "TEXT", "oi", t0, false)}))
+	chat := convJSON("c-151", "EXTERNAL_BOT", t0)
+	chat["channel"] = "CHAT"
+	id, seq = a.proximo()
+	a.enviar(evt(id, seq, "message.received", t0, map[string]any{
+		"conversation": chat, "message": msgJSON("m-c", "c-151", "CLIENT", "TEXT", "oi", t0, false)}))
+	if a.conversa("c-150") != nil || a.conversa("c-151") != nil {
+		t.Fatal("fora do escopo do bot não grava conversa")
+	}
+	// SYSTEM no WhatsApp: atualiza handled_by mas não conta como mensagem do cliente.
+	id, seq = a.proximo()
+	a.enviar(evt(id, seq, "message.received", t0, map[string]any{
+		"conversation": convJSON("c-152", "EXTERNAL_BOT", t0),
+		"message":      msgJSON("m-s", "c-152", "SYSTEM", "TEXT", "aviso", t0, false)}))
+	if c := a.conversa("c-152"); c == nil || c.UltimaMsgID != "" {
+		t.Fatalf("mensagem que não é turno não registra ultima_msg: %+v", c)
+	}
+}
+
+// O webhook NÃO mexe no cursor do reconciliador ("infodesk"): só no seu.
+func TestWebhookNaoAvancaOCursorDoReconciliador(t *testing.T) {
+	a := novoAmbiente(t)
+	a.enviar(a.deConversa("conversation.started", "c-160", "EXTERNAL_BOT", t0))
+	if seq, _ := a.st.Cursor(context.Background(), store.NomeCursorInfodesk); seq != 0 {
+		t.Fatalf("cursor do reconciliador não pode ser tocado pelo webhook: %d", seq)
+	}
+	if seq, _ := a.st.Cursor(context.Background(), store.NomeCursorWebhook); seq != a.seq {
+		t.Fatalf("cursor do webhook = %d, esperava %d", seq, a.seq)
+	}
+}
+
+// No desligamento os eventos ainda na fila em memória são desmarcados: já
+// receberam 200, mas o dedup de 7 dias os esconderia da reconciliação.
+func TestDesligamentoDevolveEventosPendentes(t *testing.T) {
+	a := novoAmbiente(t)
+	corpo := a.recebida("c-170", "m-1", "oi", t0)
+	if rec := a.entregar(corpo, "d"); rec.Code != http.StatusOK {
+		t.Fatalf("entrega: %d", rec.Code)
+	}
+	a.srv.devolverPendentes()
+	if len(a.srv.jobs) != 0 {
+		t.Fatal("fila devia esvaziar")
+	}
+	if rec := a.entregar(corpo, "d-reentrega"); rec.Code != http.StatusOK || len(a.srv.jobs) != 1 {
+		t.Fatalf("o evento devolvido precisa ser aceito de novo: %d fila=%d", rec.Code, len(a.srv.jobs))
 	}
 }

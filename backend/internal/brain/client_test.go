@@ -178,3 +178,19 @@ func TestChatRequestContatoNuloVaiComoNull(t *testing.T) {
 		t.Fatalf("contato nulo devia ser null no JSON: %s", b)
 	}
 }
+
+// Contato por telefone (lookup): cliente_id e nome_cadastro vão preenchidos e a
+// forma "telefone" é o valor novo do Contrato A.
+func TestChatRequestContatoPorTelefone(t *testing.T) {
+	cli, nome := "k1", "Maria Souza"
+	b, err := json.Marshal(ChatRequest{ConversationID: "c", Canal: "whatsapp", Mensagem: "oi", EstadoConversa: EstadoBot,
+		Contato: &Contato{Forma: FormaTelefone, ValorMascarado: "Maria S.", ClienteID: &cli, NomeCadastro: &nome}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, quer := range []string{`"forma":"telefone"`, `"valor_mascarado":"Maria S."`, `"cliente_id":"k1"`, `"nome_cadastro":"Maria Souza"`} {
+		if !strings.Contains(string(b), quer) {
+			t.Errorf("faltou %s em %s", quer, b)
+		}
+	}
+}

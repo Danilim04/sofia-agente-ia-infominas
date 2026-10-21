@@ -29,6 +29,25 @@ func (s *Server) Start(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
+	s.devolverPendentes()
+}
+
+// devolverPendentes, no desligamento, desmarca os eventos que ainda estavam
+// na fila em memória: já receberam 200, mas não foram processados, e o dedup
+// de 7 dias os esconderia da reconciliação.
+func (s *Server) devolverPendentes() {
+	for {
+		select {
+		case j := <-s.jobs:
+			if err := s.store.DesmarcarEvento(context.Background(), j.ev.ID); err != nil {
+				s.log.Error("desmarcar evento pendente no desligamento", "event_id", j.ev.ID, "err", err)
+			} else {
+				s.log.Warn("evento pendente devolvido no desligamento (o reconciliador o recupera)", "event_id", j.ev.ID, "seq", j.ev.Seq)
+			}
+		default:
+			return
+		}
+	}
 }
 
 func (s *Server) worker(ctx context.Context) {
@@ -59,12 +78,13 @@ func (s *Server) processarJob(base context.Context, j job) {
 // Processar trata UM evento (webhook ou feed): atualiza o estado local da
 // conversa, decide se há turno do cliente e aplica os eventos de ticket. É
 // síncrono e não deduplica — quem chama já passou por Receber. Ao final
-// avança `eventos_cursor` para o maior seq visto.
+// avança o cursor `infodesk_webhook` (maior seq visto pelo webhook); o cursor
+// `infodesk` é do reconciliador e só ele o avança.
 func (s *Server) Processar(ctx context.Context, ev infodesk.Evento) {
 	log := s.log.With("event", ev.Event, "event_id", ev.ID, "seq", ev.Seq)
 	defer func() {
 		if ev.Seq > 0 {
-			if err := s.store.AvancarCursor(ctx, store.NomeCursorInfodesk, ev.Seq); err != nil {
+			if err := s.store.AvancarCursor(ctx, store.NomeCursorWebhook, ev.Seq); err != nil {
 				log.Error("avançar eventos_cursor", "err", err)
 			}
 		}
@@ -182,18 +202,27 @@ func (s *Server) mensagemRecebida(ctx context.Context, ev infodesk.Evento, log *
 		log.Warn("message.received sem conversation/message legíveis; ignorada")
 		return
 	}
+	// Grupo e canal que não é WhatsApp não passam pelo bot: nem estado local
+	// (07 N5) — só log.
+	if c.Channel != infodesk.CanalWhatsApp || c.Contact.GroupJid != "" {
+		log.Info("message.received fora do escopo do bot", "conversation_id", c.ID, "motivo", naoETurno(c, m))
+		return
+	}
 	v, _ := vista(ev)
 	criada := m.CreatedAt
 	if criada.IsZero() {
 		criada = ev.CreatedAt
 	}
-	v.DoCliente, v.MsgID, v.MsgEm = m.DoCliente(), m.ID, criada
+	// Só um turno de verdade abre/reabre o episódio e registra ultima_msg_*
+	// (o vigia N1 lê isso); o resto só atualiza handled_by e o estado.
+	motivo := naoETurno(c, m)
+	v.DoCliente, v.MsgID, v.MsgEm = motivo == "", m.ID, criada
 	res, err := s.engine.AplicarConversa(ctx, v)
 	if err != nil {
 		log.Error("aplicar estado da conversa", "conversation_id", c.ID, "err", err)
 		return
 	}
-	if motivo := naoETurno(c, m); motivo != "" {
+	if motivo != "" {
 		log.Info("message.received não é turno do cliente", "conversation_id", c.ID, "motivo", motivo,
 			"estado", res.Estado)
 		return

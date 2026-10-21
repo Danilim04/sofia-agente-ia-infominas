@@ -168,20 +168,35 @@ func (o *ops) AtualizarConversa(ctx context.Context, id string, fn func(c *Conve
 
 	consulta := `SELECT ` + colunasConversa + ` FROM gw.conversas WHERE conversation_id = ?`
 	if o.pg {
+		// FOR UPDATE não trava linha que ainda não existe: duas transações
+		// criando a mesma conversa leriam "não existia" e a segunda
+		// sobrescreveria a primeira. O INSERT do marcador (estado '') faz a
+		// 2ª esperar o commit/rollback da 1ª; se fn não gravar, o rollback
+		// remove o marcador.
+		if _, err := tx.ExecContext(ctx, o.rebind(
+			`INSERT INTO gw.conversas (conversation_id, estado) VALUES (?, '') ON CONFLICT (conversation_id) DO NOTHING`), id); err != nil {
+			return Conversa{}, err
+		}
 		consulta += ` FOR UPDATE`
 	}
 	atual, err := lerConversa(tx.QueryRowContext(ctx, o.rebind(consulta), id))
-	existia := err == nil
+	existia := err == nil && atual.Estado != ""
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return Conversa{}, err
 		}
 		atual = &Conversa{ID: id}
 	}
+	if !existia {
+		atual = &Conversa{ID: id}
+	}
 	if !fn(atual, existia) {
 		return *atual, nil
 	}
 	atual.ID = id
+	if atual.Estado == "" {
+		atual.Estado = EstadoBot
+	}
 	if _, err := tx.ExecContext(ctx, o.rebind(
 		`INSERT INTO gw.conversas (`+colunasConversa+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (conversation_id) DO UPDATE SET

@@ -355,9 +355,10 @@ func (e *Engine) encaminhar(ctx context.Context, m Inbound, texto string, inicio
 	e.responder(ctx, convID, reply)
 }
 
-// acaoTransferir procura a 1ª ação `transferir` das `acoes` do cérebro. O
-// `motivo` do cérebro é DADO: vai só para o registro (curto, sem controle),
-// nunca para a nota do atendente nem para o cliente.
+// acaoTransferir procura a 1ª ação `transferir` das `acoes` do cérebro. Só a
+// `origem` (enum) é usada: o `motivo` do cérebro é texto de LLM que pode ecoar
+// fala do cliente (CPF, telefone) e por isso não vai a log, disco, nota nem
+// cliente (regra 5).
 func acaoTransferir(acoes []map[string]any) (Transferencia, bool) {
 	for _, a := range acoes {
 		if tipo, _ := a["tipo"].(string); tipo != "transferir" {
@@ -374,30 +375,12 @@ func acaoTransferir(acoes []map[string]any) (Transferencia, bool) {
 		default:
 			origem = OrigemAcao
 		}
-		motivo, _ := a["motivo"].(string)
 		return Transferencia{
-			Origem:  origem,
-			Causa:   "o cérebro pediu a transferência (" + origem + ")",
-			Detalhe: higienizarMotivo(motivo),
+			Origem: origem,
+			Causa:  "o cérebro pediu a transferência (" + origem + ")",
 		}, true
 	}
 	return Transferencia{}, false
-}
-
-// higienizarMotivo corta o texto do cérebro para o registro: sem controle e
-// com no máximo 200 caracteres.
-func higienizarMotivo(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return ' '
-		}
-		return r
-	}, s)
-	s = strings.TrimSpace(s)
-	if r := []rune(s); len(r) > 200 {
-		s = string(r[:200])
-	}
-	return s
 }
 
 // gravarClassificacao guarda a última `classificacao` do cérebro em
