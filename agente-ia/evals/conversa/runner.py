@@ -73,6 +73,8 @@ CAMINHOS_OK: Final[tuple[str, ...]] = (
     "ticket/consultar",
     "ticket/listar",
     "conversa/transferir",
+    "cadastro/preparar",
+    "cadastro/cadastrar",
 )
 FORMAS_ATALHO: Final[Mapping[str, str]] = {
     "telefone": "+55 31 9****-0000",

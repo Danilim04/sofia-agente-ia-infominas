@@ -1,0 +1,33 @@
+# Comportamento: mais de uma empresa com o nome digitado: o gateway devolve só os NOMES; a Sofia pergunta qual é a do cliente
+# e prepara de novo com o nome completo que ele escolher. O LLM nunca vê nem passa clientId.
+# Negativo: nenhum cadastro sai sem a empresa resolvida; o LLM não recebe identificador de cliente.
+id: conversa-082
+descricao: duas empresas candidatas, a Sofia mostra os nomes e só prepara depois da escolha do cliente
+sessao: {telefone: "+5531999990082", nome_contato: "Maria", contato: null}
+jev:
+  - {intencao: [outro, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [outro, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "Maria Souza, trabalho na ACME"
+    gateway: {cadastro/preparar: erro-empresa_ambigua}
+    llm:
+      - tool: preparar_cadastro_solicitante
+        args: {nome: "Maria Souza", empresa: "ACME"}
+      - texto: "Encontrei duas empresas com esse nome: ACME Ltda e ACME Brasil S.A. Qual é a sua?"
+    espera:
+      chama: [preparar_cadastro_solicitante]
+      nao_chama: [cadastrar_solicitante, abrir_chamado]
+      tool_viu_contem: ["empresa_ambigua", "ACME Brasil S.A."]
+      tool_viu_nao_contem: ["clientId", "cliente_id", '"id"']
+      contem: ["ACME Ltda", "ACME Brasil"]
+  - cliente: "ACME Ltda"
+    llm:
+      - tool: preparar_cadastro_solicitante
+        args: {nome: "Maria Souza", empresa: "ACME Ltda"}
+      - texto: "Obrigada! Vou cadastrar Maria Souza, da ACME Ltda. Posso cadastrar?"
+    espera:
+      chama: [preparar_cadastro_solicitante]
+      nao_chama: [cadastrar_solicitante, abrir_chamado]
+      gateway_json: {endpoint: /tools/infodesk/cadastro/preparar, campos: {empresa: "ACME Ltda", telefone: "+5531999990082"}}
+      gateway_nao_recebeu: [/tools/infodesk/cadastro/cadastrar]
+      contem: ["Posso cadastrar"]

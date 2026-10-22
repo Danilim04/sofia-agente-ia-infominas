@@ -1,0 +1,66 @@
+# Comportamento: telefone que o lookup não achou (contato: null) é cadastrado em duas fases (preparar → "sim" →
+# cadastrar) e só então prepara e abre o chamado (ADR 0009). O cadastro usa o telefone da sessão.
+# Negativo: nada é cadastrado nem aberto antes da confirmação; a Sofia não pede CPF; o chamado só é preparado depois do cadastro.
+id: conversa-080
+descricao: cliente desconhecido informa nome e empresa, confirma o cadastro e abre o chamado
+sessao: {telefone: "+5531999990080", nome_contato: "Maria", contato: null}
+jev:
+  - {intencao: [reclamacao_problema, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [outro, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [confirmacao, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [outro, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [confirmacao, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu e quero abrir um chamado"
+    llm:
+      - texto: "Poxa, vou te ajudar com isso. Antes preciso criar o seu cadastro: qual é o seu nome completo e o nome da sua empresa?"
+    espera:
+      nao_chama: [preparar_abertura_chamado, cadastrar_solicitante, abrir_chamado, informar_identificacao]
+      contem: ["nome completo", "empresa"]
+      nao_contem: ["CPF"]
+      prompt_contem: ["Cadastro do cliente", "NÃO informada"]
+  - cliente: "Maria Souza, da ACME Ltda. Meu e-mail é maria@acme.com.br"
+    llm:
+      - tool: preparar_cadastro_solicitante
+        args: {nome: "Maria Souza", empresa: "ACME Ltda", email: "maria@acme.com.br"}
+      - texto: "Obrigada, Maria! Vou cadastrar assim: Maria Souza, da ACME Ltda, e-mail maria@acme.com.br. Posso cadastrar?"
+    espera:
+      chama: [preparar_cadastro_solicitante]
+      nao_chama: [cadastrar_solicitante, abrir_chamado, preparar_abertura_chamado]
+      gateway_json: {endpoint: /tools/infodesk/cadastro/preparar, campos: {telefone: "+5531999990080", conversation_id: conv-conversa-080, nome: "Maria Souza", empresa: "ACME Ltda"}}
+      gateway_nao_recebeu: [/tools/infodesk/cadastro/cadastrar]
+      contem: ["Posso cadastrar"]
+  - cliente: "sim"
+    llm:
+      - tool: cadastrar_solicitante
+        args: {}
+      - texto: "Cadastro feito, Maria! Agora posso registrar a sua queda de internet. Posso preparar o chamado?"
+    espera:
+      chama: [cadastrar_solicitante]
+      nao_chama: [abrir_chamado, informar_identificacao]
+      gateway_json: {endpoint: /tools/infodesk/cadastro/cadastrar, campos: {telefone: "+5531999990080", conversation_id: conv-conversa-080, proposta.chave: "47065c9aa6eda48e147b541734fc27a1115a34e27bccd140f6b7eb8550b28a4f"}}
+      estado: {identificacao: {forma: cadastro, valor_mascarado: "Maria S."}}
+      nao_contem: ["CPF"]
+  - cliente: "pode"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão com a internet", descricao: "Cliente relata que a internet caiu."}
+      - texto: "Vou registrar assim: sem conexão com a internet. Posso abrir o chamado?"
+    espera:
+      chama: [preparar_abertura_chamado]
+      nao_chama: [abrir_chamado, informar_identificacao]
+      proposta_no_estado: true
+      gateway_json: {endpoint: /tools/infodesk/ticket/preparar, campos: {identificacao.forma: cadastro, telefone: "+5531999990080"}}
+      contem: ["Posso abrir"]
+  - cliente: "sim"
+    llm:
+      - tool: abrir_chamado
+        args: {}
+      - texto: "Pronto, Maria! Seu chamado é o 48213. A equipe responsável assume daqui."
+    espera:
+      chama: [abrir_chamado]
+      nao_chama: [cadastrar_solicitante]
+      gateway_recebeu: {endpoint: /tools/infodesk/ticket/abrir, chave_idempotencia: "*"}
+      gateway_vezes: {/tools/infodesk/cadastro/cadastrar: 0}
+      contem: ["48213"]
+      nao_contem: ["prazo"]
