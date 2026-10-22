@@ -1,34 +1,80 @@
 # PROPOSTA DE TAXONOMIA — À ESPERA DE DECISÃO DO DONO DO PRODUTO (E5.1, preparação).
 # NÃO é o arquivo em uso: `config/taxonomia.yaml` continua o placeholder (P1) e este arquivo
-# só vira `taxonomia.yaml` depois que as decisões de docs/plano/decisoes/taxonomia-proposta.md
-# forem respondidas. Mesmo formato (docs/plano/02-classificacao.md); carrega em
-# src.classificacao.taxonomia.carregar_taxonomia; conferido contra os nomes e ids reais do
-# Infodesk por tests/test_taxonomia_proposta.py (fixture tests/fixtures/infodesk_referencia.json).
+# só vira `taxonomia.yaml` quando a promoção for feita (docs/plano/decisoes/taxonomia-proposta.md).
+# Mesmo formato (docs/plano/02-classificacao.md); carrega em src.classificacao.taxonomia.carregar_taxonomia;
+# conferido contra os nomes e ids reais do Infodesk por tests/test_taxonomia_proposta.py
+# (fixture tests/fixtures/infodesk_referencia.json).
 #
-# O que já está DECIDIDO (dono do produto, 2026-10-22): a Sofia abre TODO chamado na mesa
-# "Abertura de Ticket" (entrada única, triagem humana); a classificação define prioridade e
-# item/área, não a mesa. Por isso toda categoria tem a mesma `mesa`.
+# DECIDIDO pelo dono do produto (2026-10-22):
+# - a Sofia abre TODO chamado na mesa "Abertura de Ticket" (entrada única, triagem humana);
+# - as categorias são as do próprio Infodesk: as 17 ÁREAS do catálogo dessa mesa, sem juntar,
+#   separar nem inventar categoria. O nome de cada categoria é a área, escrito em snake_case sem
+#   acento (o comentário "Área do catálogo" traz o nome exato; o teste confere).
 #
 # Fatos do Infodesk em que a proposta se apoia (inventário de 2026-10-21):
 # - A mesa "Abertura de Ticket" só tem as prioridades "Alta" e "Baixa" (NÃO tem "Media" nem
-#   "Crítica"). Daí o bloco `prioridades` no fim: `media` e `urgente` não têm nome exato na mesa.
-# - Seu catálogo é o mestre (399 itens, visão do técnico, 17 áreas). Nenhum item é inequívoco para
-#   uma categoria abaixo (cada categoria agrupa vários itens), então `catalogo` fica omitido
-#   (`requireTicketFields` está desligado: o item é opcional). Áreas/itens candidatos por
-#   categoria: docs/plano/decisoes/taxonomia-proposta.md.
+#   "Crítica"). Daí o bloco `prioridades` no fim.
+# - O ticket só aceita `catalogItemId` (item), não área. Como cada categoria é uma área inteira
+#   (vários itens), `catalogo` fica omitido e a triagem humana escolhe o item (`requireTicketFields`
+#   está desligado: o item é opcional).
+# - O catálogo não tem área financeira nem comercial: boleto, cobrança e preço de serviço caem em
+#   `indefinida` (reclamação: esclarece uma vez e transfere; pedido de informação: sem esclarecimento,
+#   transferência só se o LLM chamar a tool). Ver Q6 no documento de decisões.
 # - Departamentos de chat existentes: "Técnicos", "Administrativo / Financeiro", "Comercial".
 #
-# Tudo que não sai dos dados está marcado "DECISÃO PENDENTE" com a pergunta (Q<n>) que o destrava.
-# As categorias vêm do que o cliente escreve no WhatsApp (32 casos reais parafraseados em
-# evals/conversa/pendentes/), não do catálogo do técnico; os exemplos são desses casos.
-placeholder: true          # PROPOSTA: não remover até o dono decidir (Q1–Q5) e a proposta virar taxonomia.yaml
+# `exemplos` vêm dos casos reais (evals/conversa/) onde existem; nas áreas sem caso real nos 32
+# são os NOMES DE ITEM do próprio catálogo do Infodesk. O que não saiu dos dados está marcado
+# "DECISÃO PENDENTE" com a pergunta (Q<n>) que o destrava.
+placeholder: true          # PROPOSTA: não remover até a promoção a taxonomia.yaml (docs/plano/decisoes/taxonomia-proposta.md)
 versao: 2026-10-22-proposta
 mesa_triagem: "Abertura de Ticket"          # decidido em 2026-10-22 (mesa única); destino de 'indefinida'
-departamento_humano_padrao: "Técnicos"      # DECISÃO PENDENTE (P11/D1): "Técnicos" é a proposta de docs/infodesk/10 §8 (5) e a de maior volume nos casos reais — Q2
+departamento_humano_padrao: "Técnicos"      # DECISÃO PENDENTE (P11/D1): "Técnicos" é a proposta de docs/infodesk/10 §8 (5); quase todas as áreas do catálogo são técnicas — Q2
 
 categorias:
-  internet_rede:
-    descricao: "Internet ou rede da empresa com problema: sem acesso, lenta ou caindo e voltando; link fora; uma ou todas as estações sem conexão"
+  microsoft_365:
+    # Área do catálogo: Microsoft 365
+    descricao: "Microsoft 365: e-mail e Outlook, Teams e reuniões, OneDrive e SharePoint, usuário, senha ou MFA bloqueado"
+    exemplos:
+      - "não estou conseguindo enviar e-mail"
+      - "fica na caixa de saída e não sai nada"
+      - "Outlook não abre"
+      - "Teams não abre"
+      - "OneDrive não sincroniza"
+    nao_e:
+      - "Gmail ou conta Google"
+      - "a internet está fora"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
+
+  google_workspace:
+    # Área do catálogo: Google Workspace
+    descricao: "Google Workspace: Gmail, conta Google, Drive e Agenda"
+    exemplos:
+      - "Gmail não envia"
+      - "Gmail não recebe"
+      - "conta Google bloqueada"
+      - "Drive indisponível"
+    nao_e:
+      - "Outlook ou Microsoft 365"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
+
+  firewall:
+    # Área do catálogo: Firewall
+    descricao: "Firewall e VPN: VPN que não conecta ou não dá acesso, site ou aplicação bloqueados, túnel entre filiais, regras e publicação de serviço"
+    exemplos:
+      - "a VPN não conecta de casa, fico girando e dá erro"
+      - "só na VPN dá erro, o resto da internet de casa funciona normal"
+      - "site bloqueado indevidamente"
+      - "túnel site-to-site indisponível"
+    nao_e:
+      - "a internet inteira está fora ou lenta"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
+
+  redes:
+    # Área do catálogo: Redes
+    descricao: "Internet e rede da empresa: sem internet, lenta ou caindo, link fora, Wi-Fi, DNS, DHCP, switch e pontos de rede"
     exemplos:
       - "aqui no escritório a internet caiu e ninguém consegue trabalhar"
       - "a internet tá muito lenta hoje, as páginas demoram demais pra abrir"
@@ -40,110 +86,182 @@ categorias:
       - "só a pasta compartilhada ou o servidor está lento"
       - "só o e-mail não envia"
     mesa: "Abertura de Ticket"
-    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): problema técnico → equipe técnica; os casos reais de rede vão todos para suporte
-    # Catálogo (área): Redes — candidatos "Sem internet", "Internet lenta", "Rede lenta"; vários itens → omitido (Q4)
-    # Prioridade: sem piso proposto; "tudo parado" é o caso típico de Alta (Q3)
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
 
-  vpn:
-    descricao: "VPN ou acesso remoto à rede da empresa não conecta, dá erro ou fica girando"
+  servidores:
+    # Área do catálogo: Servidores
+    descricao: "Servidores Windows, Linux e VMs, Active Directory, compartilhamentos e pastas de rede"
     exemplos:
-      - "a VPN não conecta de casa, fico girando e dá erro"
-      - "só na VPN dá erro, o resto da internet de casa funciona normal"
+      - "o servidor da empresa fica reiniciando sozinho o tempo todo, preciso de alguém olhando"
+      - "o acesso à pasta compartilhada está muito lento"
+      - "servidor indisponível"
+      - "compartilhamento inacessível"
     nao_e:
-      - "a internet inteira está fora ou lenta"
+      - "a internet da empresa está fora ou lenta"
+      - "computador de uma pessoa lento ou que não liga"
     mesa: "Abertura de Ticket"
-    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): é rede/segurança, atendimento técnico
-    # Catálogo (área): Firewall — candidato "VPN não conecta", mas a categoria também cobre "VPN lenta"/"usuário bloqueado" → omitido (Q4)
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
 
-  computador:
-    descricao: "Computador ou notebook com problema: lento, travando, demora para ligar ou não liga"
+  backup:
+    # Área do catálogo: Backup (sem caso real nos 32: exemplos = itens do catálogo)
+    descricao: "Backup: falha ou não execução do backup, repositório cheio, restauração de arquivo, VM ou banco"
+    exemplos:
+      - "backup falhou"
+      - "backup não executou"
+      - "preciso restaurar um arquivo"
+      - "repositório cheio"
+    nao_e:
+      - "arquivo que sumiu de um computador sem backup envolvido"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
+
+  seguranca:
+    # Área do catálogo: Segurança (sem caso real nos 32: exemplos = itens do catálogo)
+    descricao: "Segurança: malware, antivírus e EDR, phishing, spam, ransomware"
+    exemplos:
+      - "malware detectado"
+      - "recebi um phishing"
+      - "o EDR bloqueou uma aplicação"
+      - "dispositivo sem proteção"
+    nao_e:
+      - "e-mail que não envia ou não recebe"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
+
+  computadores:
+    # Área do catálogo: Computadores
+    descricao: "Computador ou notebook: não liga, lento, tela azul, Windows não inicia, sem imagem, formatação, instalação de computador novo"
     exemplos:
       - "meu computador tá travando toda hora e demora uns cinco minutos pra ligar"
       - "o notebook da recepção não liga mais"
+      - "tela azul"
+      - "Windows não inicia"
     nao_e:
       - "a internet ou a rede está lenta para todo mundo"
       - "impressora que não imprime"
       - "o servidor da empresa"
     mesa: "Abertura de Ticket"
-    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte a estação de trabalho
-    # Catálogo (área): Computadores — "Computador lento", "Computador não liga", "Tela azul"...; vários itens → omitido (Q4)
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
 
-  impressora:
-    descricao: "Impressora ou scanner que não imprime, não digitaliza ou mostra erro"
+  impressoras:
+    # Área do catálogo: Impressoras
+    descricao: "Impressora ou scanner: offline, não imprime, não digitaliza, papel atolando, driver com erro, instalação e compartilhamento"
     exemplos:
       - "a impressora do setor parou de imprimir e aparece uma mensagem de erro no visor"
+      - "scanner não funciona"
+      - "papel atolando"
     nao_e:
       - "computador lento ou travando"
     mesa: "Abertura de Ticket"
-    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte a periférico
-    # Catálogo (área): Impressoras — "Não imprime", "Impressora offline"...; vários itens → omitido (Q4)
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
 
-  email:
-    descricao: "E-mail que não envia, não recebe ou não abre (caixa de saída parada, erro no Outlook ou no webmail)"
+  telefonia:
+    # Área do catálogo: Telefonia (sem caso real nos 32: exemplos = itens do catálogo)
+    descricao: "Telefonia e ramais: ramal que não registra, chamada que cai, sem áudio, não recebe ou não realiza ligação, fila, URA"
     exemplos:
-      - "não estou conseguindo enviar e-mail"
-      - "fica na caixa de saída e não sai nada"
+      - "ramal não registra"
+      - "a chamada cai"
+      - "não recebe ligação"
+      - "sem áudio na chamada"
     nao_e:
-      - "a internet está fora"
-      - "senha esquecida ou acesso bloqueado do computador ou do usuário"
+      - "áudio ou vídeo do Teams"
     mesa: "Abertura de Ticket"
-    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte a e-mail corporativo
-    # Catálogo (áreas): Microsoft 365 ("Não envia e-mails"...) e Google Workspace ("Gmail não envia"...) — o cliente não diz qual → omitido (Q4)
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
 
-  servidor_arquivos:
-    descricao: "Servidor da empresa ou pastas compartilhadas com problema: servidor desligando ou reiniciando sozinho, sem acesso, pasta de rede lenta ou inacessível"
+  softwares:
+    # Área do catálogo: Softwares (sem caso real nos 32: exemplos = itens do catálogo)
+    descricao: "Softwares e sistemas: ERP que não abre, sistema lento, erro de licença, falha de atualização, Java, instalação de programa"
     exemplos:
-      - "o servidor da empresa fica reiniciando sozinho o tempo todo, preciso de alguém olhando"
-      - "o acesso à pasta compartilhada está muito lento"
+      - "ERP não abre"
+      - "o sistema está lento"
+      - "erro de licença"
+      - "a aplicação fecha sozinha"
     nao_e:
-      - "a internet da empresa está fora ou lenta"
-      - "computador de uma pessoa lento ou que não liga"
+      - "computador inteiro lento"
+      - "Outlook, Teams ou OneDrive"
     mesa: "Abertura de Ticket"
-    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): infraestrutura, atendimento técnico
-    # Catálogo (área): Servidores — "Servidor indisponível", "Compartilhamento inacessível"...; vários itens → omitido (Q4)
-    # Prioridade: servidor parado é caso típico de Alta, sem piso proposto (Q3)
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
 
-  acesso_senha:
-    descricao: "Acesso bloqueado, senha esquecida ou usuário que não consegue entrar (computador, e-mail ou sistema)"
+  monitoramento:
+    # Área do catálogo: Monitoramento (sem caso real nos 32: exemplos = itens do catálogo)
+    descricao: "Monitoramento: alertas de disco, CPU, memória, host offline ou backup; ativos no monitoramento, política de patch"
     exemplos:
-      - "o acesso da minha colega está bloqueado, ela não consegue entrar"
-      - "no computador, pede uma senha que ela não lembra"
+      - "alerta de disco crítico"
+      - "alerta de host offline"
+      - "alerta de CPU alta"
     nao_e:
-      - "pedir para a Sofia informar a senha de outra pessoa ou de uma máquina de terceiros"
-      - "e-mail que não envia ou não recebe"
+      - "backup que falhou sem alerta"
     mesa: "Abertura de Ticket"
-    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): reset/desbloqueio é feito pela equipe técnica
-    # Catálogo: sem área inequívoca (a conta pode ser do computador/AD, do Microsoft 365 ou do Google) → omitido (Q4)
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
 
-  financeiro:
-    descricao: "Assunto financeiro: cobrança duplicada ou errada na fatura, boleto, 2ª via, pagamento"
+  cloud:
+    # Área do catálogo: Cloud (sem caso real nos 32: exemplos = itens do catálogo)
+    descricao: "Cloud: VM no Azure, DNS e túnel Cloudflare, aplicação na nuvem indisponível, certificado expirado"
     exemplos:
-      - "veio cobrança duas vezes na fatura desse mês, preciso que corrijam"
-      - "preciso do boleto desse mês, pode me mandar?"
+      - "VM Azure indisponível"
+      - "DNS Cloudflare incorreto"
+      - "aplicação cloud indisponível"
     nao_e:
-      - "orçamento ou preço de serviço novo"
-      - "problema técnico em serviço contratado"
+      - "servidor local da empresa"
     mesa: "Abertura de Ticket"
-    departamento: "Administrativo / Financeiro"   # DECISÃO PENDENTE (P11/D1): o nome do departamento é financeiro; 'Técnicos' não trata cobrança
-    # Catálogo: o catálogo da mesa não tem nenhum item financeiro → omitido
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
 
-  comercial:
-    descricao: "Assunto comercial: orçamento, proposta, preço ou contratação de serviço ou projeto novo"
+  banco_de_dados:
+    # Área do catálogo: Banco de Dados (sem caso real nos 32: exemplos = itens do catálogo)
+    descricao: "Banco de dados: banco indisponível ou lento, erro de conexão, serviço parado, restore, usuário e permissão"
+    exemplos:
+      - "banco indisponível"
+      - "erro de conexão com o banco"
+      - "banco lento"
+    nao_e:
+      - "sistema ou ERP que não abre"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
+
+  certificados_digitais:
+    # Área do catálogo: Certificados Digitais (sem caso real nos 32: exemplos = itens do catálogo)
+    descricao: "Certificado digital e token: não reconhecido, erro em assinatura, erro no PJe ou e-CAC, instalação e renovação"
+    exemplos:
+      - "certificado não reconhecido"
+      - "token não reconhecido"
+      - "erro em assinatura digital"
+    nao_e:
+      - "certificado expirado de servidor na nuvem"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte técnico
+
+  projetos:
+    # Área do catálogo: Projetos
+    descricao: "Projetos: implantação, migração, cabeamento estruturado, documentação do ambiente, inventário de TI, LGPD"
     exemplos:
       - "queria saber quanto fica pra montar a rede de uma loja nova com 12 pontos"
+      - "cabeamento estruturado"
+      - "implantação de firewall"
     nao_e:
-      - "cobrança ou boleto"
       - "problema em serviço que já funciona"
     mesa: "Abertura de Ticket"
-    departamento: "Comercial"   # DECISÃO PENDENTE (P11/D1): o único departamento de vendas/propostas
-    # Catálogo (áreas): Projetos e Consultoria têm itens parecidos, nenhum inequívoco → omitido (Q4)
+    departamento: "Comercial"   # DECISÃO PENDENTE (P11/D1): projeto novo é proposta/orçamento; o único departamento de vendas é Comercial
+
+  consultoria:
+    # Área do catálogo: Consultoria (sem caso real nos 32: exemplos = itens do catálogo)
+    descricao: "Consultoria: assessment de TI e de segurança, plano diretor, roadmap, auditoria de ambiente, análise de riscos"
+    exemplos:
+      - "assessment de TI"
+      - "auditoria de ambiente"
+      - "plano diretor de TI"
+    nao_e:
+      - "problema em serviço que já funciona"
+    mesa: "Abertura de Ticket"
+    departamento: "Comercial"   # DECISÃO PENDENTE (P11/D1): consultoria é serviço novo; o único departamento de vendas é Comercial
 
   indefinida:
-    descricao: "Não foi possível determinar: mensagem vaga, só saudação, áudio ou imagem sem texto, ou assunto que não cabe nas categorias acima"
+    descricao: "Não foi possível determinar: mensagem vaga, só saudação, áudio ou imagem sem texto, ou assunto que não é uma área do catálogo (por exemplo boleto, cobrança ou preço)"
     exemplos:
       - "oi, preciso de ajuda"
       - "[áudio]"
       - "[imagem] olha o erro que apareceu"
+      - "veio cobrança duas vezes na fatura desse mês, preciso que corrijam"
+      - "preciso do boleto desse mês, pode me mandar?"
     nao_e: []
     mesa: "Abertura de Ticket"
     departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): igual ao departamento_humano_padrao proposto (Q2)

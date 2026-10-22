@@ -1,6 +1,6 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). E-mail não envia: o placeholder (P1) não tem categoria de e-mail, então o JEV devolve 'indefinida'.
 # RESULTADO ESPERADO COM O PLACEHOLDER: esclarece uma vez e transfere. Com a categoria `email` da proposta deveria abrir chamado.
-# Destrava: Q1 (categoria email). Hoje descreve o comportamento SEM categoria; com ela o esperado muda (abre chamado), então reescrever o cenário depois da aprovação, não só mover.
+# Destrava: Q2–Q4 e reescrita. Hoje descreve o comportamento SEM categoria; com a área `microsoft_365` ("Não envia e-mails") o esperado muda (abre chamado), então reescrever o cenário na promoção, não só mover.
 id: conversa-120
 descricao: 'e-mail que não envia sem categoria na taxonomia: esclarece uma vez e transfere'
 sessao:

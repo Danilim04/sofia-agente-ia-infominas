@@ -89,22 +89,23 @@ externo. Para o piloto:
 |---|---|
 | Departamento padrão (`DEPARTAMENTO_HUMANO_PADRAO`) | `Técnicos` |
 | Cada departamento tem atendentes ativos? | conferir em *Grupos de serviço*: handoff para departamento sem membros fica na fila sem notificar ninguém |
-| Departamento por categoria | a coluna "Departamento proposto" da taxonomia proposta: técnico em `Técnicos`, `financeiro` em `Administrativo / Financeiro`, `comercial` em `Comercial` |
+| Departamento por categoria | a coluna "Departamento proposto" da taxonomia proposta: as áreas técnicas em `Técnicos`, `projetos` e `consultoria` em `Comercial`; boleto/cobrança não têm área no catálogo e vão ao padrão (ver A6, Q6) |
 
 ### A6. Taxonomia real (P1, E5.1)
 
-As quatro perguntas da [taxonomia proposta](decisoes/taxonomia-proposta.md):
+As perguntas da [taxonomia proposta](decisoes/taxonomia-proposta.md). Q1 já está decidida: as categorias são as 17 áreas do catálogo do Infodesk (decisão de 2026-10-22).
 
 | Pergunta | Recomendação |
 |---|---|
-| Q1. As nove categorias estão certas? | aprovar como estão; ampliar só com evidência do histórico |
+| Q1. Categorias | **decidida**: as 17 áreas do catálogo de "Abertura de Ticket" + `indefinida` |
 | Q2. Departamento por categoria e padrão | ver A5 |
 | Q3. A mesa "Abertura de Ticket" só tem prioridades `Alta` e `Baixa` | `media` sem `priorityId` (a triagem escolhe); `urgente` como `Alta`; sem piso por categoria |
 | Q4. Item de catálogo no ticket | omitir; a triagem humana escolhe |
+| Q6. O catálogo não tem área financeira nem comercial de planos: boleto, cobrança e preço caem em `indefinida` e vão ao departamento padrão | seguir só o catálogo; se o volume financeiro justificar, pedir à Infominas uma área financeira no catálogo |
 
 **Depois de decidir:** um PR promove `taxonomia.proposta.yaml` a
-`taxonomia.yaml`, remapeia os testes e os 22 cenários reais parados em
-`evals/conversa/pendentes/`, e liga `STRICT_TAXONOMIA=true`. É a única
+`taxonomia.yaml`, remapeia os testes e os 21 cenários reais parados em
+`evals/conversa/pendentes/` (2 precisam de reescrita pela Q6 e 2 dependem da E5.3), e liga `STRICT_TAXONOMIA=true`. É a única
 decisão que gera um PR de tamanho médio.
 
 ## B. Comportamento da Sofia (pode ajustar durante o piloto)

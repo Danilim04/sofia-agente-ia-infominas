@@ -1,5 +1,5 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Cobrança duplicada: categoria financeira (departamento do handoff vem da taxonomia, nunca do LLM).
-# Destrava: Q1 — aprovar as categorias de config/taxonomia.proposta.yaml e promovê-la a taxonomia.yaml; depois `git mv` para evals/conversa/.
+# Destrava: Q6. O catálogo do Infodesk não tem área financeira: a categoria `financeiro` deste cenário não existe na proposta e o caso cai em `indefinida` (reclamação: esclarece uma vez e transfere ao departamento padrão). Só vale se o dono criar a categoria; senão reescrever o esperado.
 id: conversa-108
 descricao: cobrança duplicada vira chamado da categoria financeiro
 sessao:
