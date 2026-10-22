@@ -1,4 +1,5 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Contato comercial (plano/preço): vai para a equipe comercial por código; a Sofia não inventa preço.
+# Destrava: Q1 (categoria comercial) e Q2 (departamento por categoria). Limitação de produto, não corrigida aqui: a categoria só é fixada quando a intenção é reclamacao_problema (src/classificacao/tipos.py), então o xfail permanece mesmo com as decisões.
 id: conversa-153
 descricao: pergunta comercial é encaminhada à equipe e a Sofia não informa valores
 sessao:
@@ -7,7 +8,7 @@ sessao:
   contato: telefone
 jev:
 - intencao: [duvida_informacao, 0.85]
-  categoria: [duvida_planos, 0.9]
+  categoria: [comercial, 0.9]
   prioridade: [0, 0.7]
   frustracao: [0, 0.9]
   malicioso: 0.01
@@ -26,7 +27,7 @@ turnos:
     nao_chama: [abrir_chamado, preparar_abertura_chamado]
     nao_contem: [R$]
     classificacao:
-      categoria: duvida_planos
+      categoria: comercial
 xfail: 'Limitação real: a categoria só é fixada quando a intenção é reclamacao_problema (INTENCOES_COM_CATEGORIA
   em src/classificacao/tipos.py). Dúvida/pedido comercial ou financeiro chega à transferência com categoria ''indefinida'',
   então o gateway não escolhe o departamento Comercial/Financeiro pela taxonomia (cai no departamento padrão, P11).'
