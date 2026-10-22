@@ -1,19 +1,20 @@
-# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Queda intermitente: instabilidade tem piso de prioridade média.
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Queda intermitente: mesma categoria de internet_rede (o cliente não separa 'caiu' de 'oscila').
+# Destrava: Q1 — aprovar as categorias de config/taxonomia.proposta.yaml e promovê-la a taxonomia.yaml; depois `git mv` para evals/conversa/.
 id: conversa-102
-descricao: internet que cai e volta vira chamado de instabilidade
+descricao: internet que cai e volta vira chamado da categoria internet_rede
 sessao:
   telefone: '+5531999990102'
   nome_contato: Edu
   contato: telefone
 jev:
 - intencao: [reclamacao_problema, 0.93]
-  categoria: [instabilidade, 0.88]
+  categoria: [internet_rede, 0.88]
   prioridade: [1, 0.7]
   frustracao: [1, 0.8]
   malicioso: 0.02
   fora_de_escopo: 0.02
 - intencao: [confirmacao, 0.95]
-  categoria: [instabilidade, 0.9]
+  categoria: [internet_rede, 0.9]
   prioridade: [2, 0.7]
   frustracao: [0, 0.8]
   malicioso: 0.01
@@ -34,7 +35,7 @@ turnos:
     transfere: false
     contem: [Posso abrir]
     classificacao:
-      categoria: instabilidade
+      categoria: internet_rede
 - cliente: sim
   llm:
   - tool: abrir_chamado

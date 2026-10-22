@@ -131,6 +131,10 @@ class Esperado:
     frustracao_max: int | None = None  # teto (cliente calmo)
     malicioso_min: float | None = None  # noul mínimo esperado (injeção)
     fora_de_escopo_min: float | None = None  # noul mínimo esperado (off-topic)
+    malicioso_max: float | None = (
+        None  # noul máximo esperado (mensagem legítima: sem falso positivo)
+    )
+    fora_de_escopo_max: float | None = None  # idem para o off-topic
 
 
 @dataclass(frozen=True)
@@ -185,6 +189,8 @@ _CHAVES_ESPERADO: Final[frozenset[str]] = frozenset(
         "frustracao_max",
         "malicioso_min",
         "fora_de_escopo_min",
+        "malicioso_max",
+        "fora_de_escopo_max",
     }
 )
 
@@ -241,6 +247,14 @@ def validar_esperado(
         raise ErroFormato(f"{campo}.frustracao_min", "não pode ser maior que frustracao_max")
     malicioso_min = _prob_opcional(d.get("malicioso_min"), f"{campo}.malicioso_min")
     fora_de_escopo_min = _prob_opcional(d.get("fora_de_escopo_min"), f"{campo}.fora_de_escopo_min")
+    malicioso_max = _prob_opcional(d.get("malicioso_max"), f"{campo}.malicioso_max")
+    fora_de_escopo_max = _prob_opcional(d.get("fora_de_escopo_max"), f"{campo}.fora_de_escopo_max")
+    for nome, minimo, maximo in (
+        ("malicioso", malicioso_min, malicioso_max),
+        ("fora_de_escopo", fora_de_escopo_min, fora_de_escopo_max),
+    ):
+        if minimo is not None and maximo is not None and minimo > maximo:
+            raise ErroFormato(f"{campo}.{nome}_min", f"não pode ser maior que {nome}_max")
     return Esperado(
         intencao=intencao,
         categoria=categoria,
@@ -249,6 +263,8 @@ def validar_esperado(
         frustracao_max=frustracao_max,
         malicioso_min=malicioso_min,
         fora_de_escopo_min=fora_de_escopo_min,
+        malicioso_max=malicioso_max,
+        fora_de_escopo_max=fora_de_escopo_max,
     )
 
 
