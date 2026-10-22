@@ -796,10 +796,14 @@ func TestStoreCadastroPropostaIdempotenciaETentativas(t *testing.T) {
 			if c.Status != CadastroFeito || c.RequesterID != "r1" || !c.Criado {
 				t.Fatalf("depois de concluir: %+v", c)
 			}
+			// Concluir zera nome e e-mail em claro (E4.5 I2); o resto do resultado fica.
+			if c.Telefone != "+5531999990001" || c.ClienteNome == "" {
+				t.Fatalf("concluir só zera nome/e-mail: %+v", c)
+			}
 			// `feito` é imutável: regravar a proposta não desfaz nem troca o cliente.
 			c, err = st.GravarCadastroProposta(ctx, &Cadastro{Chave: chave, ConversationID: conv, Nome: "Outro Nome", ClienteID: "k2"})
-			if err != nil || c.Status != CadastroFeito || c.ClienteID != "k1" || c.Nome != "Maria Souza" || c.RequesterID != "r1" {
-				t.Fatalf("linha feito foi alterada: %+v err=%v", c, err)
+			if err != nil || c.Status != CadastroFeito || c.ClienteID != "k1" || c.Nome != "" || c.Email != "" || c.RequesterID != "r1" {
+				t.Fatalf("linha feito foi alterada (e nome/e-mail ficam zerados — E4.5 I2): %+v err=%v", c, err)
 			}
 			if err := st.ConcluirCadastro(ctx, unico("nao-existe"), "r1", false); err == nil {
 				t.Error("concluir cadastro inexistente deveria falhar")
@@ -826,6 +830,54 @@ func TestStoreCadastroPropostaIdempotenciaETentativas(t *testing.T) {
 			// outra conversa não compartilha o contador
 			if n, _ := st.IncrementarTentativasCadastro(ctx, conv+"-b"); n != 1 {
 				t.Errorf("contador vazou entre conversas: %d", n)
+			}
+		})
+	}
+}
+
+// TestStoreExpirarCadastros (E4.5 I2): proposta vencida (nunca foi ao Infodesk e
+// guarda nome/e-mail em claro) é apagada; a recente e a `feito` ficam; nome e
+// e-mail de uma `feito` antiga (anterior à E4.5) são limpos.
+func TestStoreExpirarCadastros(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			velha, nova, feita := unico("cad-velha"), unico("cad-nova"), unico("cad-feita")
+			grava := func(chave string) {
+				t.Helper()
+				if _, err := st.GravarCadastroProposta(ctx, &Cadastro{
+					Chave: chave, ConversationID: "conv-" + chave, Telefone: "+5531999990002",
+					Nome: "Maria Souza", Email: "maria@acme.com.br", ClienteID: "k1", ClienteNome: "ACME",
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			grava(velha)
+			time.Sleep(20 * time.Millisecond)
+			corte := time.Now()
+			time.Sleep(20 * time.Millisecond)
+			grava(nova)
+			grava(feita)
+			if err := st.ConcluirCadastro(ctx, feita, "r9", true); err != nil {
+				t.Fatal(err)
+			}
+
+			n, err := st.ExpirarCadastros(ctx, corte)
+			if err != nil || n < 1 {
+				t.Fatalf("expirar: n=%d err=%v", n, err)
+			}
+			if c, _ := st.ObterCadastro(ctx, velha); c != nil {
+				t.Fatalf("a proposta vencida devia ter sido apagada: %+v", c)
+			}
+			if c, _ := st.ObterCadastro(ctx, nova); c == nil || c.Nome != "Maria Souza" || c.Email != "maria@acme.com.br" {
+				t.Fatalf("a proposta recente fica intacta: %+v", c)
+			}
+			if c, _ := st.ObterCadastro(ctx, feita); c == nil || c.Status != CadastroFeito || c.RequesterID != "r9" || c.Nome != "" || c.Email != "" {
+				t.Fatalf("a feita fica (sem PII): %+v", c)
+			}
+			// Idempotente.
+			if n, err := st.ExpirarCadastros(ctx, corte); err != nil || n != 0 {
+				t.Fatalf("2ª execução: n=%d err=%v", n, err)
 			}
 		})
 	}

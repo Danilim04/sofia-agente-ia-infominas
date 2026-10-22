@@ -172,6 +172,7 @@ func (r *Reconciliador) Executar(ctx context.Context) time.Duration {
 		{"tickets_pendentes", r.ticketsPendentes},
 		{"handoffs_pendentes", r.handoffsPendentes},
 		{"vigia", r.vigiaSemResposta},
+		{"cadastros_vencidos", r.cadastrosVencidos},
 	}
 	for _, p := range passos {
 		if ctx.Err() != nil {
