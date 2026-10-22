@@ -3,7 +3,9 @@
 # Os jobs abaixo são os checks obrigatórios da branch protection da main:
 #   lint-python · lint-go · arquitetura · test-python · test-go · contratos ·
 #   e2e · evals-pr · gitleaks
-# Cada job roda o MESMO comando que scripts/verificar.sh roda localmente.
+# `auditoria-dependencias` (govulncheck + pip-audit) NÃO é obrigatório: só avisa.
+# Actions fixadas por SHA (versão legível no comentário); golangci-lint e gitleaks
+# em versão fixa (este com checksum). Cada job roda o MESMO comando que scripts/verificar.sh roda localmente.
 # ==============================================================================
 name: CI
 
@@ -26,8 +28,8 @@ jobs:
     timeout-minutes: 10
     defaults: { run: { working-directory: agente-ia } }
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with: { python-version: "3.12", cache: pip, cache-dependency-path: agente-ia/requirements-dev.txt }
       - run: pip install -r requirements-dev.txt
       # evals/ entra quando existir (E1.5) — mesmo critério do scripts/verificar.sh
@@ -41,12 +43,16 @@ jobs:
     timeout-minutes: 25
     defaults: { run: { working-directory: agente-ia } }
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*.txt" }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*" }
       # torch CPU antes do resto (mesmo truque do Dockerfile) — evita baixar CUDA.
-      - run: pip install --index-url https://download.pytorch.org/whl/cpu torch
-      - run: pip install -r requirements.txt -r requirements-dev.txt
+      # Depois o MESMO lock com hashes da imagem de produção; só então os extras
+      # de teste (chainlit, pytest, ruff…), que respeitam as versões já instaladas.
+      - run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.4,<3"
+          pip install --no-deps --require-hashes -r requirements-prod.lock
+          pip install -r requirements.txt -r requirements-dev.txt
       - run: python -m mypy
       - name: mypy evals (quando existir)
         run: if [ -d evals ]; then python -m mypy evals; fi
@@ -60,14 +66,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with: { go-version-file: backend/go.mod, cache-dependency-path: backend/go.sum }
       - name: gofmt
         working-directory: backend
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-      - uses: golangci/golangci-lint-action@v8
-        with: { version: latest, working-directory: backend }
+      - uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        # Versão fixa (reprodutível); subir de propósito em PR próprio.
+        with: { version: v2.15.0, working-directory: backend }
 
   test-go:
     runs-on: ubuntu-latest
@@ -80,8 +87,8 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U rag -d rag" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with: { go-version-file: backend/go.mod, cache-dependency-path: backend/go.sum }
       - working-directory: backend
         run: go vet ./...
@@ -96,14 +103,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*.txt" }
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*" }
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with: { go-version-file: backend/go.mod, cache-dependency-path: backend/go.sum }
       - working-directory: agente-ia
         run: |
-          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.4,<3"
+          pip install --no-deps --require-hashes -r requirements-prod.lock
           pip install -r requirements.txt -r requirements-dev.txt
       - name: import-linter (camadas do cérebro)
         working-directory: agente-ia
@@ -122,40 +130,66 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - name: testes de contrato Go <-> Python
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with: { go-version-file: backend/go.mod, cache-dependency-path: backend/go.sum }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*" }
+      # Lado Go: todo teste cujo nome tem "Contrato" (toolsapi decodifica contratos/**;
+      # brain/alerta checam o Contrato A e os campos dos eventos). -count=1: nunca do cache.
+      - name: contrato — lado Go
+        working-directory: backend
+        run: go test -count=1 -run Contrato ./...
+      - name: contrato — instala o cérebro (lock + extras de teste)
+        working-directory: agente-ia
         run: |
-          if [ -d contratos ]; then
-            echo "TODO(E1.6): rodar go test -run Contrato e pytest -m contrato"; exit 0
-          fi
-          echo "contratos/ ainda não existe (entra em E1.6)"
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.4,<3"
+          pip install --no-deps --require-hashes -r requirements-prod.lock
+          pip install -r requirements.txt -r requirements-dev.txt
+      # Lado Python: -k contrato casa pelo nome (pytest sai com 5 se NENHUM teste
+      # casar, então este passo falha em vez de ficar verde sem rodar nada).
+      - name: contrato — lado Python
+        working-directory: agente-ia
+        run: python -m pytest -k contrato -v --no-cov
+        env:
+          OPENROUTER_API_KEY: test-openrouter-key
 
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with: { go-version-file: backend/go.mod, cache-dependency-path: backend/go.sum }
+      # O mock-infodesk e o cérebro falso são stdlib: só precisam de um Python 3.12+.
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with: { python-version: "3.12" }
+      # Sobe mock-infodesk + gateway + cérebro falso (sem rede, sem chave). Cenário
+      # com bug conhecido no gateway (BUG-E4.1-1): só falha com E2E_ESTRITO=1. Hoje o
+      # padrão é 0; vira 1 (Settings › Variables › Actions › E2E_ESTRITO=1, sem
+      # commit) quando a correção do B1 estiver na main.
       - name: E2E com mock-infodesk
-        run: |
-          if [ -d backend/internal/e2e ]; then
-            echo "TODO(E4.1): go test -tags e2e ./internal/e2e/..."; exit 0
-          fi
-          echo "backend/internal/e2e ainda não existe (entra em E4.1)"
+        working-directory: backend
+        run: go test -tags e2e -count=1 -v ./internal/e2e/...
+        env:
+          E2E_ESTRITO: ${{ vars.E2E_ESTRITO || '0' }}
+          E2E_PYTHON: python
 
   evals-pr:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults: { run: { working-directory: agente-ia } }
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*.txt" }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*" }
       - name: evals determinísticos de conversa
         run: |
           if [ ! -d evals ]; then
             echo "agente-ia/evals ainda não existe (entra em E1.5)"; exit 0
           fi
-          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.4,<3"
+          pip install --no-deps --require-hashes -r requirements-prod.lock
           pip install -r requirements.txt -r requirements-dev.txt
           python -m pytest -q -m evals_pr evals/
         env:
@@ -166,18 +200,51 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
       - name: gitleaks (binário oficial; sem licença de org)
+        env:
+          EVENTO: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           v=8.30.0
-          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" | tar xz gitleaks
+          # sha256 de gitleaks_8.30.0_linux_x64.tar.gz, do gitleaks_8.30.0_checksums.txt
+          # da release oficial. Ao subir a versão, atualize os DOIS (v e sha).
+          sha=79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e
+          curl -sSLfo gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz"
+          echo "${sha}  gitleaks.tar.gz" | sha256sum -c -
+          tar xzf gitleaks.tar.gz gitleaks
           # Sem --log-opts o gitleaks faz `git log --all`: varre TODAS as branches do
           # remoto, e um achado em qualquer branch quebra todos os PRs. Em PR varre só
           # os commits do PR (base..HEAD); no push da main, o histórico inteiro.
           # -v: sem ele o log só diz "leaks found: N", sem arquivo nem linha.
           opts=""
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            opts="--log-opts=origin/${{ github.base_ref }}..HEAD"
+          if [ "$EVENTO" = "pull_request" ]; then
+            opts="--log-opts=origin/${BASE_REF}..HEAD"
           fi
           ./gitleaks detect --source . -v --redact=50 --no-banner --config .gitleaks.toml $opts
+
+  # ------------------------------------------------- Auditoria de dependências
+  # SÓ AVISA (continue-on-error) e não está na lista de checks obrigatórios da main:
+  # vulnerabilidade nova em dependência não deve travar PR que não mexeu nela. Lê o
+  # resumo no log; promover a obrigatório depois de uma rodada limpa.
+  auditoria-dependencias:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with: { go-version-file: backend/go.mod, cache-dependency-path: backend/go.sum }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with: { python-version: "3.12" }
+      - name: govulncheck (Go)
+        working-directory: backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          govulncheck ./...
+      # O lock já fixa tudo: sem resolver nada, só compara versões+hashes com o banco de avisos.
+      - name: pip-audit (Python, requirements-prod.lock)
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit --requirement agente-ia/requirements-prod.lock --require-hashes --no-deps --disable-pip --progress-spinner off

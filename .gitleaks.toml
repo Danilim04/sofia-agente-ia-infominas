@@ -15,14 +15,20 @@ description = "Chave do OpenRouter"
 regex = '''sk-or-v1-[A-Za-z0-9]{20,}'''
 
 [[rules]]
+id = "infodesk-webhook-secret"
+description = "Segredo do webhook do Infodesk (whsec_...)"
+regex = '''whsec_[A-Za-z0-9]{16,}'''
+
+[[rules]]
 id = "typesafe-key-em-env"
 description = "TYPESAFE_API_KEY com valor preenchido"
 regex = '''TYPESAFE_API_KEY\s*=\s*["']?[A-Za-z0-9_\-]{16,}'''
 
+# .env.example NÃO está na allowlist de propósito: uma chave real colada nele tem
+# de ser barrada. Os placeholders legítimos passam pelas `regexes` abaixo.
 [allowlist]
 paths = [
   '''docs/infodesk/.*\.pdf''',
-  '''\.env\.example$''',
   '''deploy/env/prod\.env\.tpl$''',
 ]
 regexes = [

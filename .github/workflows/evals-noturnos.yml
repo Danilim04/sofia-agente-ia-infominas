@@ -45,7 +45,7 @@ jobs:
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Conferir secrets
         id: chaves
@@ -75,14 +75,15 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         if: steps.chaves.outputs.ativo == 'true'
-        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*.txt" }
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*" }
 
       - name: Instalar dependências
         if: steps.chaves.outputs.ativo == 'true'
         run: |
-          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.4,<3"
+          pip install --no-deps --require-hashes -r requirements-prod.lock
           pip install -r requirements.txt -r requirements-dev.txt
 
       # ---- 1. classificação com o JEV real ------------------------------------------------
@@ -172,7 +173,7 @@ jobs:
             { echo "## $(basename "$f")"; echo; cat "$f"; echo; } >> "$GITHUB_STEP_SUMMARY"
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ !cancelled() && steps.chaves.outputs.ativo == 'true' }}
         with:
           name: relatorios-evals
