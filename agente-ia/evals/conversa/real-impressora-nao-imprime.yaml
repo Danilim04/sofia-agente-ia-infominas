@@ -1,0 +1,53 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Impressora de rede parada. Taxonomia: `equipamento` é placeholder; no rascunho real é impressora_incidente.
+id: conversa-104
+descricao: impressora que não imprime vira chamado de equipamento
+sessao:
+  telefone: '+5531999990104'
+  nome_contato: Neide
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [equipamento, 0.84]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [confirmacao, 0.95]
+  categoria: [equipamento, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: a impressora do financeiro parou de imprimir, aparece uma mensagem de erro no visor
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Impressora do financeiro não imprime
+      descricao: Cliente relata que a impressora do setor financeiro parou de imprimir e mostra erro no visor.
+  - texto: 'Entendi. Vou registrar assim: impressora do financeiro sem imprimir, com erro no visor. Posso abrir
+      o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: equipamento
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2

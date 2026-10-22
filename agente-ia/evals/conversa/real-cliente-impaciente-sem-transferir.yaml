@@ -1,0 +1,53 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Frustração moderada (2): tom cuidadoso, mas segue o atendimento sem transferir.
+id: conversa-133
+descricao: impaciência moderada não transfere; segue com a proposta de chamado
+sessao:
+  telefone: '+5531999990133'
+  nome_contato: Elias
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [lentidao, 0.85]
+  prioridade: [1, 0.7]
+  frustracao: [2, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [confirmacao, 0.95]
+  categoria: [lentidao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: de novo essa internet lenta, preciso que alguém veja isso
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Internet lenta recorrente
+      descricao: Cliente relata lentidão recorrente da internet e pede verificação.
+  - texto: 'Entendi o incômodo, vamos resolver isso. Vou registrar assim: internet lenta recorrente. Posso abrir
+      o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: lentidao
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2

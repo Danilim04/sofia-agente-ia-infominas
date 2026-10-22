@@ -1,0 +1,37 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Pedidos de acesso/senha de usuário: no rascunho real é cadastros_e_acessos_de_usuarios.
+id: conversa-122
+descricao: 'acesso bloqueado de usuário sem categoria na taxonomia: esclarece e transfere'
+sessao:
+  telefone: '+5531999990122'
+  nome_contato: Gabi
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.9]
+  categoria: [indefinida, 0.4]
+  prioridade: [1, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [reclamacao_problema, 0.88]
+  categoria: [indefinida, 0.42]
+  prioridade: [1, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+turnos:
+- cliente: o acesso da minha colega está bloqueado, ela não consegue entrar
+  llm:
+  - texto: Entendi! O bloqueio aparece no computador, no e-mail ou em algum sistema específico?
+  espera:
+    nao_chama: [preparar_abertura_chamado, abrir_chamado]
+    transfere: false
+    proposta_no_estado: false
+    contem: ['?']
+- cliente: no computador, pede uma senha que ela não lembra
+  llm:
+  - texto: Obrigada! Vou te passar para um atendente resolver isso com você.
+  espera:
+    nao_chama: [abrir_chamado]
+    transfere: true
+    contem: [atendente]
+    nao_contem: [prazo, encaminhei]

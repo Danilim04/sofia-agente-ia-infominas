@@ -1,0 +1,37 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). VPN para trabalho remoto: sem categoria no placeholder; no rascunho real não há área 'VPN' (cai em rede/software).
+id: conversa-121
+descricao: 'VPN que não conecta: esclarece uma vez e transfere'
+sessao:
+  telefone: '+5531999990121'
+  nome_contato: Gabi
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.9]
+  categoria: [indefinida, 0.4]
+  prioridade: [1, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [reclamacao_problema, 0.88]
+  categoria: [indefinida, 0.42]
+  prioridade: [1, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+turnos:
+- cliente: a VPN não conecta de casa, fico girando e dá erro
+  llm:
+  - texto: Entendi! Esse erro aparece só na VPN ou o resto da internet de casa também fica instável?
+  espera:
+    nao_chama: [preparar_abertura_chamado, abrir_chamado]
+    transfere: false
+    proposta_no_estado: false
+    contem: ['?']
+- cliente: só na VPN, o resto funciona normal
+  llm:
+  - texto: Obrigada! Vou te passar para um atendente que vai continuar com você.
+  espera:
+    nao_chama: [abrir_chamado]
+    transfere: true
+    contem: [atendente]
+    nao_contem: [prazo, encaminhei]

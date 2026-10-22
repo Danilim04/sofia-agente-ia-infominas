@@ -1,0 +1,44 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Resposta que não é 'sim' (pergunta) não confirma: a política de abertura é código.
+id: conversa-113
+descricao: '''esse mesmo?'' não confirma; mesmo que o LLM tente abrir, a política recusa'
+sessao:
+  telefone: '+5531999990113'
+  nome_contato: Joice
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [equipamento, 0.84]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [duvida_informacao, 0.8]
+  categoria: [equipamento, 0.84]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: o notebook da recepção não liga mais
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Notebook da recepção não liga
+      descricao: Cliente relata que o notebook da recepção não liga.
+  - texto: 'Entendi. Vou registrar assim: notebook da recepção que não liga. Posso abrir o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: equipamento
+- cliente: esse é o chamado do notebook mesmo?
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: 'É esse sim: notebook da recepção que não liga. Se estiver certo, é só me dizer "sim" que eu abro.'
+  espera:
+    nao_chama: [abrir_chamado]
+    contem: [sim]

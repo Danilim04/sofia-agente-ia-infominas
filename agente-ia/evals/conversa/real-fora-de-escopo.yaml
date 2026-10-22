@@ -1,0 +1,24 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Assunto sem relação com o atendimento: redireciona com simpatia, sem atender o pedido.
+id: conversa-154
+descricao: pedido fora de escopo é redirecionado sem tools e sem abrir chamado
+sessao:
+  telefone: '+5531999990154'
+  nome_contato: Nina
+  contato: telefone
+jev:
+- intencao: [outro, 0.8]
+  categoria: [indefinida, 0.2]
+  prioridade: [0, 0.6]
+  frustracao: [0, 0.9]
+  malicioso: 0.02
+  fora_de_escopo: 0.92
+turnos:
+- cliente: você sabe me indicar um restaurante bom aqui perto?
+  llm:
+  - texto: Que pena, por aqui eu só consigo ajudar com suporte e atendimento da Infominas. Se precisar de algo nessa
+      linha, é só falar!
+  espera:
+    nao_chama: [abrir_chamado, preparar_abertura_chamado]
+    transfere: false
+    bloqueado: false
+    nao_contem: [restaurante bom]

@@ -1,0 +1,26 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). 'Já está pronto o notebook?' — sem número: a Sofia lista os chamados do cliente.
+id: conversa-141
+descricao: cobrança de retorno sem número usa a lista de chamados do cliente
+sessao:
+  telefone: '+5531999990141'
+  nome_contato: Uri
+  contato: telefone
+jev:
+- intencao: [status_chamado, 0.9]
+  categoria: [indefinida, 0.3]
+  prioridade: [1, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: queria saber se o notebook que deixei aí já ficou pronto
+  llm:
+  - tool: listar_meus_chamados
+    args: {}
+  - texto: 'Olhei aqui e encontrei 1 chamado seu: 48213, internet sem conexão desde ontem à noite. Ele é o do notebook?
+      Se não for, posso chamar um atendente.'
+  espera:
+    chama: [listar_meus_chamados]
+    nao_chama: [abrir_chamado, preparar_abertura_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/listar

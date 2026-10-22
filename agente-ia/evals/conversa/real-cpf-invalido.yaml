@@ -1,0 +1,37 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). CPF com dígito errado é recusado por código; a Sofia pede para conferir.
+id: conversa-111
+descricao: CPF inválido não é registrado nem leva a chamado
+sessao:
+  telefone: '+5531999990111'
+  nome_contato: Rosana
+  contato: null
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [lentidao, 0.86]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [outro, 0.8]
+  categoria: [lentidao, 0.9]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: a rede está lenta aqui há dois dias
+  llm:
+  - texto: Entendi! Para registrar o chamado, me passa seu CPF ou o número do contrato?
+  espera:
+    nao_chama: [abrir_chamado, preparar_abertura_chamado]
+    contem: [CPF]
+- cliente: 123.456.789-00
+  llm:
+  - tool: informar_identificacao
+    args:
+      cpf: 123.456.789-00
+  - texto: Esse CPF não passou na conferência. Pode dar uma olhadinha nos números e me mandar de novo?
+  espera:
+    nao_chama: [informar_identificacao, preparar_abertura_chamado, abrir_chamado]
+    contem: [conferência]
+    proposta_no_estado: false

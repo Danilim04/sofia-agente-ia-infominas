@@ -1,0 +1,53 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Reclamação de lentidão com a conexão funcionando.
+id: conversa-101
+descricao: internet lenta vira chamado de lentidão só depois do sim
+sessao:
+  telefone: '+5531999990101'
+  nome_contato: Rui
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [lentidao, 0.88]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [confirmacao, 0.95]
+  categoria: [lentidao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: a internet tá muito lenta hoje, as páginas demoram demais pra abrir
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Internet lenta, páginas demoram a abrir
+      descricao: Cliente relata lentidão geral na navegação hoje; a conexão está ativa.
+  - texto: 'Entendi, a conexão está funcionando, só bem lenta. Vou registrar assim: internet lenta com páginas demorando
+      a abrir. Posso abrir o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: lentidao
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2

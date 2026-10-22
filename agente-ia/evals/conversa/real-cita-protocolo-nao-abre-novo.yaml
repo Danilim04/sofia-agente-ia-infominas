@@ -1,0 +1,30 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Cliente cita o número do chamado ao reclamar: nunca vira chamado novo.
+id: conversa-142
+descricao: reclamar citando um chamado existente não prepara chamado novo (política em código)
+sessao:
+  telefone: '+5531999990142'
+  nome_contato: Gil
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [sem_conexao, 0.86]
+  prioridade: [2, 0.7]
+  frustracao: [2, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+turnos:
+- cliente: o chamado 48213 continua sem solução, a internet segue fora
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Internet segue fora
+      descricao: Cliente diz que a internet segue fora.
+  - tool: consultar_status_chamado
+    args:
+      numero: '48213'
+  - texto: 'Vi aqui o chamado 48213, que já está com a equipe. Não vou abrir outro: se quiser, posso passar você
+      para um atendente acompanhar.'
+  espera:
+    chama: [consultar_status_chamado]
+    nao_chama: [preparar_abertura_chamado, abrir_chamado]
+    proposta_no_estado: false

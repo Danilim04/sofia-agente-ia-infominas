@@ -18,8 +18,9 @@ categoria são informativas.
 | **Classificação** | `classificacao/*.jsonl` | `--llm` sim (fakes) · `--jev` não (JEV real) | PR que toca classificação; noturno | `python -m evals.classificacao --fonte sintetico\|historico [--jev\|--llm]` |
 | **Juiz** | `conversa/juiz/*.yaml` (E4.4) | não (LLM real + juiz) | noturno | `python -m evals.juiz` |
 
-Hoje: os cenários de conversa carregam e validam (teste verde) e a execução
-está `xfail` ("runner entra em E3.5"); `--jev` e `--llm` caem no
+Hoje: os cenários de conversa carregam, validam e **executam** contra o grafo
+real (E3.5: LLM scriptado + `FakeJEV` + gateway falso; `python -m evals.conversa`
+imprime o resultado de cada um); `--jev` e `--llm` caem no
 `classificador_nulo` (sempre `outro`/`indefinida`/`media`, confiança 0; também
 acessível por `--nulo`), que serve para provar o encanamento e produzir um
 relatório — não para calibrar nada (`--atualizar-baseline` recusa nesse caso).
@@ -126,6 +127,49 @@ completo ("Luz Silva"). **Endereço** (rua, número, bairro) não tem regex: é
 o principal alvo da revisão manual, junto com apelidos e nomes fora da lista. Regra de projeto: **sobre-mascarar é seguro, sub-mascarar não** —
 um protocolo de 8 dígitos virar `<CEP>` é aceitável; um CPF escapar, não.
 Teste rápido: `python -m evals.anonimizar evals/exemplos/export-exemplo.csv --saida /tmp/x.jsonl --nomes evals/exemplos/nomes.txt --amostra 3`.
+
+## Coletar conversas reais do Infodesk (E3.5)
+
+`scripts/coletar-conversas-infodesk.py` (stdlib, **só `GET`**, chave só do
+ambiente) transforma as conversas de WhatsApp do Infodesk em matéria-prima de
+eval. Tudo que ele grava vai para `evals/bruto/` (gitignored — o script se
+recusa a gravar onde o git não ignora) e o terminal recebe só contagens.
+
+```bash
+set -a && . ./.env && set +a            # INFODESK_BASE_URL e INFODESK_API_KEY
+python scripts/coletar-conversas-infodesk.py --meses 12 --nomes-extra evals/bruto/nomes-extra.txt
+#  → evals/bruto/conversas-whatsapp-<data>.json        bruto (contato e senderName reais)
+#  → evals/bruto/conversas-whatsapp-<data>-pre.json    senderName/contato viram token, id vira hash
+#  → evals/bruto/conversas-whatsapp-<data>-nomes.txt   nomes de contato/autor (+ extras) p/ o anonimizador
+cd agente-ia
+venv/Scripts/python.exe -m evals.anonimizar evals/bruto/conversas-whatsapp-<data>-pre.json \
+    --saida evals/bruto/conversas-whatsapp-anon.jsonl \
+    --nomes evals/bruto/conversas-whatsapp-<data>-nomes.txt
+# varredura própria (telefone com/sem +55, CPF, CNPJ, e-mail, CEP, URL, nomes) → 0 ocorrências
+# revisão humana (endereços e nomes fora da lista não têm regex) ANTES de qualquer commit (D12)
+```
+
+- Descarta nota interna, grupos de WhatsApp e conversas em laço de eco (≥ 500
+  mensagens com < 5 % de corpos distintos — conversa bot ↔ bot); agrupa por
+  `conversationId` em ordem cronológica e junta `status`, `departmentId` e
+  `ticketNumber` de `GET /conversations`.
+- `--de-arquivo <bruto.json>` refaz o `-pre.json` e o `-nomes.txt` sem chamar a
+  API (útil ao ajustar a lista de nomes).
+- A lista de nomes deixa de fora palavras que o corpus escreve quase sempre em
+  minúscula (`rede`, `todo`): um contato chamado "Rede Fulano" não pode virar
+  `<NOME>` no texto inteiro.
+- Os cenários `conversa/real-*.yaml` são **reescritos** a partir dos padrões
+  (frase parafraseada, telefone `+5531999990xxx`, nome fictício); nenhum
+  arquivo do bruto nem do anonimizado entra no git antes da revisão.
+- Pré-rótulo do dataset de classificação: `rotulador: "jev-prelabel"` é
+  hipótese do JEV sobre o rascunho de taxonomia por área, **não** gabarito —
+  um humano revisa antes de virar `classificacao/historico.jsonl`. A chave
+  extra `confianca` é descartada na promoção (`validar_caso` a rejeita de
+  propósito).
+- `xfail: "motivo"` no topo de um cenário marca um comportamento correto que a
+  Sofia ainda não tem (xfail estrito: se passar, o teste falha e o marcador sai).
+  `contato: telefone|cpf|contrato` na `sessao` diz que o gateway já identificou
+  o cliente por essa forma.
 
 ## Interpretar o relatório (`relatorio.py`)
 

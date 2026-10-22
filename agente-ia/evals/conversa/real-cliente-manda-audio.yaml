@@ -1,0 +1,22 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Áudio chega ao cérebro só como rótulo '[áudio]'; a Sofia pede o texto e não abre nada. (O gateway Go trata mídia antes — 04-conversas.)
+id: conversa-150
+descricao: áudio sem texto não gera chamado; a Sofia pede para descrever por escrito
+sessao:
+  telefone: '+5531999990150'
+  nome_contato: Dani
+  contato: telefone
+jev:
+- intencao: [outro, 0.55]
+  categoria: [indefinida, 0.2]
+  prioridade: [1, 0.5]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.05
+turnos:
+- cliente: '[áudio]'
+  llm:
+  - texto: Recebi seu áudio, mas por aqui eu só consigo ler texto. Pode me escrever o que está acontecendo?
+  espera:
+    nao_chama: [abrir_chamado, preparar_abertura_chamado]
+    contem: [escrever]
+    transfere: false

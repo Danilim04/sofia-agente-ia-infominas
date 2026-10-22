@@ -1,0 +1,52 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Servidor reiniciando sozinho; no rascunho real: servidor_incidente.
+id: conversa-106
+descricao: servidor da empresa desligando sozinho vira chamado de prioridade alta
+sessao:
+  telefone: '+5531999990106'
+  nome_contato: Davi
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [equipamento, 0.8]
+  prioridade: [3, 0.85]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [confirmacao, 0.95]
+  categoria: [equipamento, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: o servidor da empresa fica reiniciando sozinho o tempo todo, preciso de alguém olhando
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Servidor desligando e ligando sozinho
+      descricao: Cliente relata que o servidor liga e desliga sozinho, sem parar, e precisa de manutenção.
+  - texto: 'Entendi, isso é sério. Vou registrar assim: servidor desligando e ligando sozinho. Posso abrir o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: equipamento
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2

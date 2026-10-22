@@ -1,0 +1,52 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Computador travando; no rascunho real: computadores_e_perifericos_incidente.
+id: conversa-105
+descricao: computador lento e travando vira chamado
+sessao:
+  telefone: '+5531999990105'
+  nome_contato: Lia
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [equipamento, 0.82]
+  prioridade: [1, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [confirmacao, 0.95]
+  categoria: [equipamento, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: meu computador tá travando toda hora e demora uns cinco minutos pra ligar
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Computador lento e travando
+      descricao: Cliente relata que o computador trava com frequência e leva cerca de cinco minutos para ligar.
+  - texto: 'Entendi. Vou registrar assim: computador lento, travando e demorando para ligar. Posso abrir o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: equipamento
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2

@@ -1,0 +1,64 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Começa vago ('oi, preciso de ajuda') e só no segundo turno descreve o problema.
+id: conversa-157
+descricao: conversa que começa vaga só prepara o chamado quando o problema aparece
+sessao:
+  telefone: '+5531999990157'
+  nome_contato: Pedro
+  contato: telefone
+jev:
+- intencao: [saudacao_social, 0.7]
+  categoria: [indefinida, 0.2]
+  prioridade: [1, 0.5]
+  frustracao: [0, 0.9]
+  malicioso: 0.01
+  fora_de_escopo: 0.02
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [sem_conexao, 0.88]
+  prioridade: [2, 0.75]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [confirmacao, 0.95]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: oi, preciso de ajuda
+  llm:
+  - texto: Oi! Claro, posso ajudar. O que está acontecendo?
+  espera:
+    nao_chama: [preparar_abertura_chamado, abrir_chamado]
+    transfere: false
+- cliente: estou sem internet desde as 8h
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Sem internet desde as 8h
+      descricao: Cliente relata estar sem internet desde as 8h da manhã.
+  - texto: 'Entendi, sem internet desde as 8h. Vou registrar assim: sem internet desde as 8h. Posso abrir o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: sem_conexao
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2

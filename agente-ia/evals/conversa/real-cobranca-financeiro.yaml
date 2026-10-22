@@ -1,0 +1,53 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Cobrança vai para o Financeiro (mesa pela taxonomia, nunca pelo LLM).
+id: conversa-108
+descricao: cobrança duplicada vira chamado da categoria cobranca
+sessao:
+  telefone: '+5531999990108'
+  nome_contato: Beto
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [cobranca, 0.88]
+  prioridade: [1, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [confirmacao, 0.95]
+  categoria: [cobranca, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: veio cobrança duas vezes na fatura desse mês, preciso que corrijam
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Cobrança duplicada na fatura do mês
+      descricao: Cliente relata duas cobranças na fatura deste mês e pede a correção.
+  - texto: 'Entendi, duas cobranças na mesma fatura. Vou registrar assim: cobrança duplicada neste mês. Posso abrir
+      o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: cobranca
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2
