@@ -230,6 +230,7 @@ func ambienteDoGateway(porta, brainURL, mockURL, raiz, dir, deptoID string) []st
 		"INFODESK_WEBHOOK_SECRET=" + segredoWebhook,
 		"INFODESK_ORGANIZATION_ID=" + orgID,
 		"INFODESK_NOME_CHAVE=",
+		"HORARIO_HUMANO=", // vazio = sempre dentro do horário: o resultado não depende da hora em que o teste roda (E5.5)
 		"TAXONOMIA_PATH=" + taxonomiaDev(raiz),
 		"STRICT_TAXONOMIA=true",
 		"DEPARTAMENTO_HUMANO_PADRAO=" + deptoID, // o gateway manda como departmentId: precisa ser o ID, não o nome

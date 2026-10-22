@@ -120,6 +120,11 @@ type Saude struct {
 	// Testadores é o tamanho da lista de testadores (TESTADORES_TELEFONES, E3.9;
 	// únicos, após normalizar); 0 = lista desligada. Os números nunca saem daqui.
 	Testadores int
+	// Horario: nil = horário humano não configurado (sempre dentro). Senão, devolve se
+	// AGORA está dentro do horário de atendimento humano (HORARIO_HUMANO; E5.5).
+	Horario func(agora time.Time) bool
+	// ForaDoHorarioModo é FORA_DO_HORARIO_MODO ("avisar" ou "ignorar").
+	ForaDoHorarioModo string
 	// ReconciliaAtivo é RECONCILIA_ATIVO.
 	ReconciliaAtivo bool
 	// Seq lê o último seq processado do feed (cursor do reconciliador) e o do
@@ -150,6 +155,14 @@ const (
 	ModoPiloto = "piloto"
 	ModoAberto = "aberto"
 )
+
+// respostaHorario diz se o horário humano está configurado e se AGORA é horário
+// de atendimento humano (E5.5). Fora do horário não degrada o status: é rotina.
+type respostaHorario struct {
+	Configurado bool   `json:"configurado"`
+	Dentro      bool   `json:"dentro"`
+	Modo        string `json:"fora_do_horario_modo,omitempty"`
+}
 
 // respostaPiloto diz se só os testadores falam com a Sofia (E3.9) e quantos são.
 // Nunca lista os números. Não degrada o status: é uma escolha, não uma falha.
@@ -187,6 +200,7 @@ type RespostaSaude struct {
 	Taxonomia     respostaTaxonomia     `json:"taxonomia"`
 	Reconciliador respostaReconciliador `json:"reconciliador"`
 	Piloto        respostaPiloto        `json:"piloto"`
+	HorarioHumano respostaHorario       `json:"horario_humano"`
 }
 
 func instante(t time.Time) *string {
@@ -248,6 +262,11 @@ func (s *Saude) Relatorio(ctx context.Context) RespostaSaude {
 	r.Piloto = respostaPiloto{Modo: ModoAberto, Ativo: s.Testadores > 0, Numeros: s.Testadores}
 	if s.Testadores > 0 {
 		r.Piloto.Modo = ModoPiloto
+	}
+
+	r.HorarioHumano = respostaHorario{Dentro: true}
+	if s.Horario != nil {
+		r.HorarioHumano = respostaHorario{Configurado: true, Dentro: s.Horario(agora()), Modo: s.ForaDoHorarioModo}
 	}
 
 	feed := s.Feed.foto()

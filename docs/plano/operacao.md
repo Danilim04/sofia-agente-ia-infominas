@@ -18,7 +18,7 @@ O gateway escreve **JSON** (`slog`, stdout); o cérebro escreve **linhas** `nome
 | `classificacao` | cérebro | INFO | `intencao`, `categoria`, `origem` (`jev`/`llm`/`esclarecimento`/`indefinida`), `prioridade`, `frustracao`, `jev` (o JEV respondeu?), `esclarecer`, `acoes` | o roteador decidiu o turno |
 | `tool_exec` | cérebro | INFO | `nome`, `args` (só os **nomes** dos argumentos) | o agente chamou uma tool. Valores só em DEBUG (`tool_exec_args`), mascarados. **Exceção:** `agent_tool_calls` (`agent/nodes.py`) ainda loga os valores dos args em INFO; só a máscara do formatter os protege (ver seção 6) |
 | `transferencia` | cérebro | INFO | `conversation_id`, `origem` (`frustracao`/`confianca`/`pedido_cliente`) | o cérebro **pediu** a transferência (ação devolvida ao gateway) |
-| `transferencia` | gateway | INFO | `id_ocorrencia`, `conversation_id`, `origem`, `departamento` | o handoff foi **executado** (`engine/transferencia.go` → `alerta.LogTransferencia`) |
+| `transferencia` | gateway | INFO | `id_ocorrencia`, `conversation_id`, `origem`, `departamento`, `fora_do_horario` (E5.5: a transferência foi fora do horário humano) | o handoff foi **executado** (`engine/transferencia.go` → `alerta.LogTransferencia`) |
 | `ticket_aberto` | gateway | INFO | `numero`, `conversation_id`, `categoria`, `mesa`, `reconciliado` | o ticket existe no Infodesk (`reconciliado=true`: foi achado pela listagem, não pelo POST). `toolsapi/abrir.go` → `alerta.LogTicketAberto` |
 | `sofia_alerta` | gateway | ERROR | `tipo`, `titulo`, `texto`, `id_ocorrencia`, `conversation_id`, `link` | um alerta saiu (tabela da seção 4). `titulo` e `texto` passam por `alerta.MascararPII` |
 | `sofia_falha` | gateway | ERROR | `id_ocorrencia`, `conversation_id`, `origem`, `classe`, `causa`, `detalhe` | uma transferência por falha foi registrada; o `id_ocorrencia` (`SOF-AAAAMMDD-HHMM-NN`) é o mesmo no cérebro (`chat_erro`) e na tabela `falhas` |
@@ -63,6 +63,7 @@ Sempre **200** enquanto o processo atende (o healthcheck do compose mede "está 
   "referencia":    {"carregada": true, "ultima_leitura_ok": "…", "ultimo_erro_em": null},
   "taxonomia":     {"habilitada": true, "carregada": true, "valida": true, "placeholder": true, "problemas": 0},
   "piloto":        {"ativo": false, "modo": "aberto", "numeros": 0},
+  "horario_humano": {"configurado": true, "dentro": true, "fora_do_horario_modo": "avisar"},
   "reconciliador": {"ativo": true, "ultimo_seq": 120, "ultimo_seq_webhook": 125,
                     "feed": {"estado": "sem_escopo", "ultima_leitura_ok": null, "ultimo_erro_em": "…", "ultimo_erro": "HTTP 403 FORBIDDEN"}}
 }
@@ -79,6 +80,7 @@ Sem segredo, URL, nome nem telefone: só flags, contagens, instantes e a **class
 | `taxonomia.placeholder` | `config/taxonomia.yaml` ainda é a hipótese de trabalho (P1): não é degradação, é aviso |
 | `taxonomia.problemas` | divergências vistas no carregamento do boot (nomes de mesa/departamento/prioridade que o Infodesk não tem) |
 | `piloto.modo` / `piloto.ativo` / `piloto.numeros` | `modo` = `piloto` (lista de testadores ligada) ou `aberto` (todo cliente fala com a Sofia);  a lista de testadores (`TESTADORES_TELEFONES`) está ligada e quantos números únicos tem; **nunca** os números. Não degrada o status: é uma escolha. Ver a seção 7 |
+| `horario_humano.configurado` / `dentro` / `fora_do_horario_modo` | `HORARIO_HUMANO` está configurado e se AGORA é horário de atendimento humano (e o modo de `FORA_DO_HORARIO_MODO`). Não configurado = `dentro` sempre `true`. Fora do horário não degrada o status: é rotina (seção 10) |
 | `reconciliador.ativo` | `RECONCILIA_ATIVO` |
 | `reconciliador.ultimo_seq` / `ultimo_seq_webhook` | cursor do feed processado pelo reconciliador × maior `seq` visto pelo webhook. Parado com tráfego = feed/ciclo travado |
 | `reconciliador.feed.estado` | `ok`, `sem_leitura` (ainda não leu neste processo), `sem_escopo` (403), `falhando` (rede/5xx) |
@@ -204,3 +206,20 @@ O gateway **recusa subir** (`config inválida`, sem repetir o valor do segredo) 
 - **`LOTE_MAX_CHARS`** (4000): o texto coalescido de uma rajada é cortado nesse tamanho antes do cérebro (WARN `lote coalescido cortado no teto`). **`TURNOS_POR_HORA_MAX`** (60): turnos por telefone na última hora; acima, a conversa vai a um atendente (origem `limite_turnos`, WARN `limite de turnos por hora excedido`). O contador é em memória: um reinício o zera.
 - **`X-Brain-Token`.** O gateway envia `TOOLS_API_TOKEN` no header `X-Brain-Token` em toda chamada ao cérebro (`/chat`, `/encerrar-episodio`). O cérebro que ainda não o exige o ignora; quando exigir, os dois lados precisam ter o mesmo `TOOLS_API_TOKEN`.
 - **Logs de erro do Infodesk** saem como `http <status> <code> <rota>` / `rede <rota>` (`engine.DescreverErro`), sem a mensagem do servidor, que pode ecoar dado do cliente.
+
+## 10. Horário de atendimento humano (E5.5)
+
+O expediente das mesas do Desk é seg–sex 08:00–18:00 (docs/infodesk/10 §8); **que isso valha para o atendimento humano do WhatsApp, e a mensagem fora dele, seguem sem confirmação (P7)**. Por isso tudo é configurável:
+
+| Variável | Default | Significa |
+|---|---|---|
+| `HORARIO_HUMANO` | `seg-sex 08:00-18:00` (em **modo dev** — Infodesk local —, a variável ausente = sempre dentro) | dias + faixas, várias entradas com `;`: `seg-sex 08:00-18:00; sab 08:00-12:00`. Várias faixas no dia: `seg-sex 08:00-12:00,14:00-18:00`. Dias: `seg ter qua qui sex sab dom` (intervalo `seg-sex`, lista `seg,qua`, volta `sex-seg`). Fim menor que o início atravessa a meia-noite (`22:00-06:00`; pertence ao dia em que começou). **Presente e vazia (`HORARIO_HUMANO=`) = sempre dentro do horário.** Formato inválido derruba o boot |
+| `HORARIO_FUSO` | `America/Sao_Paulo` | fuso do horário e dos feriados (nome IANA; o binário embute o banco de fusos) |
+| `FERIADOS` | vazio | datas `AAAA-MM-DD` (vírgula, `;` ou espaço); nenhuma faixa **começa** no feriado (uma faixa que atravessa a meia-noite e começou na véspera continua valendo na madrugada do feriado) |
+| `FORA_DO_HORARIO_MODO` | `avisar` | `avisar` ou `ignorar` (qualquer outro valor derruba o boot) |
+
+**O que muda fora do horário.** A Sofia segue atendendo e abrindo chamado (nada muda no cérebro). Só a **transferência** muda: o handoff acontece igual (a conversa cai na fila para a equipe ver no próximo expediente), com a nota `… · motivo: … · fora do horário`, e o log `transferencia` sai com `fora_do_horario=true`. Com `avisar` a mensagem ao cliente vira: *"Agora a nossa equipe de atendimento não está disponível: ela atende de segunda a sexta, das 08:00 às 18:00. Sua conversa fica registrada por aqui e a equipe retoma com você quando o atendimento voltar. 🙏"* — o horário vem da configuração (nenhuma hora inventada, nenhum prazo prometido; com feriados configurados acrescenta "(exceto feriados)"). O que a mensagem normal tinha de próprio é mantido na frente: o número do chamado aberto, "não consigo ver áudio, imagem ou arquivo", "não consegui confirmar o seu chamado". Com `ignorar` o aviso é o normal (nota e log seguem marcados). Transferência silenciosa (fora do piloto) continua sem mensagem.
+
+**Atenção:** o default liga o horário de expediente — em produção, quem escrever pedindo atendente às 20h recebe o aviso de fora do horário. Para manter o comportamento anterior, `HORARIO_HUMANO=` (vazia). O `/health` mostra `horario_humano.dentro` agora. O horário é lido no boot (mudar exige reiniciar).
+
+Detalhes: faixas repetidas ou sobrepostas no mesmo dia são fundidas (`08:00-12:00,10:00-14:00` = `08:00-14:00`); na mensagem, a faixa que atravessa a meia-noite sai "das 22:00 às 06:00 do dia seguinte", o fim `24:00` sai "até a meia-noite" e `00:00-24:00` sai "o dia todo". O aviso de fora do horário também sai quando a resposta do cérebro no mesmo turno já anunciou a transferência (frustração, baixa confiança, pedido do cliente) — ele não repete "vou te encaminhar". Quando a origem tem uma mensagem própria de duas frases (chamado aberto, "não consigo ver anexo", "não localizei a sua empresa", "não consegui registrar o chamado"), a **primeira frase** é mantida na frente. Depois do aviso a conversa fica `transferida` e muda: **não há segundo aviso** nas mensagens seguintes do cliente até um atendente assumir. O boot loga o horário efetivo (`horário humano`, com `dentro_agora`) e avisa se `HORARIO_HUMANO` está vazio em produção. **Atenção:** o Desk também tem "Abrir pré-ticket fora do expediente" ligado (07 N6); confirmar na homologação que o cliente não recebe duas mensagens de fora do expediente.

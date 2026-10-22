@@ -74,9 +74,9 @@ func TestEventoTicketAbertoTemNomeECamposDoContrato(t *testing.T) {
 
 func TestEventoTransferenciaTemNomeECamposDoContrato(t *testing.T) {
 	m := registroJSON(t, func(l *slog.Logger) {
-		LogTransferencia(l, Transferencia{IDOcorrencia: "SOF-1", ConversationID: "conv-1", Origem: "frustracao", Departamento: "Suporte"})
+		LogTransferencia(l, Transferencia{IDOcorrencia: "SOF-1", ConversationID: "conv-1", Origem: "frustracao", Departamento: "Suporte", ForaDoHorario: true})
 	})
-	if m["msg"] != "transferencia" || m["origem"] != "frustracao" {
+	if m["msg"] != "transferencia" || m["origem"] != "frustracao" || m["fora_do_horario"] != true {
 		t.Fatalf("registro: %v", m)
 	}
 	if got, quer := camposDe(m), esperados(EventoTransferencia); !igual(got, quer) {

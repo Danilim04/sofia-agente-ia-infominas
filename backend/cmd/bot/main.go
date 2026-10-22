@@ -43,6 +43,12 @@ func run() int {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)}))
 	slog.SetDefault(log)
 	log.Info("log inicializado", "level", cfg.LogLevel)
+	if cfg.Horario == nil {
+		log.Info("horário humano: não configurado (sempre dentro do horário)")
+	} else {
+		log.Info("horário humano", "horario", cfg.HorarioDescricao, "fuso", cfg.HorarioFuso, "modo", cfg.ForaDoHorarioModo,
+			"dentro_agora", cfg.Horario.Dentro(time.Now()))
+	}
 	for _, aviso := range cfg.Avisos() {
 		log.Warn(aviso)
 	}
@@ -132,6 +138,10 @@ func run() int {
 	saude := novaSaude(st, sondaReferencia, sondaFeed, fotoTax, cfg.ReconciliaAtivo)
 	saude.Iniciado = time.Now()
 	saude.Testadores = len(cfg.Testadores()) // E3.9: só a contagem, nunca os números
+	if cfg.Horario != nil {                  // E5.5: o /health diz se agora é horário de atendimento humano
+		saude.Horario = cfg.Horario.Dentro
+		saude.ForaDoHorarioModo = cfg.ForaDoHorarioModo
+	}
 	mux.HandleFunc("/health", saude.Handler())
 
 	// API interna de tools que o cérebro Python chama durante o loop do
