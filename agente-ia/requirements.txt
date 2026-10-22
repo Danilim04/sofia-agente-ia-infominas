@@ -1,45 +1,10 @@
-# --- LLM / Orquestração ---
-langchain>=0.3.0,<0.4.0
-langchain-core>=0.3.0,<0.4.0
-langchain-openai>=0.2.0,<0.3.0
-langchain-community>=0.3.0,<0.4.0
-langchain-chroma>=0.2.0,<0.3.0
-langchain-huggingface>=0.1.0,<0.2.0
-langgraph>=0.2.50,<0.4.0
-# Checkpointer persistente (histórico de conversa sobrevive a restart do brain)
-langgraph-checkpoint-sqlite>=2.0.0,<3.0.0
-# aiosqlite 0.22 removeu Connection(Thread) e quebra o is_alive() do checkpointer
-aiosqlite>=0.21,<0.22
+# Cérebro Python: runtime (requirements-prod.txt) + o que só o dev e os testes usam.
+# A imagem de produção NÃO usa este arquivo; usa requirements-prod.lock.
+-r requirements-prod.txt
 
-# --- Classificação (JEV / TypeSafe System One — docs/plano/02-classificacao.md) ---
-# Importado sob demanda em src/classificacao/jev.py; sem ele o cérebro cai no fallback LLM.
-typesafe-sdk>=0.7.5,<1.0.0
-
-# --- RAG ---
-chromadb>=1.0.0,<2.0.0
-pypdf>=5.0.0,<6.0.0
-sentence-transformers>=3.0.0,<4.0.0
-# Índice pgvector (sync incremental do Contrato B + backend de leitura opcional)
-psycopg[binary]>=3.2.0,<4.0.0
-pgvector>=0.3.0,<1.0.0
-
-# --- Interface ---
+# --- Interface (harness Chainlit de dev, app.py) ---
 chainlit>=2.0.0,<3.0.0
 
-# --- API (Contrato A: Go transporte → cérebro Python) ---
-fastapi>=0.115.0,<1.0.0
-uvicorn>=0.30.0,<1.0.0
-# Cliente HTTP das tools de chamado (cérebro → gateway Go /tools/sac/*)
-httpx>=0.27.0,<1.0.0
-
-# --- Observabilidade (tracing, opcional) ---
-langfuse>=3.0.0,<4.0.0
-
-# --- Config / Validation ---
-pydantic>=2.9.0,<3.0.0
-pydantic-settings>=2.5.0,<3.0.0
-python-dotenv>=1.0.0,<2.0.0
-
-# --- Dev / Testes ---
+# --- Testes ---
 pytest>=8.3.0,<9.0.0
 pytest-asyncio>=0.24.0,<1.0.0

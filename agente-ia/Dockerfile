@@ -22,12 +22,16 @@ ENV PYTHONUNBUFFERED=1 \
     CHROMA_PERSIST_DIR=/app/chroma_db \
     DOCS_DIR=/app/docs/base
 
-# torch CPU-only ANTES do requirements: o wheel default do PyPI arrasta CUDA
-# (~3 GB de libs nvidia) que não servem pra nada num host sem GPU.
-# requirements.txt traz typesafe-sdk (JEV) e o resto do cérebro.
-COPY requirements.txt .
-RUN pip install --index-url https://download.pytorch.org/whl/cpu torch && \
-    pip install -r requirements.txt
+# torch CPU-only ANTES do resto: o wheel default do PyPI arrasta CUDA (~3 GB de
+# libs nvidia) que não servem pra nada num host sem GPU. Vem de outro índice,
+# por isso fica fora do lock (faixa de versão abaixo).
+# O resto é o lock com hashes de requirements-prod.txt (typesafe-sdk e o cérebro),
+# sem chainlit nem pytest: --require-hashes recusa arquivo adulterado e
+# --no-deps garante que o lock não puxa nada além do que está nele. O torch (e as
+# dependências dele: sympy, networkx…) vem do índice CPU, sem hash.
+COPY requirements-prod.lock .
+RUN pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.4,<3" && \
+    pip install --no-deps --require-hashes -r requirements-prod.lock
 
 COPY src/ src/
 COPY config/ config/
