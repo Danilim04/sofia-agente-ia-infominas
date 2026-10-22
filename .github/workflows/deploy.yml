@@ -1,37 +1,24 @@
 # ==============================================================================
-# Deploy do bot — a cada push na main (ou à mão, com a tag que quiser).
+# Deploy da Sofia — MANUAL (workflow_dispatch), sem gatilho automático.
 #
-# Ordem (exigência do fluxo): 1º o ANSIBLE converge o estado da VM
-# (configure-server.yml via workflow_call), 2º o job de deploy roda o script
-# deploy/deploy-remote.sh --build-on-host — rsync das fontes, build das 2
-# imagens NA VM (ela é ARM64; o runner é x86_64), .env renderizado dos
-# secrets, compose up e healthcheck pela rede do Chatwoot.
-# O `go vet`/`go test` do gateway corre em paralelo ao Ansible como portão.
-#
-# Rollback = Run workflow com uma version antiga (as imagens das últimas 3
-# ficam na VPS) ou re-rodar a pipeline num commit anterior.
-#
-# Secrets exigidos: SSH_PRIVATE_KEY · OPENROUTER_API_KEY · MONGO_URI ·
-#                   WEBHOOK_TOKEN · TOOLS_API_TOKEN · PGVECTOR_PASSWORD
-# Opcionais:        DOCS_API_KEY (sem ela o sync da base aborta) ·
-#                   SAC_API_TOKEN · SAC_SERVICE_COD · CHATWOOT_API_TOKEN
-#                   (a fonte primária do token do Chatwoot é o ESTADO da VM,
-#                   .chatwoot-token — gravado pela pipeline configure-chatwoot)
-#                   LANGFUSE_PUBLIC_KEY · LANGFUSE_SECRET_KEY · LANGFUSE_HOST
-#                   (tracing; vazios = desligado. HOST default = cloud EU)
-# Variables:        INBOX_ID (caixa do Chatwoot que o bot atende; OBRIGATÓRIA e
-#                   > 0 — o render-env.sh aborta o deploy sem ela; a pipeline
-#                   configure-chatwoot lista as caixas)
+# A infra da Infominas ainda não existe para nós (P10: host, domínio HTTPS,
+# quem opera), então esta pipeline NÃO entrega em lugar nenhum: ela prova que o
+# que seria entregue está íntegro —
+#   1. validar: deploy/checar-env.py (toda variável lida pelo código está no
+#      .env.example, nenhum segredo preenchido) + `docker compose config` da
+#      base e da base+produção;
+#   2. imagens: constrói sofia-bot:brain-<tag> e sofia-bot:gateway-<tag>
+#      (sem push: não há registry definido).
+# O passo de entrega (SSH, registry, orquestrador) entra aqui quando P10 for
+# respondida — runbook em deploy/README.md. Esta pipeline não usa nenhum secret.
 # ==============================================================================
 name: Deploy
 
-# E0.3: deploy automático DESLIGADO até a infra da Infominas ser definida (P10).
-# Esta pipeline ainda descreve a VM da Azapfy (omni-route); será reescrita em E4.2.
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Tag da imagem (vazio = main-<sha7> do commit)'
+      tag:
+        description: 'Tag das imagens (vazio = manual-<sha7> do commit)'
         required: false
         type: string
 
@@ -43,94 +30,35 @@ permissions:
   contents: read
 
 jobs:
-  # 1º: estado da VM sempre convergido antes do deploy.
-  ansible:
-    uses: ./.github/workflows/configure-server.yml
-    secrets: inherit
-
-  test-go:
+  validar:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-python@v5
         with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-      - name: go vet + test (gateway)
-        working-directory: backend
-        run: |
-          go vet ./...
-          go test ./...
+          python-version: '3.12'
+      - name: .env.example × código e docker compose config
+        run: python deploy/checar-env.py
 
-  deploy:
-    needs: [ansible, test-go]
+  imagens:
+    needs: validar
     runs-on: ubuntu-latest
     timeout-minutes: 45
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - name: Resolve a versão
+      - name: Resolve a tag
         id: ver
-        run: |
-          v='${{ inputs.version }}'
-          [ -n "$v" ] || v="main-$(git rev-parse --short=7 HEAD)"
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-
-      # O SSH usa o IP direto. Fonte única do IP: o inventário Ansible.
-      - name: Resolve o IP da VM
-        id: vm
-        run: |
-          ip="$(awk '/ansible_host:/ { print $2; exit }' infra/ansible/inventories/prod/hosts.yml)"
-          test -n "$ip" || { echo "ansible_host não encontrado no inventário"; exit 1; }
-          echo "ip=$ip" >> "$GITHUB_OUTPUT"
-
-      - name: Chave SSH do deploy
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_bot
-          chmod 600 ~/.ssh/id_bot
-
-      # O build NÃO acontece aqui: a VM é ARM64 e o runner é x86_64. O
-      # deploy-remote.sh --build-on-host manda as fontes por rsync e builda
-      # nativamente na VM (deploy/build-on-host.sh), com cache de camadas lá.
-      - name: Renderiza o .env de produção
         env:
-          IMAGE_TAG: ${{ steps.ver.outputs.version }}
-          # Caixa do Chatwoot atendida pelo bot (GitHub variable; obrigatória e > 0 —
-          # vazia/0 aborta o deploy, senão o bot atenderia todas as caixas).
-          INBOX_ID: ${{ vars.INBOX_ID }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MONGO_URI: ${{ secrets.MONGO_URI }}
-          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
-          TOOLS_API_TOKEN: ${{ secrets.TOOLS_API_TOKEN }}
-          # Senha do Postgres (pgvector): RAG + estado do gateway. Obrigatória.
-          PGVECTOR_PASSWORD: ${{ secrets.PGVECTOR_PASSWORD }}
-          # Opcionais — vazios não quebram o deploy. O token do Chatwoot é
-          # bootstrap/override: o estado da VM (.chatwoot-token) tem precedência.
-          CHATWOOT_API_TOKEN: ${{ secrets.CHATWOOT_API_TOKEN }}
-          # HMAC do webhook (ZG-3): vazio = sem verificação. Só definir quando o
-          # Chatwoot assinar com o mesmo segredo — senão todo webhook é recusado.
-          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
-          SAC_API_TOKEN: ${{ secrets.SAC_API_TOKEN }}
-          # AzapDocs (fonte da base de conhecimento) — chave azk_... e webhook
-          # de alerta do sync. Vazios não quebram o deploy; o sync aborta sem chave.
-          DOCS_API_KEY: ${{ secrets.DOCS_API_KEY }}
-          SYNC_ALERTA_WEBHOOK: ${{ secrets.SYNC_ALERTA_WEBHOOK }}
-          SAC_SERVICE_COD: ${{ secrets.SAC_SERVICE_COD }}
-          # Langfuse (tracing) — opcionais; vazios = tracing desligado.
-          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
-          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
-          LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST || 'https://cloud.langfuse.com' }}
-        run: ./deploy/env/render-env.sh > "$RUNNER_TEMP/prod.env"
-
-      - name: Deploy remoto (script .sh)
+          TAG_INFORMADA: ${{ inputs.tag }}
         run: |
-          ./deploy/deploy-remote.sh \
-            --host '${{ steps.vm.outputs.ip }}' \
-            --version '${{ steps.ver.outputs.version }}' \
-            --env-file "$RUNNER_TEMP/prod.env" \
-            --key ~/.ssh/id_bot \
-            --build-on-host
+          t="$TAG_INFORMADA"
+          [ -n "$t" ] || t="manual-$(git rev-parse --short=7 HEAD)"
+          echo "tag=$t" >> "$GITHUB_OUTPUT"
+
+      - name: Build do gateway (Go)
+        run: docker build -t "sofia-bot:gateway-${{ steps.ver.outputs.tag }}" backend/
+
+      - name: Build do cérebro (Python)
+        run: docker build -t "sofia-bot:brain-${{ steps.ver.outputs.tag }}" agente-ia/
