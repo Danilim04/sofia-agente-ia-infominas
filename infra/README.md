@@ -1,9 +1,13 @@
 # infra/
 
-**Vazio de propósito.** A infraestrutura da Infominas é desconhecida
-(pendência **P10**), então este repositório não descreve servidor, DNS nem
-provedor. O Terraform (VM + DNS) e o Ansible (hardening da VM) herdados do Zapin
-foram removidos na E4.2; o histórico do git guarda os dois.
+**Sem infraestrutura da Infominas de propósito.** A infraestrutura dela é desconhecida
+(pendência **P10**), então este repositório não descreve servidor, DNS nem provedor.
+
+**Resíduo do Zapin (E4.6, remoção pendente):** `infra/terraform/` (VM + DNS) e
+`infra/ansible/` (hardening da VM) continuam aqui, cada um com um README
+"LEGADO DO ZAPIN — NÃO USAR" e listados em `docs/plano/legado-permitido.txt`. O `git rm`
+foi negado pelo classificador de permissões na sessão da etapa; nada na Sofia depende deles
+e o histórico do git guarda o conteúdo. Quem remover apaga também a linha da lista.
 
 O que a stack precisa de qualquer host está em [`deploy/README.md`](../deploy/README.md)
 (Docker, domínio HTTPS público, onde ficam os segredos, backup do Postgres).

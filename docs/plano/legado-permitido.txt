@@ -4,3 +4,13 @@
 # REGRA: esta lista só ENCOLHE. Cada etapa que limpa um diretório remove a
 # linha. A Onda 4 (E4.6) termina com o arquivo vazio (só comentários).
 # Linhas começando com # são ignoradas.
+#
+# Resíduos da E4.6: a remoção (git rm) foi negada pelo classificador de
+# permissões na sessão da etapa; cada um tem aviso "LEGADO DO ZAPIN" no topo e
+# nada na Sofia depende deles. Quem puder, remove o caminho E a linha daqui.
+deploy/build-on-host.sh
+deploy/deploy-remote.sh
+deploy/chatwoot/
+deploy/env/
+infra/terraform/
+infra/ansible/

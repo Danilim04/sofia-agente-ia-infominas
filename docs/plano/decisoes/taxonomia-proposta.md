@@ -115,14 +115,14 @@ ativos hoje? (`GET /users`, `departmentIds`; `10` §4: sem `userId` a conversa e
 na fila `PENDING` e quem é notificado são os atendentes do departamento); (2) o
 horário humano (P7) — nenhum dos 32 cenários depende dele.
 
-**Limitação de produto (fora desta etapa):** hoje a categoria só é fixada quando a intenção é
-`reclamacao_problema` (`INTENCOES_COM_CATEGORIA`, `src/classificacao/tipos.py`). Um pedido de boleto
-ou de preço (intenções `outro`/`duvida_informacao`) chega à transferência com categoria `indefinida`
-e vai para o departamento **padrão**, não para o da categoria. Responder Q2 não basta para
-`financeiro` e `comercial` irem aos departamentos próprios; precisa de uma mudança em `src/` (candidata
-a etapa nova). Por isso os dois cenários correspondentes continuam `xfail`.
+**Limitação de produto (resolvida na E3.10):** a categoria passou a ser fixada também nas intenções
+`outro` e `duvida_informacao` (`INTENCOES_COM_CATEGORIA`, `src/classificacao/tipos.py`; configurável em
+`JEV_INTENCOES_COM_CATEGORIA`). Um pedido de boleto ou de preço já chega à transferência com a categoria
+e vai ao departamento dela. Responder Q2 basta para `financeiro` e `comercial` irem aos departamentos
+próprios, e os dois cenários correspondentes já saíram do `xfail`; esperam só a aprovação desta taxonomia
+para subir de `pendentes/` à raiz.
 
-Destrava: `real-assunto-comercial-planos`, `real-financeiro-segunda-via` (com a mudança de produto).
+Destrava: `real-assunto-comercial-planos`, `real-financeiro-segunda-via`.
 
 ### Q3 — Prioridades: o que fazer sem `Media` e `Crítica`
 
@@ -170,15 +170,14 @@ tanto na taxonomia em uso quanto na proposta: foram movidos (`git mv`) de
 `real-status-sem-numero`.
 
 Os outros 22 ficam em `pendentes/`, **já remapeados** para as categorias da proposta
-(`test_taxonomia_proposta.py` os executa contra ela; todos passam, os dois `xfail`
-continuam `xfail`). Não podem ir para a raiz antes da aprovação porque o runner valida a
+(`test_taxonomia_proposta.py` os executa contra ela; todos passam, sem `xfail`). Não podem ir para a raiz antes da aprovação porque o runner valida a
 categoria contra `taxonomia.yaml`: `internet_rede` ainda não existe lá.
 
 | Destrava | Cenários |
 |---|---|
 | **Q1** (aprovar categorias e promover a proposta a `taxonomia.yaml`; depois `git mv`) | `real-internet-caiu-empresa`, `real-internet-lenta`, `real-internet-oscila`, `real-dois-links-fora-urgente`, `real-formulario-do-site`, `real-cita-protocolo-nao-abre-novo`, `real-cliente-irritado`, `real-cliente-impaciente-sem-transferir`, `real-vago-depois-descreve` (`internet_rede`); `real-computador-lento`, `real-pergunta-nao-confirma` (`computador`); `real-impressora-nao-imprime` (`impressora`); `real-servidor-desligando`, `real-muda-descricao-antes-de-confirmar` (`servidor_arquivos`); `real-cobranca-financeiro` (`financeiro`) |
 | **Q1**, reescrevendo o esperado (hoje descrevem o comportamento sem categoria: esclarece e transfere; com a categoria, deveria abrir chamado) | `real-email-nao-envia` (`email`), `real-vpn-nao-conecta` (`vpn`), `real-senha-acesso-usuario` (`acesso_senha`) |
-| **Q1 + Q2** e a mudança de produto descrita em Q2 | `real-assunto-comercial-planos` (`comercial`), `real-financeiro-segunda-via` (`financeiro`) |
+| **Q1 + Q2** (a mudança de produto saiu na E3.10) | `real-assunto-comercial-planos` (`comercial`), `real-financeiro-segunda-via` (`financeiro`) |
 | **Q5** (E5.3) | `real-nao-identificado-informa-cpf`, `real-cpf-invalido` |
 
 Cada arquivo em `pendentes/` traz uma linha `# Destrava: …` com a mesma informação.
