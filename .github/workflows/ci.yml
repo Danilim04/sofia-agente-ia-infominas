@@ -5,7 +5,9 @@
 #   e2e · evals-pr · gitleaks
 # `auditoria-dependencias` (govulncheck + pip-audit) NÃO é obrigatório: só avisa.
 # Actions fixadas por SHA (versão legível no comentário); golangci-lint e gitleaks
-# em versão fixa (este com checksum). Cada job roda o MESMO comando que scripts/verificar.sh roda localmente.
+# em versão fixa (este com checksum). Cada job roda o MESMO comando que scripts/verificar.sh
+# roda localmente, exceto `contratos` (go test -run Contrato + pytest -k contrato), que hoje só
+# existe aqui; no verificar.sh o lado de contrato já corre dentro do go test e do pytest.
 # ==============================================================================
 name: CI
 
@@ -164,15 +166,12 @@ jobs:
       # O mock-infodesk e o cérebro falso são stdlib: só precisam de um Python 3.12+.
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with: { python-version: "3.12" }
-      # Sobe mock-infodesk + gateway + cérebro falso (sem rede, sem chave). Cenário
-      # com bug conhecido (BUG-E4.1-1, corrigido na E4.5a) só falharia com E2E_ESTRITO=1.
-      # O padrão agora é 1; a variável de repositório E2E_ESTRITO=0 (Settings ›
-      # Variables › Actions, sem commit) volta a tolerar o bug numa emergência.
+      # Sobe mock-infodesk + gateway + cérebro falso (sem rede, sem chave). O bug
+      # conhecido do cenário 1 (BUG-E4.1-1) foi corrigido na E4.5a: o assert vale sempre.
       - name: E2E com mock-infodesk
         working-directory: backend
         run: go test -tags e2e -count=1 -v ./internal/e2e/...
         env:
-          E2E_ESTRITO: ${{ vars.E2E_ESTRITO || '1' }}
           E2E_PYTHON: python
 
   evals-pr:

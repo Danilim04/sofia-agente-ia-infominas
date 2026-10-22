@@ -21,6 +21,9 @@ aiosqlite>=0.21,<0.22
 # Importado sob demanda em src/classificacao/jev.py; sem ele o cérebro cai no fallback LLM.
 typesafe-sdk>=0.7.5,<1.0.0
 
+# --- Taxonomia (config/taxonomia.yaml) ---
+PyYAML>=6.0,<7.0
+
 # --- RAG ---
 chromadb>=1.0.0,<2.0.0
 pypdf>=5.0.0,<6.0.0

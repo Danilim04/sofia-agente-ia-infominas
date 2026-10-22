@@ -27,7 +27,8 @@ ENV PYTHONUNBUFFERED=1 \
 # por isso fica fora do lock (faixa de versão abaixo).
 # O resto é o lock com hashes de requirements-prod.txt (typesafe-sdk e o cérebro),
 # sem chainlit nem pytest: --require-hashes recusa arquivo adulterado e
-# --no-deps garante que só o que está no lock entra.
+# --no-deps garante que o lock não puxa nada além do que está nele. O torch (e as
+# dependências dele: sympy, networkx…) vem do índice CPU, sem hash.
 COPY requirements-prod.lock .
 RUN pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.4,<3" && \
     pip install --no-deps --require-hashes -r requirements-prod.lock
