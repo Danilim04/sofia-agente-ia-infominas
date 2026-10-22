@@ -91,6 +91,19 @@ func TestOrdemDosPrazosDoTurno(t *testing.T) {
 	}
 }
 
+// TestTetoDoTurnoPrecisaPassarDaCoalescencia: o TURNO_TETO conta desde a primeira
+// mensagem da rajada, então não pode ser menor que o DEBOUNCE_TETO.
+func TestTetoDoTurnoPrecisaPassarDaCoalescencia(t *testing.T) {
+	comObrigatorias(t)
+	t.Setenv("BRAIN_TIMEOUT", "90s")
+	t.Setenv("TURNO_TETO", "20s")
+	t.Setenv("DEBOUNCE_TETO", "20s")
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "TURNO_TETO") || !strings.Contains(err.Error(), "DEBOUNCE_TETO") {
+		t.Fatalf("esperava erro citando TURNO_TETO e DEBOUNCE_TETO, veio %v", err)
+	}
+}
+
 // TestDuracaoInvalidaCitaAVariavel: valor malformado não vira 0 em silêncio.
 func TestDuracaoInvalidaCitaAVariavel(t *testing.T) {
 	comObrigatorias(t)

@@ -95,7 +95,9 @@ def build_graph(
         if classificador is not None and classificador.jev is not None
         else FOLGA_JEV_PADRAO_S
     )
-    validar_prazos(get_settings(), folga_jev=folga_jev)
+    from src.tools.infodesk_tools import ABRIR_TIMEOUT_MINIMO_S
+
+    validar_prazos(get_settings(), folga_jev=folga_jev, espera_tool_minima=ABRIR_TIMEOUT_MINIMO_S)
     if llm is None:
         llm = get_llm()
     if tools is None:

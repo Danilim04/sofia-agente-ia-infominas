@@ -244,6 +244,13 @@ func Load() (*Config, error) {
 			cfg.BrainTimeout, cfg.TurnoTeto)
 	}
 
+	// O teto do turno conta desde a primeira mensagem da rajada: a coalescência
+	// (DebounceTeto) gasta parte dele antes de o cérebro ser chamado.
+	if cfg.TurnoTeto <= cfg.DebounceTeto {
+		return nil, fmt.Errorf("TURNO_TETO (%s) precisa ser maior que DEBOUNCE_TETO (%s): "+
+			"o teto do turno conta desde a primeira mensagem da rajada", cfg.TurnoTeto, cfg.DebounceTeto)
+	}
+
 	if cfg.IdentLookupAmbiguo != IdentAmbiguoPedirCPF {
 		return nil, fmt.Errorf("IDENT_LOOKUP_AMBIGUO inválido (%q): só %q é suportado", cfg.IdentLookupAmbiguo, IdentAmbiguoPedirCPF)
 	}

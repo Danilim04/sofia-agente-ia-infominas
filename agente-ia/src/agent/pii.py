@@ -30,6 +30,7 @@ lê-lo); o tracing das gerações é da observabilidade (E4.3).
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import time
@@ -37,11 +38,13 @@ import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from src.identity.contrato import mascarar_contrato
 from src.identity.cpf import mascarar_cpf, somente_digitos
+
+logger = logging.getLogger(__name__)
 
 #: Validade do valor em claro no cofre: bem acima do prazo do turno
 #: (`BRAIN_TURNO_PRAZO`), para nunca expirar no meio dele.
@@ -64,6 +67,12 @@ def mascarar_cpfs_no_texto(texto: str) -> str:
 
 
 def _mascarar_valor(chave: str | None, valor: Any) -> Any:
+    if (
+        chave in ("cpf", "contrato")
+        and isinstance(valor, int | float)
+        and not isinstance(valor, bool)
+    ):
+        valor = str(valor)  # o modelo mandou o número sem aspas: mesmo assim é PII
     if isinstance(valor, str):
         if chave == "cpf":
             # já mascarado (idempotência): `***.***.789-**` não tem 11 dígitos
@@ -78,6 +87,11 @@ def _mascarar_valor(chave: str | None, valor: Any) -> Any:
     if isinstance(valor, list):
         return [_mascarar_valor(None, v) for v in valor]
     return valor
+
+
+def mascarar_estrutura_de_texto(valor: Any) -> Any:
+    """CPFs mascarados em qualquer dict/lista de textos (ex.: `proposta_chamado`)."""
+    return _mascarar_valor(None, valor)
 
 
 def mascarar_args(args: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -154,6 +168,7 @@ class _Cofre:
                 # descarta o mais antigo; o turno dele já estourou o prazo há muito.
                 mais_antiga = min(self._itens, key=lambda k: self._itens[k][0])
                 del self._itens[mais_antiga]
+                logger.warning("cofre_pii_cheio — entrada mais antiga descartada")
             self._itens[chave] = (agora, valor)
 
     def obter(self, chave: str) -> Any | None:
@@ -214,25 +229,21 @@ def _com_id(mensagem: BaseMessage) -> BaseMessage:
 def mascarar_mensagem(mensagem: BaseMessage) -> BaseMessage:
     """Cópia da mensagem sem PII (a mesma instância se não havia o que mascarar).
 
-    Pura: não toca no cofre nem inventa `id`. Só `HumanMessage` (texto com CPF)
-    e `AIMessage` (args de tool call e o espelho cru do provedor) são tocadas.
-    Idempotente.
+    Pura: não toca no cofre nem inventa `id`. Tocadas: `HumanMessage` (texto com
+    CPF), `AIMessage` (texto, args de tool call e o espelho cru do provedor) e
+    `ToolMessage` (o gateway ou o modelo podem ecoar o dado). Idempotente.
     """
-    if isinstance(mensagem, HumanMessage):
+    if isinstance(mensagem, HumanMessage | ToolMessage):
         mascarado = _mascarar_conteudo(mensagem.content)
         if mascarado == mensagem.content:
             return mensagem
         return mensagem.model_copy(update={"content": mascarado})
 
-    if isinstance(mensagem, AIMessage) and (mensagem.tool_calls or mensagem.additional_kwargs):
+    if isinstance(mensagem, AIMessage):
         chamadas: list[dict[str, Any]] = [dict(tc) for tc in mensagem.tool_calls or []]
         novas = [{**tc, "args": mascarar_args(tc.get("args"))} for tc in chamadas]
         kwargs = _mascarar_kwargs(mensagem.additional_kwargs)
-        conteudo = (
-            _mascarar_conteudo(mensagem.content)
-            if isinstance(mensagem.content, list)
-            else mensagem.content
-        )
+        conteudo = _mascarar_conteudo(mensagem.content)
         if (
             novas == chamadas
             and kwargs == mensagem.additional_kwargs

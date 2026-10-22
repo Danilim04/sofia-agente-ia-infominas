@@ -44,7 +44,13 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import BaseTool
 
-from src.agent.pii import descartar, mascarar_args, proteger_mensagem, reidratar
+from src.agent.pii import (
+    descartar,
+    mascarar_args,
+    mascarar_estrutura_de_texto,
+    proteger_mensagem,
+    reidratar,
+)
 from src.agent.prompts import (
     RESPOSTA_ACAO_SEM_FERRAMENTA,
     RESPOSTA_ERRO_INTERNO,
@@ -861,21 +867,29 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
                 )
                 continue
 
+            # Com PII nos args (CPF/contrato) a tool roda SEM os callbacks do trace:
+            # o span de entrada da tool levaria o valor em claro ao Langfuse.
+            tem_pii = mascarar_args(args_llm) != dict(args_llm)
             try:
-                resultado = tool.invoke(args)
+                resultado = (
+                    tool.invoke(args, config={"callbacks": []}) if tem_pii else tool.invoke(args)
+                )
             except Exception as exc:
-                logger.warning("tool_falhou nome=%s erro=%s", nome, exc)
+                # Só o tipo: a mensagem do pydantic repete o `input_value` (o CPF).
+                logger.warning("tool_falhou nome=%s erro=%s", nome, type(exc).__name__)
                 resultado = {
                     "erro": ("a ferramenta falhou agora; tente de novo ou ofereça abrir um chamado")
                 }
 
             # Efeito da tool sobre o estado (duas fases do chamado, identificação…):
             # decidido pelo registro `EFEITOS`, nunca pelo texto do modelo.
-            efeitos_do_turno.update(
-                efeito_pos_tool(
-                    nome, resultado, {**state, **efeitos_do_turno, "messages": em_claro}
-                )
+            delta = efeito_pos_tool(
+                nome, resultado, {**state, **efeitos_do_turno, "messages": em_claro}
             )
+            if delta.get("proposta_chamado"):
+                # CPF digitado no texto livre do chamado não entra no estado.
+                delta["proposta_chamado"] = mascarar_estrutura_de_texto(delta["proposta_chamado"])
+            efeitos_do_turno.update(delta)
 
             if nome == "consultar_base_conhecimento":
                 tentou_rag = True

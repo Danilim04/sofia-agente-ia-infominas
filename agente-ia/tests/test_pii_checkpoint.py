@@ -294,3 +294,150 @@ def test_checkpointer_sqlite_assincrono_nao_grava_cpf_em_disco(monkeypatch, tmp_
     for proibido in PROIBIDOS:
         assert proibido.encode() not in bruto, f"{proibido!r} gravado em disco"
     assert CPF_MASCARADO.encode() in bruto
+
+
+# ---------------------------------------------------------------------------
+# Achados da revisão: texto livre, escalares, proposta, trace e log de falha
+# ---------------------------------------------------------------------------
+
+
+def test_texto_livre_do_modelo_e_da_tool_tambem_nao_vai_ao_checkpoint(monkeypatch):
+    """O modelo ecoa o CPF (junto da tool call e na resposta) e o gateway devolve o dado."""
+    instalar_gateway_fake(
+        monkeypatch,
+        {
+            "contato/identificar": {
+                **contrato_tools("contato/identificar", "ok"),
+                "eco": f"recebi {CPF_PONTUADO}",
+            }
+        },
+    )
+    llm = fake_llm(
+        [
+            AIMessage(
+                content=f"Registrando o CPF {CPF_PONTUADO} agora",
+                tool_calls=[
+                    {"id": "tc-1", "name": "informar_identificacao", "args": {"cpf": CPF_PONTUADO}}
+                ],
+            ),
+            AIMessage(content=f"Anotei o CPF {CPF_PONTUADO} certinho!"),
+        ]
+    )
+    saver = MemorySaver()
+    out = _turno(_grafo(llm, saver), f"meu cpf é {CPF_PONTUADO}")
+
+    guardado = _conteudo_do_saver(saver)
+    for proibido in PROIBIDOS:
+        assert proibido not in guardado
+        assert proibido not in str([m.content for m in out["messages"]])
+    assert "certinho" in out["messages"][-1].content  # a resposta sai, só mascarada
+
+
+@pytest.mark.parametrize(
+    ("valor", "esperado"), [(12345678909, CPF_MASCARADO), (12345678909.0, "***.***.***-**")]
+)
+def test_cpf_numerico_sem_aspas_tambem_e_mascarado(valor, esperado):
+    msg = AIMessage(
+        content="",
+        id="a-num",
+        tool_calls=[{"id": "t-1", "name": "informar_identificacao", "args": {"cpf": valor}}],
+    )
+    protegida = pii.proteger_mensagem(msg)
+    assert protegida.tool_calls[0]["args"] == {"cpf": esperado}
+    assert pii.reidratar([protegida])[0].tool_calls[0]["args"] == {"cpf": valor}
+
+
+def test_falha_da_tool_nao_loga_o_cpf_nem_em_warning(monkeypatch, caplog):
+    """A mensagem do pydantic repete `input_value`: o log leva só o tipo da exceção."""
+    instalar_gateway_fake(monkeypatch, {})
+    llm = fake_llm(
+        [
+            _chamada("informar_identificacao", "tc-1", cpf=12345678909),
+            AIMessage(content="Não consegui agora."),
+        ]
+    )
+    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.DEBUG, logger="src.agent.nodes")
+    _turno(_grafo(llm, MemorySaver()), f"meu cpf é {CPF_PONTUADO}")
+    for registro in caplog.records:
+        for proibido in PROIBIDOS:
+            assert proibido not in registro.getMessage()
+
+
+def test_tool_com_cpf_roda_sem_callbacks_do_trace(monkeypatch):
+    """O span de entrada da tool levaria o CPF ao Langfuse: com PII nos args, sem handlers."""
+    from langchain_core.callbacks import BaseCallbackHandler
+
+    class Espiao(BaseCallbackHandler):
+        def __init__(self):
+            self.entradas: list[str] = []
+
+        def on_tool_start(self, serialized, input_str, **kwargs):
+            self.entradas.append(str(input_str))
+
+    instalar_gateway_fake(
+        monkeypatch, {"contato/identificar": contrato_tools("contato/identificar", "ok")}
+    )
+    llm = fake_llm(
+        [
+            _chamada("informar_identificacao", "tc-1", cpf=CPF_PONTUADO),
+            AIMessage(content="Anotado!"),
+        ]
+    )
+    espiao = Espiao()
+    _grafo(llm, MemorySaver()).invoke(
+        {
+            "messages": [HumanMessage(content=f"meu cpf é {CPF_PONTUADO}")],
+            "telefone": TELEFONE,
+            "conversation_id": CONVERSA,
+        },
+        config={"configurable": {"thread_id": CONVERSA}, "callbacks": [espiao]},
+    )
+    assert not any(CPF_PONTUADO in e or CPF_DIGITOS in e for e in espiao.entradas)
+
+
+def test_proposta_do_chamado_com_cpf_no_texto_livre_fica_mascarada(monkeypatch):
+    preparo = contrato_tools("ticket/preparar", "ok")
+    preparo["proposta"] = {
+        **preparo["proposta"],
+        "descricao": f"Cliente (CPF {CPF_PONTUADO}) sem conexão.",
+    }
+    instalar_gateway_fake(monkeypatch, {"ticket/preparar": preparo})
+    llm = fake_llm(
+        [
+            _chamada(
+                "preparar_abertura_chamado",
+                "tc-1",
+                titulo="Sem conexão",
+                descricao=f"Cliente (CPF {CPF_PONTUADO}) sem conexão.",
+            ),
+            AIMessage(content="Posso abrir?"),
+        ]
+    )
+    saver = MemorySaver()
+    out = _turno_identificado(_grafo(llm, saver))
+    assert out["proposta_chamado"]
+    assert CPF_PONTUADO not in str(out["proposta_chamado"])
+    assert CPF_MASCARADO in out["proposta_chamado"]["descricao"]
+    assert CPF_PONTUADO not in _conteudo_do_saver(saver)
+
+
+def _turno_identificado(grafo):
+    return grafo.invoke(
+        {
+            "messages": [HumanMessage(content="minha internet caiu, abre um chamado")],
+            "telefone": TELEFONE,
+            "conversation_id": CONVERSA,
+            "contato": {"forma": "telefone", "valor_mascarado": "Maria S.", "cliente_id": "c-1"},
+        },
+        config={"configurable": {"thread_id": CONVERSA}},
+    )
+
+
+def test_cofre_cheio_avisa_ao_descartar_o_mais_antigo(monkeypatch, caplog):
+    monkeypatch.setattr(pii, "COFRE_MAX_ENTRADAS", 2)
+    with caplog.at_level(logging.WARNING, logger="src.agent.pii"):
+        for i in range(3):
+            pii.proteger_mensagem(HumanMessage(content=f"cpf {CPF_DIGITOS}", id=f"h-{i}"))
+    assert any("cofre_pii_cheio" in r.getMessage() for r in caplog.records)
+    assert pii.tamanho_do_cofre() == 2

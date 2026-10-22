@@ -92,10 +92,25 @@ def test_folga_do_jev_entra_na_conta(monkeypatch):
 
 @pytest.mark.parametrize(
     ("texto", "segundos"),
-    [("90s", 90.0), ("1m30s", 90.0), ("1500ms", 1.5), ("2m", 120.0), ("45", 45.0), ("1h", 3600.0)],
+    [("90s", 90.0), ("1m30s", 90.0), ("1500ms", 1.5), ("2m", 120.0), ("1h", 3600.0)],
 )
 def test_duracao_formato_go(texto, segundos):
     assert duracao_em_segundos(texto, "X") == pytest.approx(segundos)
+
+
+def test_duracao_sem_unidade_e_recusada_como_no_go():
+    """`time.ParseDuration("90")` falha no gateway: o cérebro não pode aceitar o que ele recusa."""
+    with pytest.raises(ConfigPrazosInvalida, match="BRAIN_TIMEOUT"):
+        duracao_em_segundos("90", "BRAIN_TIMEOUT")
+    assert duracao_em_segundos("0", "X") == 0.0
+
+
+def test_piso_proprio_do_abrir_entra_na_conta(monkeypatch):
+    """INFODESK_TOOLS_TIMEOUT=30 mas o `abrir` espera 35: 36 não cobre 35 + 2."""
+    s = _settings(monkeypatch, BRAIN_TURNO_PRAZO="36", INFODESK_TOOLS_TIMEOUT="30")
+    validar_prazos(s)
+    with pytest.raises(ConfigPrazosInvalida, match="piso do abrir_chamado"):
+        validar_prazos(s, espera_tool_minima=35.0)
 
 
 def test_build_graph_recusa_prazos_fora_de_ordem_no_boot(monkeypatch):
@@ -106,8 +121,8 @@ def test_build_graph_recusa_prazos_fora_de_ordem_no_boot(monkeypatch):
 
 
 def test_build_graph_usa_o_jev_timeout_do_classificador(monkeypatch):
-    """BRAIN_TURNO_PRAZO=33 > 30 + 2 (JEV_TIMEOUT default), mas não > 30 + 5."""
-    monkeypatch.setenv("BRAIN_TURNO_PRAZO", "33")
+    """BRAIN_TURNO_PRAZO=38 > 35 (abrir) + 2 (JEV_TIMEOUT default), mas não > 35 + 5."""
+    monkeypatch.setenv("BRAIN_TURNO_PRAZO", "38")
     get_settings.cache_clear()
     servico = servico_fake(FakeJEV(padrao=resp_jev()))
     build_graph(llm=fake_llm([]), tools=[], buscar_chunks=sem_rag, classificador=servico)

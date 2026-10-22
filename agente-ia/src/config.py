@@ -60,11 +60,13 @@ class Settings(BaseSettings):
     #                                          > INFODESK_TOOLS_TIMEOUT (30s) + JEV
     # Quem desiste primeiro é o cérebro, com classe e ID — nunca o gateway no
     # escuro. O turno paga JEV, duas chamadas de LLM e a tool mais lenta
-    # (`abrir_chamado`, que espera até 35s).
+    # (`abrir_chamado`, que espera até 35s). `validar_prazos` garante o piso da tool
+    # mais lenta + JEV; as chamadas de LLM (LLM_TIMEOUT, 1 retry cada) não entram na
+    # conta — no pior caso extremo o próprio prazo do turno as interrompe.
     brain_turno_prazo: float = Field(70.0, alias="BRAIN_TURNO_PRAZO")
     # Prazos do GATEWAY, lidos só para conferir a ordem acima quando o ambiente
     # (.env/compose compartilhado) os traz; ausentes, o cérebro confere só o que
-    # conhece. Formato Go: "90s", "1m30s", "1500ms" (número puro = segundos).
+    # conhece. Formato Go: "90s", "1m30s", "1500ms" (unidade obrigatória, como no Go).
     brain_timeout_gateway: str = Field("", alias="BRAIN_TIMEOUT")
     turno_teto_gateway: str = Field("", alias="TURNO_TETO")
     # Teto de tokens de SAÍDA por chamada. Sem ele, o OpenRouter reserva o máximo
@@ -127,10 +129,13 @@ _UNIDADE_S = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}
 
 
 def duracao_em_segundos(texto: str, variavel: str) -> float:
-    """ "90s"/"1m30s"/"1500ms"/"90" (segundos) → segundos; inválido → erro citando a variável."""
+    """ "90s"/"1m30s"/"1500ms" → segundos; inválido → erro citando a variável.
+
+    Mesma regra do gateway (`time.ParseDuration`): número sem unidade só vale "0".
+    """
     bruto = texto.strip()
-    if re.fullmatch(r"\d+(?:\.\d+)?", bruto):
-        return float(bruto)
+    if bruto == "0":
+        return 0.0
     partes = _DURACAO_GO.findall(bruto)
     if not partes or "".join(n + u for n, u in partes) != bruto:
         raise ConfigPrazosInvalida(
@@ -139,20 +144,25 @@ def duracao_em_segundos(texto: str, variavel: str) -> float:
     return sum(float(n) * _UNIDADE_S[u] for n, u in partes)
 
 
-def validar_prazos(settings: Settings, *, folga_jev: float = FOLGA_JEV_PADRAO_S) -> None:
+def validar_prazos(
+    settings: Settings, *, folga_jev: float = FOLGA_JEV_PADRAO_S, espera_tool_minima: float = 0.0
+) -> None:
     """Confere a ordem dos prazos do turno; violação levanta `ConfigPrazosInvalida`.
 
-    - cérebro: `BRAIN_TURNO_PRAZO` > `INFODESK_TOOLS_TIMEOUT` + folga do JEV (o
-      turno paga a tool e o JEV; sem folga, a tool consome o turno inteiro);
+    - cérebro: `BRAIN_TURNO_PRAZO` > espera da tool + folga do JEV (o turno paga a
+      tool e o JEV; sem folga, a tool consome o turno inteiro). A espera da tool é
+      `INFODESK_TOOLS_TIMEOUT` ou, se maior, o piso próprio de `abrir_chamado`
+      (`espera_tool_minima`);
     - com `TURNO_TETO` no ambiente: `TURNO_TETO` > `BRAIN_TURNO_PRAZO`;
     - com `BRAIN_TIMEOUT` e `TURNO_TETO`: `BRAIN_TIMEOUT` > `TURNO_TETO`.
     """
     prazo = settings.brain_turno_prazo
-    piso = settings.infodesk_tools_timeout + folga_jev
+    espera_tool = max(settings.infodesk_tools_timeout, espera_tool_minima)
+    piso = espera_tool + folga_jev
     if prazo <= piso:
         raise ConfigPrazosInvalida(
             f"BRAIN_TURNO_PRAZO ({prazo:g}s) precisa ser maior que INFODESK_TOOLS_TIMEOUT "
-            f"({settings.infodesk_tools_timeout:g}s) + folga do JEV ({folga_jev:g}s)"
+            f"({espera_tool:g}s, com o piso do abrir_chamado) + folga do JEV ({folga_jev:g}s)"
         )
     teto = (
         duracao_em_segundos(settings.turno_teto_gateway, "TURNO_TETO")
