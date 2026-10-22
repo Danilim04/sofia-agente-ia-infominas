@@ -53,7 +53,7 @@ def test_agendamento_e_disparo_manual(wf: dict[str, Any]):
 def test_permissoes_minimas_e_comentario_em_pr(wf: dict[str, Any]):
     assert wf["permissions"] == {"contents": "read", "pull-requests": "write"}
     comentario = next(p for p in _passos(wf) if "gh pr comment" in p.get("run", ""))
-    assert comentario["if"] == "steps.regressao.outputs.regressao == 'true'"
+    assert comentario["if"] == "${{ !cancelled() && steps.regressao.outputs.regressao == 'true' }}"
     assert comentario["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert "state merged" in comentario["run"] and "mergedAt" in comentario["run"]
 
@@ -110,7 +110,7 @@ def test_artefato_e_relatorios_batem_com_o_diretorio_dos_runners(wf: dict[str, A
     )
     assert upload["with"]["name"] == "relatorios-evals"
     assert upload["with"]["path"] == "agente-ia/evals/relatorios/"
-    assert upload["if"].startswith("always()")
+    assert "!cancelled()" in upload["if"]
     assert next(iter(wf["jobs"].values()))["defaults"]["run"]["working-directory"] == "agente-ia"
     gitignore = (RAIZ_REPO / ".gitignore").read_text(encoding="utf-8")
     assert "agente-ia/evals/relatorios/" in gitignore
@@ -122,3 +122,35 @@ def test_actionlint_se_existir():
         pytest.skip("actionlint não instalado neste ambiente")
     r = subprocess.run([exe, str(WORKFLOW)], capture_output=True, text=True, check=False)  # noqa: S603
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_exit_1_so_vira_aviso_se_o_relatorio_json_existe(wf: dict[str, Any]):
+    """Exceção não tratada também sai com 1: sem o .json (gravado antes de comparar) o job falha."""
+    for passo in _passos(wf):
+        run = passo.get("run", "")
+        if "python -m evals.classificacao" in run or "python -m evals.juiz --relatorio" in run:
+            assert re.search(r'"\$rc" -eq 1 \] && \[ -f evals/relatorios/[\w-]+\.json \]', run), (
+                passo["name"]
+            )
+            assert 'elif [ "$rc" -ne 0 ]; then exit "$rc"' in run, passo["name"]
+        if (
+            "pytest -m" in run
+        ):  # teste vermelho = critério não atingido ou serviço fora: o job fica vermelho
+            assert 'if [ "$rc" -ne 0 ]; then' in run and "-eq 1" not in run, passo["name"]
+
+
+def test_passo_que_falha_nao_pula_os_seguintes(wf: dict[str, Any]):
+    """Sem `!cancelled()`, o JEV fora do ar (passo 1) deixaria o fallback LLM e o juiz sem rodar."""
+    depois_do_primeiro = [
+        p
+        for p in _passos(wf)[
+            _passos(wf).index(
+                next(p for p in _passos(wf) if "Classificação com JEV" in p.get("name", ""))
+            )
+            + 1 :
+        ]
+        if "steps.chaves.outputs" in str(p.get("if", ""))
+    ]
+    assert len(depois_do_primeiro) >= 6
+    for passo in depois_do_primeiro:
+        assert "!cancelled()" in passo["if"], passo.get("name")

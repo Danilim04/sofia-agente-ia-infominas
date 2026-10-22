@@ -46,7 +46,17 @@ class Regressao:
     #: pontos perdidos (positivo = piorou); para ECE, o aumento
     piora: float
 
+    @property
+    def sumiu(self) -> bool:
+        """A métrica está no baseline e não saiu nesta rodada (cenário/caso sem nota, runner quebrado)."""
+        return self.atual != self.atual  # NaN
+
     def linha(self) -> str:
+        if self.sumiu:
+            return (
+                f"| {self.familia} | `{self.chave}` | `{self.metrica}` | {self.base:.2f} | "
+                "**sumiu** | — |"
+            )
         return (
             f"| {self.familia} | `{self.chave}` | `{self.metrica}` | {self.base:.2f} | "
             f"{self.atual:.2f} | {self.piora:+.2f} |"
@@ -61,12 +71,21 @@ def comparar(
     tolerancia: float,
     sentido: Callable[[str], int],
 ) -> list[Regressao]:
-    """Regressões acima da tolerância. `sentido(metrica)`: +1 maior é melhor, −1 menor é melhor, 0 ignora."""
+    """Regressões acima da tolerância. `sentido(metrica)`: +1 maior é melhor, −1 menor é melhor, 0 ignora.
+
+    Métrica que está no baseline e SUMIU da rodada também é alerta (`Regressao.sumiu`): uma noite em
+    que todo cenário falhou não pode passar por "sem regressão" só porque não saiu nota.
+    """
     achadas: list[Regressao] = []
     for metrica, base in sorted(baseline.items()):
         s = sentido(metrica)
+        if s == 0:
+            continue
         atual = atuais.get(metrica)
-        if s == 0 or atual is None:
+        if atual is None:
+            achadas.append(
+                Regressao(familia, chave, metrica, float(base), float("nan"), float("inf"))
+            )
             continue
         piora = (base - atual) if s > 0 else (atual - base)
         if piora > tolerancia:
@@ -114,7 +133,19 @@ def regressoes_juiz(
     return comparar("juiz", chave, relatorio.get("metricas") or {}, base, tol, _sentido_juiz)
 
 
-def montar_comentario(regressoes: Sequence[Regressao], link_execucao: str = "") -> str:
+def versao_incompativel(relatorio: Mapping[str, Any], baseline: Mapping[str, Any]) -> str:
+    """Texto de aviso se o baseline foi gravado com outra versão do prompt do juiz ('' = compatível)."""
+    nova, antiga = relatorio.get("versao_prompt"), baseline.get("versao_prompt")
+    if nova and antiga and nova != antiga:
+        return (
+            f"baseline gravado com o prompt {antiga}, esta rodada usou {nova}: regrave o baseline"
+        )
+    return ""
+
+
+def montar_comentario(
+    regressoes: Sequence[Regressao], link_execucao: str = "", notas: Sequence[str] = ()
+) -> str:
     """Texto do comentário no último PR mergeado (o marcador deixa achar/atualizar depois)."""
     linhas = [
         MARCADOR,
@@ -128,6 +159,8 @@ def montar_comentario(regressoes: Sequence[Regressao], link_execucao: str = "") 
         "|---|---|---|---:|---:|---:|",
         *[r.linha() for r in regressoes],
         "",
+        *[f"- {n}" for n in notas],
+        *([""] if notas else []),
     ]
     if link_execucao:
         linhas.append(f"Relatório completo (artefato `relatorios-evals`): {link_execucao}")
@@ -177,6 +210,7 @@ def main(argv: Sequence[str] | None = None, saida_texto: Callable[[str], None] =
     """0 = comparou (com ou sem regressão: ela vai em `regressao=` e no comentário); 2 = entrada ilegível."""
     args = _parser().parse_args(argv)
     achadas: list[Regressao] = []
+    notas: list[str] = []
     try:
         for caminho in args.classificacao:
             if not caminho.exists():
@@ -193,20 +227,32 @@ def main(argv: Sequence[str] | None = None, saida_texto: Callable[[str], None] =
                 saida_texto(f"aviso: {args.juiz} não existe (rodada não gerou o relatório)")
             else:
                 base = _ler_json(args.baseline_juiz) if args.baseline_juiz.exists() else {}
-                achadas += regressoes_juiz(_ler_json(args.juiz), base, args.tolerancia)
+                relatorio_juiz = _ler_json(args.juiz)
+                incompativel = versao_incompativel(relatorio_juiz, base)
+                if incompativel:
+                    saida_texto(f"aviso: juiz: {incompativel} (comparação ignorada)")
+                else:
+                    achadas += regressoes_juiz(relatorio_juiz, base, args.tolerancia)
+                c = relatorio_juiz.get("contagens") or {}
+                if c.get("julgados", 0) < c.get("cenarios", 0):
+                    notas.append(
+                        f"Juiz: só {c.get('julgados', 0)} de {c.get('cenarios', 0)} cenários receberam nota "
+                        f"({c.get('erros_execucao', 0)} erros de execução, {c.get('juiz_invalido', 0)} respostas "
+                        "inválidas do juiz): as médias são parciais."
+                    )
+                    saida_texto(f"aviso: {notas[-1]}")
     except (ValueError, OSError) as e:
         saida_texto(f"erro: {e}")
         return 2
     if achadas:
         saida_texto(f"REGRESSÃO em {len(achadas)} métrica(s):")
         for r in achadas:
-            saida_texto(
-                f"  - {r.familia} {r.chave} {r.metrica}: {r.base:.2f} → {r.atual:.2f} ({r.piora:+.2f} pts)"
-            )
+            detalhe = "sumiu da rodada" if r.sumiu else f"{r.atual:.2f} ({r.piora:+.2f} pts)"
+            saida_texto(f"  - {r.familia} {r.chave} {r.metrica}: {r.base:.2f} → {detalhe}")
         if args.saida is not None:
             args.saida.parent.mkdir(parents=True, exist_ok=True)
             args.saida.write_text(
-                montar_comentario(achadas, _link_execucao()), encoding="utf-8", newline="\n"
+                montar_comentario(achadas, _link_execucao(), notas), encoding="utf-8", newline="\n"
             )
     else:
         saida_texto("sem regressão contra os baselines (ou baseline sem métricas para comparar)")

@@ -72,11 +72,25 @@ def test_juiz_queda_acima_de_2_pontos_e_regressao_e_exatamente_2_nao():
     assert [(r.metrica, r.piora) for r in achadas] == [("juiz.persona.media", pytest.approx(2.5))]
 
 
-def test_juiz_melhora_nao_e_regressao_e_metrica_ausente_e_ignorada():
+def test_juiz_melhora_nao_e_regressao_mas_metrica_que_sumiu_e_alerta():
     base = {"juiz.persona.media": 90.0, "juiz.nao_inventa.media": 90.0}
-    assert (
-        reg.comparar("juiz", "k", {"juiz.persona.media": 99.0}, base, 2.0, reg._sentido_juiz) == []
-    )
+    achadas = reg.comparar("juiz", "k", {"juiz.persona.media": 99.0}, base, 2.0, reg._sentido_juiz)
+    # persona subiu → nada; nao_inventa estava no baseline e não saiu → "sumiu" (rodada quebrada ≠ sem regressão)
+    assert [(r.metrica, r.sumiu) for r in achadas] == [("juiz.nao_inventa.media", True)]
+    assert "**sumiu**" in achadas[0].linha()
+    # rodada em que todo cenário falhou: nenhuma métrica → todas as do baseline sumiram
+    assert len(reg.comparar("juiz", "k", {}, base, 2.0, reg._sentido_juiz)) == 2
+
+
+def test_metrica_nao_bloqueante_ausente_continua_ignorada():
+    base = {"categoria.acuracia": 80.0, "latencia.p95_ms": 100.0}
+    assert reg.comparar("classificação", "k", {}, base, 2.0, reg._sentido_classificacao) == []
+
+
+def test_baseline_de_outra_versao_do_prompt_nao_e_comparado():
+    assert reg.versao_incompativel({"versao_prompt": "juiz-v2"}, {"versao_prompt": "juiz-v1"})
+    assert reg.versao_incompativel({"versao_prompt": "juiz-v1"}, {"versao_prompt": "juiz-v1"}) == ""
+    assert reg.versao_incompativel({"versao_prompt": "juiz-v1"}, {"versao_prompt": None}) == ""
 
 
 def test_classificacao_f1_e_acuracia_caem_ece_sobe():
@@ -209,3 +223,51 @@ def test_baselines_versionados_estao_validos():
     for caminho in (reg.BASELINE_CLASSIFICACAO, reg.BASELINE_JUIZ):
         dado = json.loads(caminho.read_text(encoding="utf-8"))
         assert dado["tolerancia_pontos"] == 2.0 and isinstance(dado["metricas"], dict)
+
+
+def test_cli_rodada_quebrada_vira_alerta_e_nota_de_cenarios_parciais(tmp_path: Path):
+    base_juiz = _escrever(
+        tmp_path / "base.json",
+        {"metricas": {"juiz/noturno": {"juiz.geral.media": 85.0}}, "versao_prompt": "juiz-v1"},
+    )
+    juiz_rel = _escrever(
+        tmp_path / "juiz.json",
+        {
+            "chave": "juiz/noturno",
+            "versao_prompt": "juiz-v1",
+            "contagens": {"cenarios": 26, "julgados": 0, "erros_execucao": 26, "juiz_invalido": 0},
+            "metricas": {},
+        },
+    )
+    saida, gh = tmp_path / "c.md", tmp_path / "gh"
+    linhas: list[str] = []
+    codigo = reg.main(
+        ["--juiz", str(juiz_rel), "--baseline-juiz", str(base_juiz), "--saida", str(saida), "--github-output", str(gh)],
+        saida_texto=linhas.append,
+    )  # fmt: skip
+    assert codigo == 0 and gh.read_text(encoding="utf-8") == "regressao=true\n"
+    comentario = saida.read_text(encoding="utf-8")
+    assert "**sumiu**" in comentario and "só 0 de 26 cenários receberam nota" in comentario
+    assert any("sumiu da rodada" in linha for linha in linhas)
+
+
+def test_cli_baseline_de_outra_versao_do_prompt_ignora_a_comparacao(tmp_path: Path):
+    base = _escrever(
+        tmp_path / "b.json",
+        {"versao_prompt": "juiz-v1", "metricas": {"juiz/noturno": {"juiz.geral.media": 90.0}}},
+    )
+    rel = _escrever(
+        tmp_path / "j.json",
+        {
+            "chave": "juiz/noturno",
+            "versao_prompt": "juiz-v2",
+            "metricas": {"juiz.geral.media": 10.0},
+        },
+    )
+    gh, linhas = tmp_path / "gh", list[str]()
+    codigo = reg.main(
+        ["--juiz", str(rel), "--baseline-juiz", str(base), "--github-output", str(gh)],
+        saida_texto=linhas.append,
+    )
+    assert codigo == 0 and gh.read_text(encoding="utf-8") == "regressao=false\n"
+    assert any("regrave o baseline" in linha for linha in linhas)

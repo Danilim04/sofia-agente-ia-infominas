@@ -204,6 +204,14 @@ que piorou.
   ler o relatório: `python -m evals.juiz --atualizar-baseline --justificativa "..."`
   (recusado se algum cenário ficou sem nota) e commite no mesmo PR. Mudou o prompt do
   juiz? Regrave o baseline no mesmo PR (a nota muda com o prompt).
+- **Rodada quebrada ≠ sem regressão**: se nenhum cenário recebeu nota (LLM fora do ar,
+  saldo/chave inválidos), `python -m evals.juiz` sai com código 3 e o job fica
+  vermelho; se só parte recebeu, o relatório e o comentário avisam que as médias são
+  parciais; métrica que está no baseline e não saiu na rodada aparece como **sumiu**.
+  No workflow, código 1 só vira "regressão" (aviso) se o `.json` do relatório existe;
+  qualquer outro erro, e `pytest -m jev`/`-m llm_real` vermelhos, deixam o job vermelho
+  (sem bloquear merge), e os passos seguintes continuam rodando (`!cancelled()`).
+  Baseline gravado com outra versão do prompt do juiz não é comparado (avisa).
 - **Ruído**: o juiz é um LLM. Uma queda isolada de ~2 pts é ruído; queda repetida, ou
   de um critério inteiro, é regressão. Leia as justificativas das notas < 4.
 

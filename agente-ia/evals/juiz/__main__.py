@@ -14,7 +14,7 @@ ser leniente: configure outro).
 Saídas: `.md` (default `evals/relatorios/<data>-juiz.md`) e um `.json` ao lado com
 `{"chave": "juiz/noturno", "metricas": {...}}`, que o `evals.juiz.regressao` compara
 com `evals/juiz/baseline.json`. Código de saída: 0 ok; 1 regressão contra o baseline;
-2 cenário inválido, chave ausente ou argumento errado.
+2 cenário inválido, chave ausente ou argumento errado; 3 nenhum cenário recebeu nota (rodada sem valor).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from evals.juiz.execucao import executar_com_llm
 from evals.juiz.julgar import julgar
 from evals.juiz.parser import ErroJuiz
 from evals.juiz.prompt import VERSAO_PROMPT, hash_prompt
-from evals.juiz.regressao import BASELINE_JUIZ, regressoes_juiz
+from evals.juiz.regressao import BASELINE_JUIZ, regressoes_juiz, versao_incompativel
 from evals.juiz.relatorio import CHAVE_BASELINE, RelatorioJuiz, ResultadoJuiz
 
 RELATORIOS = Path(__file__).resolve().parent.parent / "relatorios"
@@ -200,6 +200,18 @@ def main(
         f"erros de execução {contagens['erros_execucao']} · juiz inválido {contagens['juiz_invalido']}"
     )
 
+    if contagens["julgados"] == 0:
+        saida_texto(
+            "erro: nenhum cenário recebeu nota (LLM fora do ar, chave/saldo inválidos ou juiz "
+            "ilegível): rodada sem valor, não compare com o baseline"
+        )
+        return 3
+    if contagens["julgados"] < contagens["cenarios"]:
+        saida_texto(
+            f"aviso: só {contagens['julgados']} de {contagens['cenarios']} cenários receberam nota; "
+            "as médias são parciais"
+        )
+
     baseline: dict[str, Any] = {"versao": 1, "tolerancia_pontos": 2.0, "metricas": {}}
     if args.baseline.exists():
         baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
@@ -218,13 +230,16 @@ def main(
         )
         saida_texto(f"baseline atualizado: {args.baseline} [{CHAVE_BASELINE}]")
         return 0
+    incompativel = versao_incompativel(dado, baseline)
+    if incompativel:
+        saida_texto(f"aviso: {incompativel} (comparação ignorada)")
+        return 0
     regressoes = regressoes_juiz(dado, baseline, args.tolerancia)
     if regressoes:
         saida_texto("REGRESSÃO contra o baseline do juiz:")
         for reg in regressoes:
-            saida_texto(
-                f"  - {reg.metrica}: {reg.base:.2f} → {reg.atual:.2f} ({reg.piora:+.2f} pts)"
-            )
+            detalhe = "sumiu da rodada" if reg.sumiu else f"{reg.atual:.2f} ({reg.piora:+.2f} pts)"
+            saida_texto(f"  - {reg.metrica}: {reg.base:.2f} → {detalhe}")
         return 1
     if (baseline.get("metricas") or {}).get(CHAVE_BASELINE):
         saida_texto("sem regressão contra o baseline do juiz")

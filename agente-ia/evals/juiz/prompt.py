@@ -38,7 +38,10 @@ def hash_prompt() -> str:
 
 
 def _limpo(texto: str) -> str:
-    return _TAGS.sub("", texto).strip()
+    """Uma linha só: quebras de linha viram ` ⏎ ` (o texto do cliente/da Sofia/da base não forja linhas
+    como `Ferramentas executadas: ...` ou `[turno 2]`) e as tags de fechamento somem."""
+    linhas = [linha.strip() for linha in _TAGS.sub("", texto).splitlines()]
+    return " ⏎ ".join(linha for linha in linhas if linha)
 
 
 def mensagem_do_juiz(cenario: CenarioJuiz, transcricao: Transcricao) -> str:
@@ -67,6 +70,8 @@ def mensagem_do_juiz(cenario: CenarioJuiz, transcricao: Transcricao) -> str:
             linhas.append(f"Resultado das ferramentas (dado): {_limpo(t.saidas_ferramentas)}")
         if t.transferiu:
             linhas.append("O sistema transferiu a conversa para um atendente humano neste turno.")
+        if t.bloqueado:
+            linhas.append("O guardrail do sistema barrou a mensagem e devolveu a resposta padrão.")
         resposta = _limpo(t.resposta) if t.resposta else "(sem resposta)"
         if t.erro:
             resposta = f"(a execução falhou: {t.erro})"
