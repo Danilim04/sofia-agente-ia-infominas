@@ -60,7 +60,7 @@ um dado da Infominas.
 | `comercial` | "quanto fica montar a rede de uma loja nova com 12 pontos" | 1 | Comercial | único departamento de proposta/preço | Projetos: Cabeamento estruturado; Redes: Novo ponto de rede; Consultoria: Assessment de TI |
 | `indefinida` | "oi, preciso de ajuda", "[áudio]", "[imagem] olha o erro" | 3 | Técnicos (= padrão proposto) | sem assunto ainda; a triagem humana é a mesma mesa | — |
 
-"Casos" conta cenários (de 32) cujo assunto cai na categoria (os de e-mail, VPN e acesso estão hoje como `indefinida` nos cenários, porque o placeholder não tem a categoria); os outros 10 são
+"Casos" conta cenários (de 32) cujo assunto cai na categoria (os de e-mail, VPN e acesso estão hoje como `indefinida` nos cenários, porque o placeholder não tem a categoria); os outros 7 são
 pedidos de atendente, status de chamado, fora de escopo, injeção e pedido de senha de terceiro, que não têm categoria.
 A coluna de catálogo é só consulta para a Q4: nenhum item foi aplicado porque
 cada categoria agrupa vários itens.
@@ -188,14 +188,24 @@ Cada arquivo em `pendentes/` traz uma linha `# Destrava: …` com a mesma inform
 Não faz parte desta preparação; é o custo de trocar as categorias:
 
 1. **31 cenários da raiz e o `TEMPLATE.yaml`** usam categorias do placeholder (`sem_conexao`,
-   `lentidao`, `cobranca`…), assim como 13 arquivos de `tests/` (`test_classificacao_*`, `test_graph*`, `test_server*`,
+   `lentidao`, `cobranca`…), assim como 14 arquivos de `tests/` (`test_classificacao_*`, `test_graph*`, `test_server*`, `test_e2e_infodesk`, `test_infodesk_tools`, `test_tool_policy`,
    `test_acao_sem_ferramenta`, `test_app`, `fakes.py`). Precisam ser remapeados no mesmo PR.
 2. `evals/classificacao/sintetico.jsonl` foi escrito para o placeholder (provedor de
    internet); `python -m evals.classificacao --fonte sintetico --jev` (critério da E5.1)
    só tem sentido depois de reescrevê-lo para estas categorias (zona da E2.4).
    `tests/test_taxonomia_proposta.py` guarda o destino de cada categoria antiga.
 3. `scripts/dev/taxonomia.dev.yaml` (mock) acompanha as categorias novas.
-4. Rodar o gateway contra o Infodesk real: o boot resolve mesa, prioridade e departamento por nome
+4. Três testes de `tests/test_taxonomia_proposta.py` ficam vermelhos **de propósito** quando a
+   proposta virar `taxonomia.yaml` (`test_proposta_carrega_e_continua_placeholder`,
+   `test_nao_substitui_a_taxonomia_em_uso`, `test_promovidos_sao_validos_tambem_na_taxonomia_em_uso`):
+   no fechamento da E5.1 eles são removidos ou adaptados, não "consertados".
+5. O gateway Go lê o mesmo arquivo (`backend/internal/taxonomia`, `Parse`). A forma da proposta
+   (`media: null`, `urgente` e `alta` apontando para `Alta`) foi conferida com esse `Parse` na preparação
+   (verificação manual; nenhum teste Go carrega a proposta).
+6. `agente-ia/evals/README.md` (fora da zona desta etapa) ainda manda promover tudo de `pendentes/` com
+   `git mv`; depois desta preparação isso levaria os 22 cenários restantes à raiz e quebraria o CI.
+   Apontar para a seção "Casos reais" de `evals/conversa/README.md`.
+7. Rodar o gateway contra o Infodesk real: o boot resolve mesa, prioridade e departamento por nome
    exato; `tests/fixtures/infodesk_referencia.json` já prova que os nomes da proposta existem (só
    nomes e ids, sem dado de pessoa).
 

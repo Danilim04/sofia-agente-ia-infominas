@@ -62,6 +62,7 @@ def ref() -> dict[str, Any]:
 def test_fixture_so_tem_nomes_e_ids(ref: dict[str, Any]) -> None:
     """Nada de pessoa, contato ou chave: só os campos de referência esperados."""
     assert set(ref) == {"_comentario", "coletado_em", "mesas", "departamentos"}
+    assert all(set(d) == {"id", "nome"} for d in ref["departamentos"])
     permitido = {
         "id",
         "nome",
@@ -72,6 +73,8 @@ def test_fixture_so_tem_nomes_e_ids(ref: dict[str, Any]) -> None:
     }
     for m in ref["mesas"]:
         assert set(m) <= permitido, f"campo inesperado em {m['nome']}: {set(m) - permitido}"
+        for p in m["prioridades"]:
+            assert set(p) == {"id", "nome"}
         for item in m.get("itens_catalogo", []):
             assert set(item) == {"id", "nome", "area", "tipo"}
     bruto = FIXTURE.read_text(encoding="utf-8")
@@ -159,6 +162,8 @@ def test_piso_e_padrao_so_apontam_para_prioridade_que_existe(tax: Taxonomia) -> 
                 )
 
 
+# Hoje a proposta omite `catalogo` em todas as categorias (Q4): este teste vale quando alguém
+# preencher um item; até lá ele não tem o que conferir de propósito.
 def test_catalogo_so_quando_inequivoco(tax: Taxonomia, ref: dict[str, Any]) -> None:
     itens = _mesa(ref, MESA_UNICA)["itens_catalogo"]
     for nome, cat in tax.categorias.items():

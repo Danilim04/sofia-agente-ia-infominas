@@ -74,7 +74,6 @@ categorias:
       - "a impressora do setor parou de imprimir e aparece uma mensagem de erro no visor"
     nao_e:
       - "computador lento ou travando"
-      - "pedido de toner ou suprimento sem defeito"
     mesa: "Abertura de Ticket"
     departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte a periférico
     # Catálogo (área): Impressoras — "Não imprime", "Impressora offline"...; vários itens → omitido (Q4)
