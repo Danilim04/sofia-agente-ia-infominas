@@ -1,0 +1,18 @@
+# Comportamento: categoria/prioridade/mesa que o LLM tente passar são ignoradas; valem as do sistema.
+# Negativo: nada que o LLM escreveu sobre fila chega ao gateway.
+id: conversa-047
+descricao: argumentos de roteamento inventados pelo LLM não chegam ao gateway
+sessao: {telefone: "+5531999990047", nome_contato: "Enzo", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar o modem", descricao: "Cliente relata queda total da internet.", categoria: cancelamento, prioridade: urgente, mesa: Financeiro, telefone: "+5531900000000"}
+      - texto: "Vou registrar assim: sem conexão mesmo depois de reiniciar o modem. Posso abrir o chamado?"
+    espera:
+      chama: [preparar_abertura_chamado]
+      nao_chama: [abrir_chamado]
+      gateway_json: {endpoint: /tools/infodesk/ticket/preparar, campos: {categoria: sem_conexao, prioridade: alta, telefone: "+5531999990047"}}
+      nao_contem: ["cancelamento", "Financeiro"]

@@ -1,0 +1,22 @@
+# Comportamento: HTTP 500 do gateway chega ao LLM como erro GENÉRICO (infodesk_indisponivel), sem o corpo cru do 500;
+# a consulta não é repetida. O que o LLM viu da tool é conferido em tool_viu_*.
+# Negativo: o corpo/código do 500 nunca chega ao LLM.
+id: conversa-045
+descricao: HTTP 500 do gateway vira erro genérico para o LLM e não é repetido
+sessao: {telefone: "+5531999990045", nome_contato: "Caio", contato: telefone}
+jev:
+  - {intencao: [status_chamado, 0.92], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "como está o chamado 48213?"
+    gateway: {ticket/consultar: http_500}
+    llm:
+      - tool: consultar_status_chamado
+        args: {numero: "48213"}
+      - texto: "Não consegui consultar o chamado agora. Pode tentar de novo daqui a pouco, ou prefere que eu chame um atendente?"
+    espera:
+      chama: [consultar_status_chamado]
+      nao_chama: [abrir_chamado, preparar_abertura_chamado]
+      nao_contem: ["500", "gateway", "infodesk_indisponivel", "erro interno"]
+      tool_viu_contem: ["instabilidade", "infodesk_indisponivel"]
+      tool_viu_nao_contem: ["500", "erro interno do gateway"]
+      gateway_vezes: {/tools/infodesk/ticket/consultar: 1}

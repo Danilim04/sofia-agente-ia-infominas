@@ -1,0 +1,16 @@
+# Comportamento: frustração 2 muda o tom (prompt) mas NÃO transfere.
+# Negativo: sem transferência; nada aberto sem os dados.
+id: conversa-024
+descricao: impaciência moderada vira tom cuidadoso, não transferência
+sessao: {telefone: "+5531999990024", nome_contato: "Zeca", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.9], categoria: [lentidao, 0.85], prioridade: [1, 0.7], frustracao: [2, 0.8], malicioso: 0.02, fora_de_escopo: 0.02}
+turnos:
+  - cliente: "essa internet lenta de novo, tô ficando sem paciência"
+    llm:
+      - texto: "Entendo, isso cansa mesmo. Desde quando ela está lenta? Assim eu já deixo o resumo pronto."
+    espera:
+      transfere: false
+      nao_chama: [abrir_chamado]
+      prompt_contem: ["impaciente ou irritado"]
+      prompt_nao_contem: ["MUITO irritado"]

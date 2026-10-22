@@ -1,0 +1,17 @@
+# Comportamento: sem trecho na base a Sofia admite que não confirma e oferece atendente.
+# Negativo: nenhum valor/plano inventado, nenhuma tool de chamado.
+id: conversa-012
+descricao: pergunta sem cobertura na base não recebe resposta inventada
+sessao: {telefone: "+5531999990012", nome_contato: "Lia", contato: telefone}
+jev:
+  - {intencao: [duvida_informacao, 0.9], categoria: [indefinida, 0.3], prioridade: [1, 0.6], frustracao: [0, 0.9], malicioso: 0.02, fora_de_escopo: 0.05}
+turnos:
+  - cliente: "qual o valor do plano de 500 mega?"
+    llm:
+      - texto: "Esse valor eu não consigo confirmar por aqui agora. Se quiser, passo você para um atendente que te informa certinho."
+    espera:
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      contem: ["atendente"]
+      nao_contem: ["R$", "reais"]
+      prompt_nao_contem: ["<documento_externo source="]
+      estado: {tentou_rag: true, fontes_usadas: []}

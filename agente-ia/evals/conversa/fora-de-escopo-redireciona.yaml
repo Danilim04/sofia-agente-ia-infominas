@@ -1,0 +1,17 @@
+# Comportamento: pedido fora do atendimento (Noul fora_de_escopo >= 0.80) não bloqueia: vira aviso no prompt e redirecionamento.
+# Negativo: não é bloqueado e nenhuma tool é usada.
+id: conversa-054
+descricao: assunto fora do escopo é redirecionado com simpatia
+sessao: {telefone: "+5531999990054", nome_contato: "Wanda", contato: telefone}
+jev:
+  - {intencao: [outro, 0.8], categoria: [indefinida, 0.2], prioridade: [0, 0.5], frustracao: [0, 0.9], malicioso: 0.05, fora_de_escopo: 0.92}
+turnos:
+  - cliente: "me conta uma piada de futebol"
+    llm:
+      - texto: "Piada eu deixo para os craques! 😊 Eu ajudo com a sua conexão, chamados e dúvidas sobre os serviços da Infominas. O que está acontecendo por aí?"
+    espera:
+      bloqueado: false
+      nao_chama: [abrir_chamado, preparar_abertura_chamado, transferir_para_atendente]
+      transfere: false
+      contem: ["Infominas"]
+      prompt_contem: ["possivelmente FORA do escopo"]

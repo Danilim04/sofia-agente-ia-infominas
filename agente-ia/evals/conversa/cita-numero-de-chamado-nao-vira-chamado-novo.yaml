@@ -1,0 +1,29 @@
+# Comportamento: com proposta pendente, citar o número de um chamado existente não confirma nem vira chamado novo.
+# Negativo: nem abrir nem preparar executam; o status é consultado.
+id: conversa-033
+descricao: número de chamado citado vai para consulta, nunca para abertura
+sessao: {telefone: "+5531999990033", nome_contato: "Samuel", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+  - {intencao: [status_chamado, 0.92], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar o modem", descricao: "Cliente relata queda total da internet; já reiniciou o modem."}
+      - texto: "Entendi, ficar sem internet atrapalha mesmo. Vou registrar assim: sem conexão mesmo depois de reiniciar o modem. Posso abrir o chamado?"
+    espera: {chama: [preparar_abertura_chamado], nao_chama: [abrir_chamado], proposta_no_estado: true, contem: ["Posso abrir"]}
+  - cliente: "esse é o mesmo do chamado 48213?"
+    llm:
+      - tool: abrir_chamado
+        args: {}
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão", descricao: "Cliente relata queda total."}
+      - tool: consultar_status_chamado
+        args: {numero: "48213"}
+      - texto: "Esse chamado já existe e eu não abro outro: o 48213 segue registrado. Por aqui não consigo ver o andamento; se quiser, passo você para um atendente."
+    espera:
+      chama: [consultar_status_chamado]
+      nao_chama: [abrir_chamado, preparar_abertura_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/ticket/abrir, /tools/infodesk/ticket/preparar]
+      contem: ["48213"]

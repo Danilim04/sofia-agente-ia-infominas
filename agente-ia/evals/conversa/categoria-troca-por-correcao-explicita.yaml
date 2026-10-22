@@ -1,0 +1,21 @@
+# Comportamento: 'na verdade é ...' troca a categoria mesmo com confiança abaixo de 0.85.
+# Negativo: nada é aberto; a troca não vem do LLM.
+id: conversa-029
+descricao: correção explícita do cliente muda a categoria fixada
+sessao: {telefone: "+5531999990029", nome_contato: "Otto", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.9], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [0, 0.8], malicioso: 0.02, fora_de_escopo: 0.02}
+  - {intencao: [reclamacao_problema, 0.9], categoria: [cobranca, 0.7], prioridade: [1, 0.7], frustracao: [0, 0.8], malicioso: 0.02, fora_de_escopo: 0.02}
+turnos:
+  - cliente: "minha internet está sem sinal"
+    llm:
+      - texto: "Entendi. Desde quando está sem sinal?"
+    espera:
+      nao_chama: [abrir_chamado]
+      classificacao: {categoria: sem_conexao}
+  - cliente: "na verdade é a cobrança, errei, o valor da fatura veio diferente"
+    llm:
+      - texto: "Tudo bem, então é sobre a fatura. Qual é a diferença que você viu no valor?"
+    espera:
+      nao_chama: [abrir_chamado]
+      classificacao: {categoria: cobranca, origem: jev}

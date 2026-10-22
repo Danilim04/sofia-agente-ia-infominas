@@ -1,0 +1,17 @@
+# Comportamento: 'sim' solto, sem proposta preparada, não abre nada.
+# Negativo: nenhuma abertura, nenhuma proposta no estado.
+id: conversa-036
+descricao: confirmação sem proposta anterior não abre chamado
+sessao: {telefone: "+5531999990036", nome_contato: "Vilma", contato: telefone}
+jev:
+  - {intencao: [confirmacao, 0.95], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "sim"
+    llm:
+      - tool: abrir_chamado
+        args: {}
+      - texto: "Ainda não tenho nenhum resumo para você confirmar. Me conta o que está acontecendo?"
+    espera:
+      nao_chama: [abrir_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/ticket/abrir]
+      proposta_no_estado: false

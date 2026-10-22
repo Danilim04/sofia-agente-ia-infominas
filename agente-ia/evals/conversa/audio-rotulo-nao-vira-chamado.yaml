@@ -1,0 +1,21 @@
+# Comportamento: o áudio é tratado NO GATEWAY (aviso + transferência: backend/internal/engine/transferencia.go, persona.go
+# MsgMidia) — o cérebro normalmente nem o recebe. Este cenário cobre a rede de segurança do cérebro: se um rótulo de mídia
+# ('[áudio]') chegar como texto, ele não tem categoria, e mesmo um LLM que tente preparar um chamado em cima dele é
+# barrado pela política (categoria indefinida). A transferência por mídia em si é provada nos testes Go.
+# Negativo: o gateway não recebe preparo nem abertura.
+id: conversa-022
+descricao: rótulo de mídia sem categoria não vira chamado, nem se o LLM tentar (a transferência por áudio é do gateway)
+sessao: {telefone: "+5531999990022", nome_contato: "Dani", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.6], categoria: [sem_conexao, 0.2], prioridade: [1, 0.5], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.05}
+turnos:
+  - cliente: "[áudio]"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Cliente enviou áudio", descricao: "Cliente enviou um áudio sem texto."}
+      - texto: "Recebi seu áudio, mas por aqui eu só consigo ler texto. Pode me escrever o que está acontecendo?"
+    espera:
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/ticket/preparar, /tools/infodesk/ticket/abrir]
+      proposta_no_estado: false
+      estado: {classificacao: {categoria: indefinida}}

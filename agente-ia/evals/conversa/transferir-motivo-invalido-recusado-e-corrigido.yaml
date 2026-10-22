@@ -1,0 +1,21 @@
+# Comportamento: motivo fora do enum é recusado pela política; com motivo válido a transferência sai uma vez.
+# Negativo: a recusa nunca chega ao gateway.
+id: conversa-021
+descricao: motivo inventado pelo LLM não passa; o retry válido transfere uma única vez
+sessao: {telefone: "+5531999990021", nome_contato: "Gil", contato: telefone}
+jev:
+  - {intencao: [outro, 0.8], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.1}
+turnos:
+  - cliente: "isso aqui não é comigo, quero resolver com alguém da empresa"
+    llm:
+      - tool: transferir_para_atendente
+        args: {motivo: frustracao}
+      - tool: transferir_para_atendente
+        args: {motivo: nao_resolvido}
+      - texto: "Combinado, estou passando você para um atendente agora."
+    espera:
+      chama: [transferir_para_atendente]
+      transfere: true
+      nao_contem: ["encaminhei"]
+      gateway_vezes: {/tools/infodesk/conversa/transferir: 1}
+      gateway_json: {endpoint: /tools/infodesk/conversa/transferir, campos: {motivo: nao_resolvido}}

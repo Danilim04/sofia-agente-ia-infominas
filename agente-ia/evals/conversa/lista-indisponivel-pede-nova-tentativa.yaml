@@ -1,0 +1,19 @@
+# Comportamento: falha ao listar (erro de negócio do gateway) chega ao LLM como resultado de tool e a conversa segue
+# com pedido de nova tentativa/atendente. O texto ao cliente é scriptado: o que se prova é que a falha não derruba o turno.
+# Negativo: nenhuma abertura/preparo por causa da falha.
+id: conversa-018
+descricao: listagem indisponível não derruba o turno nem abre chamado
+sessao: {telefone: "+5531999990018", nome_contato: "Edu", contato: telefone}
+jev:
+  - {intencao: [status_chamado, 0.92], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "me mostra meus chamados"
+    gateway: {ticket/listar: erro-chamados_indisponiveis}
+    llm:
+      - tool: listar_meus_chamados
+        args: {}
+      - texto: "Não consegui consultar seus chamados agora. Pode tentar de novo daqui a pouco? Se preferir, chamo um atendente."
+    espera:
+      chama: [listar_meus_chamados]
+      nao_chama: [abrir_chamado, preparar_abertura_chamado]
+      nao_contem: ["chamados_indisponiveis"]

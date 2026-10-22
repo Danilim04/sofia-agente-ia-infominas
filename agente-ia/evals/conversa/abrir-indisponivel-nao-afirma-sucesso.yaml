@@ -1,0 +1,27 @@
+# Comportamento: Infodesk indisponível na abertura => a Sofia não afirma que abriu; um atendente assume.
+# Negativo: sem número de chamado inventado; uma única chamada ao gateway (nunca retry em POST /tickets).
+# NOTA: o texto evita 'foi registrado' de propósito (ver conversa-061, bug do guardrail) — não 'limpe' a redação.
+id: conversa-043
+descricao: falha na abertura não vira sucesso nem retry
+sessao: {telefone: "+5531999990043", nome_contato: "Abel", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+  - {intencao: [confirmacao, 0.95], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar o modem", descricao: "Cliente relata queda total da internet; já reiniciou o modem."}
+      - texto: "Entendi, ficar sem internet atrapalha mesmo. Vou registrar assim: sem conexão mesmo depois de reiniciar o modem. Posso abrir o chamado?"
+    espera: {chama: [preparar_abertura_chamado], nao_chama: [abrir_chamado], proposta_no_estado: true, contem: ["Posso abrir"]}
+  - cliente: "sim"
+    gateway: {ticket/abrir: erro-infodesk_indisponivel}
+    llm:
+      - tool: abrir_chamado
+        args: {}
+      - texto: "Não consegui registrar o chamado agora. Um atendente vai assumir a sua conversa daqui."
+    espera:
+      chama: [abrir_chamado]
+      proposta_no_estado: false
+      nao_contem: ["Pronto", "chamado é o", "48213"]
+      gateway_vezes: {/tools/infodesk/ticket/abrir: 1}
