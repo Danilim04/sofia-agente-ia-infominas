@@ -92,6 +92,9 @@ func run() int {
 	if nomeChave == "" {
 		nomeChave = me.Name
 	}
+	// Sondas do /health (E4.3): o resultado da última leitura da referência do
+	// Infodesk (taxonomia) e do feed /events (reconciliador).
+	sondaReferencia, sondaFeed, fotoTax := alerta.NovaSonda(nil), alerta.NovaSonda(nil), &fotoTaxonomia{}
 	log.Info("chave do Infodesk validada", "key_id", me.KeyID, "nome_chave", nomeChave, "escopos", len(me.Scopes))
 
 	if cfg.InfodeskWebhookSecret == "" && cfg.WebhookToken == "" {
@@ -111,7 +114,7 @@ func run() int {
 	// Reconciliador (E3.3; bloco de wiring fora da zona declarada da etapa): a
 	// recuperação de crash roda ANTES de o webhook receber o 1º evento; o loop
 	// (feed /events, tickets pendentes, vigia BOT_TIMEOUT_HANDOFF) nasce ligado.
-	rec := reconciliador.New(reconciliador.OptionsDeConfig(cfg), idk, srv, eng, st, eng.Vigia(), log)
+	rec := reconciliador.New(reconciliador.OptionsDeConfig(cfg), infodeskDoFeed{Client: idk, sonda: sondaFeed}, srv, eng, st, eng.Vigia(), log)
 	if err := rec.Recuperar(ctx); err != nil {
 		log.Error("recuperação de crash do reconciliador falhou", "err", err)
 	}
@@ -120,17 +123,18 @@ func run() int {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook", srv.ServeHTTP)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+	// GET /health: processo vivo (200 sempre) + JSON com referência do Infodesk,
+	// taxonomia e reconciliador (alerta.Saude; sem segredo nem PII).
+	saude := novaSaude(st, sondaReferencia, sondaFeed, fotoTax, cfg.ReconciliaAtivo)
+	saude.Iniciado = time.Now()
+	mux.HandleFunc("/health", saude.Handler())
 
 	// API interna de tools que o cérebro Python chama durante o loop do
 	// agente. Só sobe com TOOLS_API_TOKEN (segredo compartilhado).
 	if cfg.ToolsAPIToken == "" {
 		log.Warn("TOOLS_API_TOKEN vazio: API de tools (/tools/infodesk/*) NÃO exposta")
 	} else {
-		tx, err := carregarTaxonomia(ctx, cfg, idk, eng, log)
+		tx, err := carregarTaxonomia(ctx, cfg, fonteSondada{Client: idk, sonda: sondaReferencia}, fotoTax, eng, log)
 		if err != nil {
 			log.Error("taxonomia inválida", "err", err)
 			return 1
@@ -222,7 +226,7 @@ func parseLogLevel(s string) slog.Level {
 // divergência derruba o boot; sem ele vira alerta `taxonomia_invalida` e só as
 // categorias afetadas ficam sem mapa. Infodesk fora do ar no boot não derruba o
 // gateway: a taxonomia tenta carregar de novo sob demanda.
-func carregarTaxonomia(ctx context.Context, cfg *config.Config, idk *infodesk.Client, eng *engine.Engine, log *slog.Logger) (*taxonomia.Taxonomia, error) {
+func carregarTaxonomia(ctx context.Context, cfg *config.Config, fonte taxonomia.Fonte, foto *fotoTaxonomia, eng *engine.Engine, log *slog.Logger) (*taxonomia.Taxonomia, error) {
 	caminho := cfg.TaxonomiaPath
 	if caminho == "" { // sem TAXONOMIA_PATH: os caminhos padrão (volume do compose, ../agente-ia)
 		caminho = taxonomia.CaminhoDoAmbiente()
@@ -231,8 +235,12 @@ func carregarTaxonomia(ctx context.Context, cfg *config.Config, idk *infodesk.Cl
 	if err != nil {
 		return nil, err
 	}
-	tx := taxonomia.Nova(def, idk, taxonomia.Opcoes{Strict: cfg.StrictTaxonomia, Log: log})
+	tx := taxonomia.Nova(def, fonte, taxonomia.Opcoes{Strict: cfg.StrictTaxonomia, Log: log})
 	rel, err := tx.Carregar(ctx)
+	// Foto para o /health (GET /health → taxonomia.*).
+	foto.definir(alerta.StatusTaxonomia{
+		Habilitada: true, Carregada: err == nil, Placeholder: def.Placeholder, Problemas: len(rel.Problemas),
+	})
 	switch {
 	case errors.Is(err, taxonomia.ErrReferenciaIndisponivel):
 		log.Warn("taxonomia: referência do Infodesk indisponível no boot; tentarei de novo sob demanda", "err", err)

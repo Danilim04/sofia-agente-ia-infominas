@@ -224,8 +224,10 @@ func (h *Handler) concluirAbertura(ctx context.Context, a *abertura, tk infodesk
 		// (E3.3) repara a linha pendente.
 		h.log.Error("abrir: gravar número do ticket", "conversation_id", a.conv, "numero", tk.Number, "err", err)
 	}
-	h.log.Info("ticket_aberto", "numero", tk.Number, "conversa", a.conv, "categoria", a.res.Categoria,
-		"mesa", a.res.Mesa.Nome, "reconciliado", reconciliado)
+	alerta.LogTicketAberto(h.log, alerta.TicketAberto{
+		Numero: tk.Number, ConversationID: a.conv, Categoria: a.res.Categoria,
+		Mesa: a.res.Mesa.Nome, Reconciliado: reconciliado,
+	})
 	return h.sucessoAbrir(ctx, a, tk.Number)
 }
 
