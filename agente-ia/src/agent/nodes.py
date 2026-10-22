@@ -855,7 +855,12 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
             args_llm = tc.get("args") or {}
             logger.info("tool_exec nome=%s args=%s", nome, sorted(args_llm))
             logger.debug("tool_exec_args nome=%s args=%s", nome, mascarar_args(args_llm))
-            args, recusa = aplicar_politica(nome, tc.get("args") or {}, state)
+            # A política de cada chamada do lote lê o estado JÁ atualizado pelos
+            # efeitos das anteriores: duas `abrir_chamado` na mesma mensagem do
+            # modelo fazem UM POST (a 1ª consome a proposta; a 2ª é recusada).
+            args, recusa = aplicar_politica(
+                nome, tc.get("args") or {}, {**state, **efeitos_do_turno}
+            )
             if recusa:
                 logger.warning("tool_politica_recusa nome=%s motivo=%s", nome, recusa)
                 content = json.dumps(
