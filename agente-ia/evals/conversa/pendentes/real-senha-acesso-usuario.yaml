@@ -1,4 +1,5 @@
-# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Pedidos de acesso/senha de usuário: no rascunho real é cadastros_e_acessos_de_usuarios.
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Pedidos de acesso/senha de usuário.
+# Destrava: Q1 (categoria acesso_senha). Hoje descreve o comportamento SEM categoria; com ela o esperado muda (abre chamado), então reescrever o cenário depois da aprovação, não só mover.
 id: conversa-122
 descricao: 'acesso bloqueado de usuário sem categoria na taxonomia: esclarece e transfere'
 sessao:
