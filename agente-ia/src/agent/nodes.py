@@ -29,7 +29,8 @@ import asyncio
 import concurrent.futures
 import json
 import logging
-from collections.abc import Awaitable, Callable, Iterable
+import re
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -69,9 +70,15 @@ from src.classificacao.tipos import (
 from src.config import get_settings
 from src.security.input_guardrails import avaliar_entrada
 from src.security.output_guardrails import (
+    TIPO_ABERTURA,
+    TIPO_CADASTRO,
+    TIPO_CHAMADO_ABERTO,
+    TIPO_TRANSFERENCIA,
     afirmacoes_de_acao,
+    afirmacoes_tipadas,
     contem_vazamento_interno,
     envolver_chunks_rag,
+    numeros_de_chamado_citados,
     remover_citacoes,
 )
 from src.tools.efeitos import efeito_pos_tool
@@ -955,20 +962,93 @@ def _resultado_de_tool_ok(tm: ToolMessage) -> bool:
     return not falhou
 
 
-def _turno_executou_ferramenta(messages: Iterable[BaseMessage] | None) -> bool:
-    """True se, DEPOIS da última mensagem humana, alguma tool executou com sucesso.
-
-    É o fato que ancora uma afirmação de ação ("registrei", "abri o chamado"):
-    sem ele, a afirmação é invenção do modelo (ZE-2). Ferramenta de turno
-    anterior não conta — o recorte é o turno atual.
-    """
+def _do_turno(messages: Iterable[BaseMessage] | None) -> list[BaseMessage]:
+    """Mensagens DEPOIS da última mensagem humana (o turno atual)."""
     msgs = list(messages or [])
     inicio = 0
     for i in range(len(msgs) - 1, -1, -1):
         if isinstance(msgs[i], HumanMessage):
             inicio = i + 1
             break
-    return any(isinstance(m, ToolMessage) and _resultado_de_tool_ok(m) for m in msgs[inicio:])
+    return msgs[inicio:]
+
+
+def _turno_executou_ferramenta(messages: Iterable[BaseMessage] | None) -> bool:
+    """True se, DEPOIS da última mensagem humana, alguma tool executou com sucesso.
+
+    É o fato que ancora uma afirmação GENÉRICA de ação ("registrei", "anotei"):
+    sem ele, a afirmação é invenção do modelo (ZE-2). Ferramenta de turno
+    anterior não conta — o recorte é o turno atual. As afirmações TIPADAS
+    (chamado aberto, transferência, cadastro) exigem a tool do próprio efeito:
+    ver `_afirmacao_sem_ancora`.
+    """
+    return any(isinstance(m, ToolMessage) and _resultado_de_tool_ok(m) for m in _do_turno(messages))
+
+
+#: Tools de leitura cujo resultado pode legitimamente dizer "o chamado N foi aberto em…".
+_TOOLS_DE_CONSULTA = frozenset({"consultar_status_chamado", "listar_meus_chamados"})
+_DIGITOS_RE = re.compile(r"\d{3,}")
+
+#: Que tool(s) ancora(m) cada tipo de afirmação de ação. Os testes que usam tools de
+#: teste (`tests/fakes.py`) acrescentam os nomes delas via monkeypatch.
+ANCORAS: dict[str, frozenset[str]] = {
+    TIPO_ABERTURA: frozenset({"abrir_chamado"}),
+    TIPO_CHAMADO_ABERTO: frozenset({"abrir_chamado"}),
+    TIPO_TRANSFERENCIA: frozenset({"transferir_para_atendente"}),
+    TIPO_CADASTRO: frozenset({"cadastrar_solicitante"}),
+}
+
+
+def _numeros_em(texto: str) -> set[str]:
+    return set(_DIGITOS_RE.findall(texto))
+
+
+def _afirmacao_sem_ancora(
+    resposta: str, messages: list[BaseMessage], acoes: Iterable[Mapping[str, Any]] | None
+) -> str | None:
+    """Motivo (para o log) se a resposta afirma uma ação que NENHUMA tool do efeito executou.
+
+    Ancora por TIPO (B2): "abri o chamado" exige `abrir_chamado` ok no turno;
+    "chamado 4821 foi aberto" exige o mesmo — ou uma consulta ok (`consultar_status_chamado`/
+    `listar_meus_chamados`) que traga o número citado; "te transferi" exige
+    `transferir_para_atendente` ok ou uma ação `transferir` do turno; "cadastro
+    concluído" exige `cadastrar_solicitante` ok. Além disso, todo número de chamado
+    citado tem de constar em algum ToolMessage da conversa ou numa mensagem do
+    cliente — número inventado nunca sai. Determinístico: o LLM não é base confiável.
+    """
+    do_turno = _do_turno(messages)
+    oks = [m for m in do_turno if isinstance(m, ToolMessage) and _resultado_de_tool_ok(m)]
+    nomes = {m.name for m in oks}
+    tipadas = afirmacoes_tipadas(resposta)
+
+    if TIPO_ABERTURA in tipadas and not nomes & ANCORAS[TIPO_ABERTURA]:
+        return f"abertura sem abrir_chamado: {tipadas[TIPO_ABERTURA]}"
+    if TIPO_CHAMADO_ABERTO in tipadas and not nomes & ANCORAS[TIPO_CHAMADO_ABERTO]:
+        em_consulta = set(numeros_de_chamado_citados(resposta))
+        vistos_em_consulta: set[str] = set()
+        for m in oks:
+            if m.name in _TOOLS_DE_CONSULTA:
+                vistos_em_consulta |= _numeros_em(_texto_de(m.content))
+        if not (em_consulta and em_consulta <= vistos_em_consulta):
+            return f"chamado aberto sem abrir_chamado: {tipadas[TIPO_CHAMADO_ABERTO]}"
+    if TIPO_TRANSFERENCIA in tipadas and not nomes & ANCORAS[TIPO_TRANSFERENCIA]:
+        if not any(a.get("tipo") == "transferir" for a in acoes or []):
+            return f"transferência sem tool nem ação: {tipadas[TIPO_TRANSFERENCIA]}"
+    if TIPO_CADASTRO in tipadas and not nomes & ANCORAS[TIPO_CADASTRO]:
+        return f"cadastro sem cadastrar_solicitante: {tipadas[TIPO_CADASTRO]}"
+
+    citados = numeros_de_chamado_citados(resposta)
+    if citados:
+        conhecidos: set[str] = set()
+        for msg in messages:
+            # qualquer ToolMessage vale: o erro `chamado_aberto` do preparo traz os números
+            # dos chamados existentes (dado do gateway, não invenção do modelo)
+            if isinstance(msg, HumanMessage | ToolMessage):
+                conhecidos |= _numeros_em(_texto_de(msg.content))
+        inventados = [n for n in citados if n not in conhecidos]
+        if inventados:
+            return f"número de chamado fora das tools e do cliente: {inventados}"
+    return None
 
 
 def output_guardrail_node(state: AgentState) -> dict:
@@ -979,7 +1059,10 @@ def output_guardrail_node(state: AgentState) -> dict:
        seção; a rastreabilidade fica em `fontes_usadas` (LLM09).
     2. Máscara de erro interno (A2): resposta com marca inequívoca de erro
        técnico (traceback, módulos, hosts) é trocada por fallback amigável.
-    3. Ação sem ferramenta (ZE-2): resposta que AFIRMA ter registrado/anotado/
+    3. Ação sem ferramenta (ZE-2, B2): afirmação TIPADA (chamado aberto, "te
+       transferi", cadastro concluído) exige a tool do próprio efeito no turno, e
+       número de chamado citado tem de vir de uma tool ou do cliente (ver
+       `_afirmacao_sem_ancora`). Resposta que AFIRMA ter registrado/anotado/
        avisado o time/aberto chamado num turno em que NENHUMA ferramenta
        executou com sucesso é trocada por `RESPOSTA_ACAO_SEM_FERRAMENTA` (não
        afirma nada e oferece abrir chamado). Fora de uma tool não existe
@@ -1003,6 +1086,10 @@ def output_guardrail_node(state: AgentState) -> dict:
         logger.warning("output_guardrail_vazamento_interno len=%d", len(novo))
         logger.debug("output_guardrail_resposta_original %r", novo)
         novo = RESPOSTA_ERRO_INTERNO
+    elif motivo := _afirmacao_sem_ancora(novo, messages, state.get("acoes")):
+        logger.warning("output_guardrail_acao_sem_ancora motivo=%s len=%d", motivo, len(novo))
+        logger.debug("output_guardrail_resposta_original %r", novo)
+        novo = RESPOSTA_ACAO_SEM_FERRAMENTA
     elif not _turno_executou_ferramenta(messages):
         afirmacoes = afirmacoes_de_acao(novo)
         if afirmacoes:

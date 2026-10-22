@@ -13,7 +13,7 @@ import pytest
 from langchain_openai import ChatOpenAI
 
 from src.agent import llm as llm_factory
-from src.config import get_settings
+from src.config import Settings, get_settings
 
 
 @pytest.fixture(autouse=True)
@@ -101,8 +101,9 @@ def test_timeouts_cabem_no_prazo_do_gateway(monkeypatch):
     # Só os defaults do código (um .env local não pode mascarar o teste).
     monkeypatch.delenv("LLM_TIMEOUT", raising=False)
     monkeypatch.delenv("BRAIN_TURNO_PRAZO", raising=False)
-    get_settings.cache_clear()
-    settings = get_settings()
+    # `_env_file=None`: sem isto um `.env` do diretório de trabalho (o do dev) vence o default.
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    monkeypatch.setattr(llm_factory, "get_settings", lambda: settings)
     assert settings.llm_timeout == 20.0
     assert settings.brain_turno_prazo == 70.0
     assert settings.llm_timeout < settings.brain_turno_prazo
