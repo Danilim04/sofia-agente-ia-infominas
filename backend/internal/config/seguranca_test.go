@@ -148,3 +148,32 @@ func TestListaVaziaExigeProducaoAberta(t *testing.T) {
 		t.Fatalf("valor inválido do opt-in derruba o boot: %v", err)
 	}
 }
+
+// M4 (E4.5): tetos de abuso com defaults folgados e validação estrita.
+func TestLimitesDeAbusoDefaultsEInvalidos(t *testing.T) {
+	prodSegura(t)
+	t.Setenv("LOTE_MAX_CHARS", "")
+	t.Setenv("TURNOS_POR_HORA_MAX", "")
+	cfg, err := Load()
+	if err != nil || cfg.LoteMaxChars != 4000 || cfg.TurnosPorHoraMax != 60 {
+		t.Fatalf("defaults: %+v err=%v", cfg, err)
+	}
+	t.Setenv("LOTE_MAX_CHARS", " 8000 ")
+	t.Setenv("TURNOS_POR_HORA_MAX", "120")
+	cfg, err = Load()
+	if err != nil || cfg.LoteMaxChars != 8000 || cfg.TurnosPorHoraMax != 120 {
+		t.Fatalf("lidos: %+v err=%v", cfg, err)
+	}
+	for _, c := range []struct{ v, valor string }{
+		{"LOTE_MAX_CHARS", "0"}, {"LOTE_MAX_CHARS", "-5"}, {"LOTE_MAX_CHARS", "muito"},
+		{"TURNOS_POR_HORA_MAX", "0"}, {"TURNOS_POR_HORA_MAX", "1.5"},
+	} {
+		prodSegura(t)
+		t.Setenv("LOTE_MAX_CHARS", "")
+		t.Setenv("TURNOS_POR_HORA_MAX", "")
+		t.Setenv(c.v, c.valor)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), c.v) {
+			t.Errorf("%s=%q devia derrubar o boot citando a variável: %v", c.v, c.valor, err)
+		}
+	}
+}

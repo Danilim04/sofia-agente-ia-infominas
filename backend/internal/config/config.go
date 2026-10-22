@@ -96,7 +96,12 @@ type Config struct {
 	DebounceTeto   time.Duration // espera máxima acumulada antes de processar mesmo sem silêncio
 	EventoIdadeMax time.Duration // mensagens mais velhas que isso são descartadas (F10); 0 = sem corte
 	ReplyMaxChars  int           // tamanho-alvo de cada mensagem enviada ao WhatsApp (F12); 0 = sem quebra
-	BolhaPausa     time.Duration // pausa entre bolhas consecutivas do mesmo turno (ritmo humano); 0 = sem pausa
+	// LoteMaxChars (LOTE_MAX_CHARS, 4000): o texto coalescido de uma rajada é cortado
+	// neste tamanho antes do cérebro. TurnosPorHoraMax (TURNOS_POR_HORA_MAX, 60):
+	// turnos por telefone por hora; acima, a conversa vai a um atendente (E4.5, M4).
+	LoteMaxChars     int
+	TurnosPorHoraMax int
+	BolhaPausa       time.Duration // pausa entre bolhas consecutivas do mesmo turno (ritmo humano); 0 = sem pausa
 
 	// ToolsAPIToken: segredo compartilhado cérebro↔gateway (X-Tools-Token).
 	// Vazio = a API /tools/infodesk/* não é exposta.
@@ -245,6 +250,13 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("%s inválido (%s): precisa ser maior que zero", d.env, strings.TrimSpace(getenv(d.env, d.def)))
 		}
 		*d.dst = v
+	}
+	var errLimite error
+	if cfg.LoteMaxChars, errLimite = lerInteiroPositivo("LOTE_MAX_CHARS", 4000); errLimite != nil {
+		return nil, errLimite
+	}
+	if cfg.TurnosPorHoraMax, errLimite = lerInteiroPositivo("TURNOS_POR_HORA_MAX", 60); errLimite != nil {
+		return nil, errLimite
 	}
 	testadores, err := parseTestadores(os.Getenv("TESTADORES_TELEFONES"))
 	if err != nil {

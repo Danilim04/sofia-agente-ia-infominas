@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -90,4 +91,19 @@ func (c *Config) avisosDeSeguranca() []string {
 		out = append(out, "PRODUÇÃO ABERTA (SOFIA_PRODUCAO_ABERTA=true, TESTADORES_TELEFONES vazia): TODO cliente que escrever fala com a Sofia")
 	}
 	return out
+}
+
+// lerInteiroPositivo lê uma variável inteira > 0; ausente ou vazia = def; valor
+// que não é inteiro positivo = erro citando a variável (nada de cair em silêncio
+// num teto diferente do que o operador quis).
+func lerInteiroPositivo(key string, def int) (int, error) {
+	v := strings.TrimSpace(getenv(key, ""))
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s inválido (%q): precisa ser um inteiro maior que zero", key, v)
+	}
+	return n, nil
 }
