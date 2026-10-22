@@ -5,7 +5,6 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -141,54 +140,28 @@ func TestCenario1_TicketPelaConversaEHandoff(t *testing.T) {
 		}, func() string { return fmt.Sprintf("%+v", pilha.cerebro.toolsDa(c.ConversaID)) })
 	}
 
-	// A confirmação com o número deveria chegar ao cliente: o handoff pós-ticket
-	// não pode engolir a resposta do turno (o cliente precisa saber o número).
-	// BUG CONHECIDO (BUG-E4.1-1; TODO(E-nova): correção em engine/toolsapi): hoje
-	// ela é descartada ("resposta descartada: a conversa deixou de ser da Sofia
-	// durante o turno") porque o `abrir` já marcou a conversa como transferida
-	// (engine.responder → botConduz). Sem E2E_ESTRITO=1 o teste só TOLERA esse
-	// motivo exato (a linha de log da causa é exigida) e registra no log; com
-	// E2E_ESTRITO=1 vira falha. Quando o produto for corrigido o assert passa a
-	// valer sozinho e o `bugConhecido` pode virar um `esperar` comum.
+	// A confirmação com o número chega ao cliente (E4.5, B1): o gateway a manda
+	// ele mesmo, antes do handoff pós-ticket (a resposta do cérebro neste turno é
+	// descartada depois dele), e uma vez só.
 	reNumero := regexp.MustCompile(`\b` + fmt.Sprint(tk.Number) + `\b`)
-	bugConhecido(t, "BUG-E4.1-1: a resposta do turno com o número do chamado é descartada pelo handoff pós-ticket",
-		func() bool {
-			ult = c.estado()
-			for _, r := range ult.Conversa.respostasDoBot() {
-				if reNumero.MatchString(r) {
-					return true
-				}
+	esperar(t, "a confirmação do chamado #"+fmt.Sprint(tk.Number)+" chegar ao cliente", esperaPadrao, func() bool {
+		ult = c.estado()
+		for _, r := range ult.Conversa.respostasDoBot() {
+			if reNumero.MatchString(r) {
+				return true
 			}
-			return false
-		},
-		func() bool { return logTem("resposta descartada", c.ConversaID) },
-		func() string { return descreverConversa(ult.Conversa) })
-}
-
-// bugConhecido espera uma condição que o produto AINDA não cumpre. Sem
-// E2E_ESTRITO=1 o descumprimento só é registrado no log do teste (o assert
-// continua aqui, à vista) — mas só se `causa` confirmar que é ESTE bug; se a
-// condição falha por outro motivo, é falha de verdade. Com E2E_ESTRITO=1 vira
-// falha sempre.
-func bugConhecido(t *testing.T, bug string, cond, causa func() bool, ver func() string) {
-	t.Helper()
-	fim := time.Now().Add(3 * time.Second)
-	for time.Now().Before(fim) {
-		if cond() {
-			t.Logf("%s: CORRIGIDO — pode virar assert comum", bug)
-			return
 		}
-		time.Sleep(passoDePolling)
+		return false
+	}, func() string { return descreverConversa(ult.Conversa) })
+	var confirmacoes int
+	for _, r := range ult.Conversa.respostasDoBot() {
+		if reNumero.MatchString(r) {
+			confirmacoes++
+		}
 	}
-	if os.Getenv("E2E_ESTRITO") == "1" {
-		t.Errorf("%s\nobservado: %s", bug, ver())
-		return
+	if confirmacoes != 1 {
+		t.Errorf("a confirmação do chamado devia chegar UMA vez, chegou %d: %s", confirmacoes, descreverConversa(ult.Conversa))
 	}
-	if !causa() {
-		t.Errorf("a condição falhou, mas NÃO pelo motivo do bug conhecido (%s)\nobservado: %s", bug, ver())
-		return
-	}
-	t.Logf("BUG CONHECIDO (não falha; E2E_ESTRITO=1 falha): %s\nobservado: %s", bug, ver())
 }
 
 // 2) Cliente manda áudio: no WhatsApp real chegam DUAS mensagens (rótulo +

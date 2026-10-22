@@ -1,0 +1,15 @@
+# Comportamento: a Sofia diz que já transferiu o cliente, mas nenhuma tool/ação de transferência existe no turno.
+# Negativo: 'te transferi' não é ancorado por outra tool nem por conversa solta; vira a resposta fixa honesta.
+id: conversa-161
+descricao: afirmar transferência sem tool nem ação é trocado pela resposta fixa
+sessao: {telefone: "+5531999990161", nome_contato: "Dora", contato: telefone}
+jev:
+  - {intencao: [duvida_informacao, 0.9], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "qual o horário de atendimento de vocês?"
+    llm:
+      - texto: "Já transferi você para um atendente, ele te responde em instantes."
+    espera:
+      nao_chama: [abrir_chamado, transferir_para_atendente]
+      nao_contem: ["transferi", "instantes"]
+      contem: ["ainda não registrei"]

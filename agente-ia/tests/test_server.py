@@ -15,6 +15,18 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 import server
 from server import ChatRequest, processar_chat
+from src.agent.nodes import PREFIXO_SESSAO_NO_CONFIG
+
+
+@pytest.fixture(autouse=True)
+def _cerebro_sem_autenticacao_nos_testes_da_rota(monkeypatch):
+    """Estes testes exercitam a rota, não a auth (E4.5b: token vazio recusa tudo)."""
+    from src.config import get_settings
+
+    monkeypatch.setenv("BRAIN_SEM_AUTENTICACAO", "true")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 class _FakeGraph:
@@ -54,10 +66,18 @@ def test_processar_chat_extrai_reply_e_fontes_e_isola_por_conversa():
     assert resp.classificacao is None  # E2.2 preenche
     # thread_id = conversation_id (isolamento por conversa)
     assert g.last_config["configurable"]["thread_id"] == "conv-123"
-    # contato/nome/telefone repassados ao estado; mensagem vira HumanMessage
-    assert g.last_inputs["nome_contato"] == "Maria"
-    assert g.last_inputs["contato"] == contato
-    assert g.last_inputs["telefone"] == "5531999990001"
+    # E4.5b: telefone e nomes NÃO vão ao estado persistido (o gateway os reenvia a cada
+    # turno): viajam por `config["configurable"]`; o estado recebe `None` (limpa legado).
+    cfg = g.last_config["configurable"]
+    assert cfg[PREFIXO_SESSAO_NO_CONFIG + "nome_contato"] == "Maria"
+    assert cfg[PREFIXO_SESSAO_NO_CONFIG + "telefone"] == "5531999990001"
+    assert g.last_inputs["nome_contato"] is None
+    assert g.last_inputs["telefone"] is None
+    # o contato (forma, valor mascarado, cliente_id) segue no estado — sem o nome do cadastro
+    assert {k: v for k, v in contato.items() if k != "nome_cadastro"} == g.last_inputs["contato"]
+    if contato.get("nome_cadastro"):
+        assert cfg[PREFIXO_SESSAO_NO_CONFIG + "nome_cadastro"] == contato["nome_cadastro"]
+        assert "nome_cadastro" not in g.last_inputs["contato"]
     # conversation_id entra no estado (as tools o repassam ao gateway)
     assert g.last_inputs["conversation_id"] == "conv-123"
     assert isinstance(g.last_inputs["messages"][0], HumanMessage)

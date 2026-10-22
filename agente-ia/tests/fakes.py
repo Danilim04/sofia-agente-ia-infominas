@@ -191,6 +191,9 @@ def registrar_duas_fases_de_teste(monkeypatch) -> None:
         monkeypatch.setitem(tool_policy.POLITICAS, nome, politica)
     for nome, efeito in EFEITOS_DE_TESTE.items():
         monkeypatch.setitem(efeitos.EFEITOS, nome, efeito)
+    # O guardrail de saída ancora "abri o chamado" na tool de abertura (B2): a de teste conta.
+    for tipo in ("abertura", "chamado_aberto"):
+        monkeypatch.setitem(nodes.ANCORAS, tipo, nodes.ANCORAS[tipo] | {"tool_abrir_de_teste"})
 
 
 def aberturas() -> int:

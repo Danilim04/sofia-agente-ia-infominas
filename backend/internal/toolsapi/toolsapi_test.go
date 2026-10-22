@@ -222,6 +222,12 @@ func TestTransferirJaTransferidaEEnumFechado(t *testing.T) {
 
 	// A engine pode concluir que já não é do bot (humano assumiu entre o check e a chamada).
 	b := novoAmb(t)
+	// Conversa que o webhook nunca viu não é transferida pela tool (E4.5, M7).
+	_, out = b.post("conversa/transferir", map[string]any{"conversation_id": convTeste, "motivo": "nao_resolvido"})
+	if out["motivo"] != "campo_invalido" || len(b.tr.chamadas) != 0 {
+		t.Fatalf("conversa desconhecida: %+v / %v", out, b.tr.chamadas)
+	}
+	b.conversa(convTeste, telTeste)
 	b.tr.ja = true
 	_, out = b.post("conversa/transferir", map[string]any{"conversation_id": convTeste, "motivo": "nao_resolvido"})
 	if out["motivo"] != "ja_transferida" {
@@ -248,5 +254,26 @@ func TestTransferirNomeiaODepartamentoQueAEngineUsa(t *testing.T) {
 	dep, _ := out["departamento"].(map[string]any)
 	if dep["nome"] != "Atendimento" || !strings.Contains(out["mensagem_ao_cliente"].(string), "equipe de Atendimento") {
 		t.Fatalf("o nome é o do DEPARTAMENTO_HUMANO_PADRAO (o que a engine usa): %+v", out)
+	}
+}
+
+// M7 (E4.5): preparar, abrir e identificar exigem a conversa no store (e o
+// telefone vem DELA): um telefone só do corpo não basta.
+func TestToolsDeEscritaExigemConversaNoStore(t *testing.T) {
+	a := novoAmb(t) // sem semear a conversa
+	p, chave := propostaTeste("sem_conexao")
+	casos := map[string]map[string]any{
+		"ticket/preparar":     {"telefone": telTeste, "conversation_id": convTeste, "categoria": "sem_conexao", "titulo": "t", "descricao": "d"},
+		"ticket/abrir":        {"telefone": telTeste, "conversation_id": convTeste, "proposta": p, "chave_idempotencia": chave},
+		"contato/identificar": {"telefone": telTeste, "conversation_id": convTeste, "cpf": "52998224725"},
+	}
+	for rota, corpo := range casos {
+		_, out := a.post(rota, corpo)
+		if out["status"] != false || out["motivo"] == "" || out["motivo"] == nil {
+			t.Errorf("%s sem conversa no store devia recusar: %+v", rota, out)
+		}
+	}
+	if a.idk.totalPosts() != 0 || len(a.tr.chamadas) != 0 {
+		t.Fatalf("nada pode ter sido enviado ao Infodesk nem transferido: POSTs=%d", a.idk.totalPosts())
 	}
 }

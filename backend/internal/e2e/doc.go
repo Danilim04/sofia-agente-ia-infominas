@@ -15,8 +15,8 @@
 //
 //   - o cenário 1 usa um solicitante cadastrado do mock e roda UMA vez por
 //     processo (com -count=N as repetições são puladas, com aviso);
-//   - E2E_ESTRITO=1 transforma em falha o bug conhecido registrado no
-//     cenário 1 (BUG-E4.1-1);
+//   - E2E_ESTRITO=1 era o interruptor do bug conhecido do cenário 1 (BUG-E4.1-1),
+//     corrigido na E4.5: o assert agora vale sempre e a variável não muda nada;
 //   - E2E_CEREBRO=real (+ OPENROUTER_API_KEY) sobe o cérebro Python no lugar do
 //     falso, mas só os cenários 2 e 3 (que não dependem do roteiro) valem nesse
 //     modo; os demais são pulados. O modo real ainda não foi exercitado.

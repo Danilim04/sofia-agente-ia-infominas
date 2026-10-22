@@ -305,9 +305,18 @@ def afirmacoes_de_acao(texto: str | None) -> list[str]:
     """
     if not texto:
         return []
-    alvo = _normalizar_para_busca(_TRECHO_CITADO_RE.sub(" ", str(texto)))
+    return _varrer(_alvo(texto), _AFIRMACOES_DE_ACAO_RE)
+
+
+def _alvo(texto: str | None) -> str:
+    """Texto normalizado (minúsculas, sem acento) sem a fala citada entre aspas."""
+    return _normalizar_para_busca(_TRECHO_CITADO_RE.sub(" ", str(texto or "")))
+
+
+def _varrer(alvo: str, padroes: Iterable[re.Pattern[str]]) -> list[str]:
+    """Trechos de `alvo` que casam `padroes`, menos negação e incerteza honesta."""
     achadas: list[str] = []
-    for padrao in _AFIRMACOES_DE_ACAO_RE:
+    for padrao in padroes:
         for m in padrao.finditer(alvo):
             antes = alvo[max(0, m.start() - 24) : m.start()]
             if _NEGACAO_ANTES_RE.search(antes):
@@ -321,6 +330,133 @@ def afirmacoes_de_acao(texto: str | None) -> list[str]:
                 continue
             achadas.append(m.group(0))
     return achadas
+
+
+# ---------------------------------------------------------------------------
+# Afirmações TIPADAS (E4.5b, B2): "chamado aberto", "te transferi", "cadastro
+# concluído" só são verdade quando a ferramenta DAQUELE efeito executou com
+# sucesso no turno — outra tool qualquer (um `preparar`, um `listar`) não ancora.
+# Quem cruza o tipo com o que executou é o `output_guardrail_node`.
+# ---------------------------------------------------------------------------
+
+TIPO_ABERTURA = "abertura"  # 1ª pessoa: "abri/criei o chamado"
+TIPO_CHAMADO_ABERTO = "chamado_aberto"  # passivo: "chamado 4821 foi aberto/criado"
+TIPO_TRANSFERENCIA = "transferencia"
+TIPO_CADASTRO = "cadastro"
+
+_SUBST_CHAMADO = r"(?:chamado|ticket|protocolo)"
+#: número opcional logo após o substantivo: "chamado 4821", "chamado nº 4821", "#4821"
+_NUM_OBRIGATORIO = r"\s*(?:n[o°º.]*\s*|numero\s*|\#\s*)?\d{2,}"
+_PARTICIPIO_ABERTURA = r"(?:abert[oa]s?|criad[oa]s?|gerad[oa]s?|registrad[oa]s?|cadastrad[oa]s?)"
+#: sem "aberto": "o chamado 4821 aberto" costuma descrever estado ("você já tem o chamado
+#: 4821 aberto"); só com "foi/ficou" ("foi aberto") ou com os verbos de criação vale.
+_PARTICIPIO_CRIACAO = r"(?:criad[oa]s?|gerad[oa]s?|registrad[oa]s?|cadastrad[oa]s?)"
+
+#: "o número do seu chamado é 48213" · "seu protocolo é 99887" · "protocolo: 99887"
+_ANUNCIO_DE_NUMERO = (
+    r"\b(?:(?:o\s+)?numero\s+d[oa]\s+(?:seu\s+|sua\s+)?(?:chamado|ticket|protocolo)|"
+    r"(?:seu|o)\s+(?:protocolo|ticket|chamado))(?:\s+e\b|\s*:)\s*(?:n[o°º.]*\s*)?(\d{2,})\b"
+)
+
+_AFIRMACOES_TIPADAS_RE: dict[str, tuple[re.Pattern[str], ...]] = {
+    TIPO_ABERTURA: (
+        re.compile(
+            r"\b(?:ja\s+)?(?:abri|criei|gerei|registrei|abrimos|criamos|geramos|registramos)\s+"
+            r"(?:aqui\s+)?(?:o\s+|um\s+|seu\s+|o\s+seu\s+|esse\s+|este\s+)?"
+            + _SUBST_CHAMADO
+            + r"\b"
+        ),
+        # "já abri pra você" · "abri uma solicitação para a equipe"
+        re.compile(r"\b(?:ja\s+)?(?:abri|criei|gerei)\s+(?:pra|para)\s+(?:voce|vc)\b"),
+        re.compile(
+            r"\b(?:ja\s+)?(?:abri|criei|gerei)\s+(?:uma|a)\s+(?:solicitacao|ocorrencia|demanda)\b"
+        ),
+    ),
+    TIPO_CHAMADO_ABERTO: (
+        # "chamado 4821 foi aberto" · "chamado 4821 criado" · "protocolo 4821 gerado"
+        # (sem "está aberto": é status; e "chamado aberto" solto, sem número nem "foi",
+        # é só um substantivo qualificado: "você tem algum chamado aberto?")
+        re.compile(
+            r"\b" + _SUBST_CHAMADO + _NUM_OBRIGATORIO + r"\s+(?:ja\s+)?(?:foi\s+|ficou\s+)?"
+            r"(?:devidamente\s+)?" + _PARTICIPIO_CRIACAO + r"\b"
+        ),
+        re.compile(
+            r"\b"
+            + _SUBST_CHAMADO
+            + f"(?:{_NUM_OBRIGATORIO})?"
+            + r"\s+(?:ja\s+)?(?:foi|ficou)\s+(?:devidamente\s+)?"
+            + _PARTICIPIO_ABERTURA
+            + r"\b"
+        ),
+        # "chamado aberto com sucesso" · "seu chamado está aberto e a equipe já foi avisada"
+        re.compile(r"\b(?:chamado|ticket)\s+(?:aberto|criado|registrado)\s+com\s+sucesso\b"),
+        re.compile(r"\b(?:chamado|ticket)\s+esta\s+aberto\s+e\s+a\s+equipe\b"),
+        # "o número do seu chamado é 48213" · "seu protocolo é 99887"
+        re.compile(_ANUNCIO_DE_NUMERO),
+        # "foi aberto o chamado 4821"
+        re.compile(
+            r"\bfoi\s+"
+            + _PARTICIPIO_ABERTURA
+            + r"\s+(?:o\s+|um\s+|seu\s+)?"
+            + _SUBST_CHAMADO
+            + r"\b"
+        ),
+    ),
+    TIPO_TRANSFERENCIA: (
+        re.compile(
+            r"\b(?:ja\s+)?(?:transferi|transferimos|passei|passamos|encaminhei|encaminhamos)\s+"
+            r"(?:voce|vc|a\s+conversa|sua\s+conversa|a\s+sua\s+conversa|o\s+atendimento|"
+            r"seu\s+atendimento)\b"
+        ),
+        re.compile(r"\b(?:estou|estamos)\s+(?:te\s+|lhe\s+)?(?:transferindo|passando)\b"),
+        re.compile(r"\bte\s+(?:transferi|passei|encaminhei)\b"),
+        re.compile(r"\b(?:um\s+)?atendente\s+(?:ja\s+)?foi\s+(?:acionad|chamad|avisad)[oa]\b"),
+        re.compile(r"\btransferencia\s+(?:ja\s+)?(?:concluida|realizada|feita)\b"),
+        re.compile(
+            r"\b(?:voce|conversa|atendimento)\s+(?:ja\s+)?foi\s+(?:transferid|encaminhad|passad)[oa]s?\b"
+        ),
+    ),
+    TIPO_CADASTRO: (
+        re.compile(r"\b(?:ja\s+)?(?:te\s+)?(?:cadastrei|cadastramos)\b"),
+        re.compile(r"\b(?:voce\s+)?(?:ja\s+)?(?:esta|foi)\s+cadastrad[oa]\b"),
+        re.compile(
+            r"\bcadastro\s+(?:ja\s+)?(?:(?:foi|esta|ficou)\s+)?(?:devidamente\s+)?"
+            r"(?:concluid|feito|realizad|finalizad|criad|efetuad|registrad)[oa]s?\b"
+        ),
+    ),
+}
+
+#: "chamado 4821", "ticket nº 4821", "protocolo #4821", "chamado número 4821"
+_NUMERO_CITADO_RE = re.compile(
+    r"\b" + _SUBST_CHAMADO + r"s?\s*(?:n[o°º.]*\s*|numero\s*|\#\s*)?(\d{2,})\b"
+)
+_NUMERO_ANUNCIADO_RE = re.compile(_ANUNCIO_DE_NUMERO)
+
+
+def afirmacoes_tipadas(texto: str | None) -> dict[str, list[str]]:
+    """Afirmações de ação por TIPO (abertura, chamado_aberto, transferencia, cadastro).
+
+    Mesmas regras de `afirmacoes_de_acao` (fala citada, negação e incerteza
+    honesta não contam); só devolve os tipos que apareceram.
+    """
+    if not texto:
+        return {}
+    alvo = _alvo(texto)
+    achadas = {tipo: _varrer(alvo, padroes) for tipo, padroes in _AFIRMACOES_TIPADAS_RE.items()}
+    return {tipo: trechos for tipo, trechos in achadas.items() if trechos}
+
+
+def numeros_de_chamado_citados(texto: str | None) -> list[str]:
+    """Números de chamado/ticket/protocolo citados na resposta (só dígitos, sem repetir)."""
+    if not texto:
+        return []
+    vistos: list[str] = []
+    alvo = _alvo(texto)
+    for regex in (_NUMERO_CITADO_RE, _NUMERO_ANUNCIADO_RE):
+        for m in regex.finditer(alvo):
+            if m.group(1) not in vistos:
+                vistos.append(m.group(1))
+    return vistos
 
 
 def envolver_chunks_rag(chunks: Iterable[Mapping[str, object]]) -> str:

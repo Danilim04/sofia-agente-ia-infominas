@@ -375,6 +375,7 @@ func propostaTeste(categoria string) (map[string]any, string) {
 func (a *amb) abrir(categoria string) (map[string]any, string) {
 	a.t.Helper()
 	p, chave := propostaTeste(categoria)
+	a.selar(p)
 	_, out := a.post("ticket/abrir", map[string]any{
 		"telefone": telTeste, "conversation_id": convTeste, "proposta": p, "chave_idempotencia": chave,
 	})
@@ -392,4 +393,18 @@ func novaTaxonomiaSemCarga(t *testing.T, idk *fakeIdk) *taxonomia.Taxonomia {
 		t.Fatal(err)
 	}
 	return taxonomia.Nova(def, idk, taxonomia.Opcoes{})
+}
+
+// selar grava o selo da proposta como o `preparar` faria (M8): o `abrir` só cria
+// ticket de uma proposta preparada. Os testes que chamam `abrir` direto o usam.
+func (a *amb) selar(p map[string]any) {
+	a.t.Helper()
+	titulo, _ := sanitizarTexto(p["titulo"].(string), tituloMax, true)
+	descricao, _ := sanitizarTexto(p["descricao"].(string), descricaoMax, false)
+	prio, _ := p["prioridade"].(map[string]any)
+	nome, _ := prio["nome"].(string)
+	h := hashProposta(convTeste, titulo, descricao, p["categoria"].(string), nome)
+	if err := a.st.GravarPropostaTicket(context.Background(), convTeste, h, time.Now()); err != nil {
+		a.t.Fatalf("selar: %v", err)
+	}
 }

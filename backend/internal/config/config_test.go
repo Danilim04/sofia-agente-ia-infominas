@@ -6,11 +6,18 @@ import (
 	"time"
 )
 
+// segredoLongo tem o tamanho mínimo (SegredoMinimo) exigido fora do modo dev.
+const segredoLongo = "0123456789abcdef0123456789abcdef"
+
 // comObrigatorias define o mínimo para Load passar das validações.
 func comObrigatorias(t *testing.T) {
 	t.Helper()
 	t.Setenv("INFODESK_BASE_URL", "https://infodesk.test/api/integration/v1/")
 	t.Setenv("INFODESK_API_KEY", "chave-de-teste")
+	t.Setenv("INFODESK_WEBHOOK_SECRET", segredoLongo)
+	t.Setenv("SOFIA_PRODUCAO_ABERTA", "true")
+	t.Setenv("TOOLS_API_TOKEN", "")
+	t.Setenv("WEBHOOK_SEM_AUTENTICACAO", "")
 }
 
 // TestObrigatoriasAusentes: sem INFODESK_BASE_URL/INFODESK_API_KEY o boot
@@ -33,7 +40,7 @@ func TestObrigatoriasAusentes(t *testing.T) {
 // final da base URL removida.
 func TestDefaultsDoGateway(t *testing.T) {
 	comObrigatorias(t)
-	for _, v := range []string{"INFODESK_TIMEOUT", "REFERENCIA_CACHE_TTL", "DEPARTAMENTO_HUMANO_PADRAO", "INFODESK_WEBHOOK_SECRET", "TOOLS_API_TOKEN", "PORT"} {
+	for _, v := range []string{"INFODESK_TIMEOUT", "REFERENCIA_CACHE_TTL", "DEPARTAMENTO_HUMANO_PADRAO", "TOOLS_API_TOKEN", "PORT"} {
 		t.Setenv(v, "")
 	}
 	cfg, err := Load()
@@ -46,7 +53,7 @@ func TestDefaultsDoGateway(t *testing.T) {
 	if cfg.InfodeskTimeout != 15*time.Second || cfg.ReferenciaCacheTTL != 10*time.Minute {
 		t.Fatalf("defaults do Infodesk: timeout=%v ttl=%v", cfg.InfodeskTimeout, cfg.ReferenciaCacheTTL)
 	}
-	if cfg.DepartamentoHumanoPadrao != "" || cfg.InfodeskWebhookSecret != "" || cfg.ToolsAPIToken != "" {
+	if cfg.DepartamentoHumanoPadrao != "" || cfg.ToolsAPIToken != "" {
 		t.Fatalf("opcionais deviam ficar vazias: %+v", cfg)
 	}
 	if cfg.Port != "8080" || cfg.TurnoTeto != 105*time.Second || cfg.BrainTimeout != 80*time.Second || cfg.DebounceJanela != 8*time.Second || cfg.ReplyMaxChars != 900 {
@@ -111,14 +118,14 @@ func TestDuracaoInvalidaCitaAVariavel(t *testing.T) {
 func TestValoresLidos(t *testing.T) {
 	comObrigatorias(t)
 	t.Setenv("INFODESK_ORGANIZATION_ID", "org-1")
-	t.Setenv("INFODESK_WEBHOOK_SECRET", "segredo")
+	t.Setenv("INFODESK_WEBHOOK_SECRET", segredoLongo)
 	t.Setenv("DEPARTAMENTO_HUMANO_PADRAO", "dept-9")
 	t.Setenv("INFODESK_TIMEOUT", "3s")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("erro inesperado: %v", err)
 	}
-	if cfg.InfodeskOrganizationID != "org-1" || cfg.InfodeskWebhookSecret != "segredo" ||
+	if cfg.InfodeskOrganizationID != "org-1" || cfg.InfodeskWebhookSecret != segredoLongo ||
 		cfg.DepartamentoHumanoPadrao != "dept-9" || cfg.InfodeskTimeout != 3*time.Second {
 		t.Fatalf("valores não lidos: %+v", cfg)
 	}
@@ -276,25 +283,25 @@ func TestAvisoDoSalDoHashVazio(t *testing.T) {
 	comObrigatorias(t)
 	limparE36(t)
 
-	t.Setenv("TOOLS_API_TOKEN", "tok")
+	t.Setenv("TOOLS_API_TOKEN", segredoLongo)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	av := cfg.Avisos()
+	av := avisosCom(cfg, "IDENT_HASH_SAL")
 	if len(av) != 1 || !strings.Contains(av[0], "IDENT_HASH_SAL") || !strings.Contains(av[0], "TOOLS_API_TOKEN") ||
 		!strings.Contains(av[0], "invalida") {
 		t.Fatalf("avisos = %v", av)
 	}
 
 	t.Setenv("IDENT_HASH_SAL", "sal")
-	if cfg, _ = Load(); len(cfg.Avisos()) != 0 {
+	if cfg, _ = Load(); len(avisosCom(cfg, "IDENT_HASH_SAL")) != 0 {
 		t.Fatalf("com sal próprio não há aviso: %v", cfg.Avisos())
 	}
 
 	t.Setenv("IDENT_HASH_SAL", "")
 	t.Setenv("TOOLS_API_TOKEN", "")
-	if cfg, _ = Load(); len(cfg.Avisos()) != 0 {
+	if cfg, _ = Load(); len(avisosCom(cfg, "IDENT_HASH_SAL")) != 0 {
 		t.Fatalf("sem a API de tools o sal não importa: %v", cfg.Avisos())
 	}
 }
@@ -368,7 +375,7 @@ func TestTestadoresDesligadaPorPadrao(t *testing.T) {
 		t.Fatalf("lista vazia = desligada: %+v", cfg.TestadoresTelefones)
 	}
 	for _, a := range cfg.Avisos() {
-		if strings.Contains(a, "TESTADORES") {
+		if strings.Contains(a, "TESTADORES_TELEFONES LIGADA") {
 			t.Fatalf("desligada não avisa: %q", a)
 		}
 	}
@@ -473,4 +480,15 @@ func TestCadastroInvalidosDerrubamOBoot(t *testing.T) {
 			}
 		})
 	}
+}
+
+// avisosCom devolve os avisos de boot que citam `trecho`.
+func avisosCom(cfg *Config, trecho string) []string {
+	var out []string
+	for _, a := range cfg.Avisos() {
+		if strings.Contains(a, trecho) {
+			out = append(out, a)
+		}
+	}
+	return out
 }

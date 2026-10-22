@@ -93,6 +93,10 @@ class Settings(BaseSettings):
     infodesk_tools_base_url: str = Field("http://localhost:8080", alias="INFODESK_TOOLS_BASE_URL")
     infodesk_tools_token: str = Field("", alias="INFODESK_TOOLS_TOKEN")
     infodesk_tools_timeout: float = Field(30.0, alias="INFODESK_TOOLS_TIMEOUT")
+    # /chat e /encerrar-episodio exigem o header X-Brain-Token (= INFODESK_TOOLS_TOKEN).
+    # Token vazio RECUSA tudo (fail-closed); `BRAIN_SEM_AUTENTICACAO=true` é a saída
+    # explícita para dev local (o scripts/start-all.sh e o Chainlit não precisam dela).
+    brain_sem_autenticacao: bool = Field(False, alias="BRAIN_SEM_AUTENTICACAO")
 
     # Checkpointer persistente do grafo (histórico das conversas por
     # conversation_id). Sem o pacote `langgraph-checkpoint-sqlite` (ou em erro),

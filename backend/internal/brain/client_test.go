@@ -194,3 +194,36 @@ func TestChatRequestContatoPorTelefone(t *testing.T) {
 		}
 	}
 }
+
+// I7 (E4.5): com token configurado, TODA chamada ao cérebro leva X-Brain-Token;
+// sem token o header não é enviado (compatível com o cérebro que o ignora).
+func TestTokenVaiEmTodaChamadaAoCerebro(t *testing.T) {
+	var tokens []string
+	var caminhos []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokens = append(tokens, r.Header.Get(HeaderToken))
+		caminhos = append(caminhos, r.URL.Path)
+		_, _ = w.Write([]byte(`{"reply":"oi"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.URL, 2*time.Second).ComToken("segredo-compartilhado")
+	if _, err := c.Chat(context.Background(), ChatRequest{ConversationID: "1", Mensagem: "oi"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EncerrarEpisodio(context.Background(), "1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 2 || tokens[0] != "segredo-compartilhado" || tokens[1] != "segredo-compartilhado" {
+		t.Fatalf("/chat e /encerrar-episodio levam o token: %v em %v", tokens, caminhos)
+	}
+
+	tokens = nil
+	sem := NewClient(srv.URL, 2*time.Second)
+	if _, err := sem.Chat(context.Background(), ChatRequest{ConversationID: "1", Mensagem: "oi"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 1 || tokens[0] != "" {
+		t.Fatalf("sem token configurado o header não vai: %v", tokens)
+	}
+}
