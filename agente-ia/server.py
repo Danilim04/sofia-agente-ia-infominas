@@ -48,7 +48,7 @@ import threading
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import FastAPI, Header
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
@@ -61,6 +61,7 @@ from src.agent.falhas import (
 )
 from src.agent.graph import build_graph
 from src.agent.llm import get_classifier_llm
+from src.agent.nodes import PREFIXO_SESSAO_NO_CONFIG
 from src.classificacao import Mensagem, ServicoClassificacao, criar_servico_padrao
 from src.config import get_settings
 from src.observability import eventos
@@ -108,16 +109,63 @@ _setup_logging()
 logger = logging.getLogger(__name__)
 
 
+#: Limites do Contrato A (E4.5b, M2): um pedido fora deles é 422 antes de chegar ao grafo.
+MENSAGEM_MAX_CHARS = 16_000
+NOME_CONTATO_MAX_CHARS = 120
+
+#: Header que o gateway manda em /chat e /encerrar-episodio (E4.5b, I7): o MESMO
+#: segredo compartilhado das tools (`TOOLS_API_TOKEN` no Go = `INFODESK_TOOLS_TOKEN` aqui).
+HEADER_TOKEN_DO_GATEWAY = "X-Brain-Token"  # noqa: S105 - nome do header, não um segredo
+
+
+def exigir_token_do_gateway(
+    x_brain_token: str | None = Header(default=None, alias=HEADER_TOKEN_DO_GATEWAY),
+) -> None:
+    """Dependência de /chat e /encerrar-episodio: só o gateway chama.
+
+    O header é obrigatório e comparado em tempo constante — fail-closed: ausente ou
+    errado é 401, sem dizer qual. Segredo NÃO configurado também é 401, a menos que
+    `BRAIN_SEM_AUTENTICACAO=true` (dev local, avisa no log uma vez por processo): um
+    `INFODESK_TOOLS_TOKEN` esquecido em produção não pode deixar o cérebro aberto a
+    quem personifique qualquer telefone.
+    """
+    cfg = get_settings()
+    esperado = cfg.infodesk_tools_token
+    if not esperado:
+        if cfg.brain_sem_autenticacao:
+            _avisar_sem_token_uma_vez()
+            return
+        logger.error("brain_sem_token INFODESK_TOOLS_TOKEN vazio — pedido recusado")
+        raise HTTPException(status_code=401, detail="não autorizado")
+    recebido = x_brain_token or ""
+    if not hmac.compare_digest(recebido.encode(), esperado.encode()):
+        logger.warning("brain_token_recusado presente=%s", bool(x_brain_token))
+        raise HTTPException(status_code=401, detail="não autorizado")
+
+
+_AVISOU_SEM_TOKEN: list[bool] = []
+
+
+def _avisar_sem_token_uma_vez() -> None:
+    if not _AVISOU_SEM_TOKEN:
+        _AVISOU_SEM_TOKEN.append(True)
+        logger.warning(
+            "brain_sem_autenticacao BRAIN_SEM_AUTENTICACAO=true — /chat e /encerrar-episodio "
+            "ficam abertos (aceitável só em dev local)"
+        )
+
+
 class ChatRequest(BaseModel):
     """Turno do cliente (Contrato A). Campos além de `conversation_id` e
     `mensagem` são opcionais — o contrato só cresce."""
 
-    conversation_id: str
-    mensagem: str
-    canal: str = "whatsapp"
-    telefone: str | None = None
+    conversation_id: str = Field(max_length=200)
+    #: Teto folgado: o gateway junta a rajada do cliente num turno só (E4.5b, M2).
+    mensagem: str = Field(max_length=MENSAGEM_MAX_CHARS)
+    canal: str = Field("whatsapp", max_length=40)
+    telefone: str | None = Field(None, max_length=40)
     #: Nome do contato no WhatsApp (`data.contact.name` do webhook; pode ser apelido).
-    nome_contato: str | None = None
+    nome_contato: str | None = Field(None, max_length=NOME_CONTATO_MAX_CHARS)
     #: Identificação em cache no gateway: {forma, valor_mascarado, cliente_id,
     #: nome_cadastro}; `None` se o cliente nunca se identificou.
     contato: dict[str, Any] | None = None
@@ -239,16 +287,28 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
         config["callbacks"] = [handler]
         config["run_name"] = "chat"
 
-    inputs: dict[str, Any] = {
+    # PII do contato FORA do estado persistido (E4.5b, I1): telefone, nome do WhatsApp e
+    # nome do cadastro vão por `config` (o gateway os reenvia a cada turno); o estado
+    # recebe `None` nos dois primeiros, o que também limpa checkpoints antigos.
+    contato_no_estado = (
+        {k: v for k, v in req.contato.items() if k != "nome_cadastro"} if req.contato else None
+    )
+    nome_cadastro = (req.contato or {}).get("nome_cadastro")
+    sessao = {
+        "telefone": req.telefone,
         "nome_contato": req.nome_contato,
-        "contato": req.contato,
+        "nome_cadastro": nome_cadastro if isinstance(nome_cadastro, str) else None,
+    }
+    config["configurable"].update({PREFIXO_SESSAO_NO_CONFIG + k: v for k, v in sessao.items() if v})
+    inputs: dict[str, Any] = {
+        "nome_contato": None,
+        "telefone": None,
+        "contato": contato_no_estado,
         # Vai ao estado para as tools repassarem ao gateway (correlação do log
         # do gateway com a conversa) — nunca é argumento do modelo.
         "conversation_id": req.conversation_id,
         "messages": [HumanMessage(content=req.mensagem)],
     }
-    if req.telefone:
-        inputs["telefone"] = req.telefone
 
     try:
         with TracoDoTurno(
@@ -460,7 +520,7 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(exigir_token_do_gateway)])
 async def chat(req: ChatRequest):
     """Contrato A. Falha do turno sai com status HTTP por classe + corpo com
     `erro` (classe, id_ocorrencia, causa): 503 = transitória (o gateway pode
@@ -472,7 +532,11 @@ async def chat(req: ChatRequest):
     return resposta
 
 
-@app.post("/encerrar-episodio", response_model=EncerrarEpisodioResponse)
+@app.post(
+    "/encerrar-episodio",
+    response_model=EncerrarEpisodioResponse,
+    dependencies=[Depends(exigir_token_do_gateway)],
+)
 async def encerrar_episodio_endpoint(req: EncerrarEpisodioRequest):
     """Chamado pelo gateway Go no `conversation.finished` do Infodesk. Falha
     sai como 500 com corpo — o gateway só loga: a validade de 15 min da

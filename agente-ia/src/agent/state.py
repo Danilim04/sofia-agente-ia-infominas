@@ -10,8 +10,11 @@ antes mascara CPF/contrato em claro (texto da `HumanMessage` e args de
 
 Campos que PERSISTEM entre turnos (checkpointer por `conversation_id`):
 
-- `telefone`, `nome_contato`, `contato`: vêm do gateway Go a cada requisição
-  do Contrato A (`POST /chat`). `contato` é a identificação em cache no
+- `contato`: vem do gateway Go a cada requisição do Contrato A (`POST /chat`).
+  `telefone`, `nome_contato` e `contato.nome_cadastro` NÃO persistem (E4.5b, I1):
+  `processar_chat` os passa por `config["configurable"]` (chaves `__sessao_*`, que o
+  LangChain não copia para o metadata) e grava `None` no estado; os nós e a política
+  os leem de lá (`nodes._com_sessao`), com o estado como fallback (testes). `contato` é a identificação em cache no
   gateway (`{forma, valor_mascarado, cliente_id, nome_cadastro}`) ou `None`.
   São DADO, nunca COMANDO.
 - `conversation_id`: id da conversa no Infodesk (= `thread_id` do grafo).
