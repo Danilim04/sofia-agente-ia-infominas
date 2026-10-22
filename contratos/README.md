@@ -45,6 +45,8 @@ Endpoints cobertos (seção A do 01):
 | `consultar_status_chamado` | `ticket/consultar` | `nao_encontrado`, `posse_nao_verificada`, `infodesk_indisponivel` |
 | `listar_meus_chamados` | `ticket/listar` | `chamados_indisponiveis` (hipótese, ver abaixo) |
 | `transferir_para_atendente` | `conversa/transferir` | `ja_transferida`, `infodesk_indisponivel` |
+| `preparar_cadastro_solicitante` (A8a) | `cadastro/preparar` | `campo_invalido`, `ja_cadastrado`, `empresa_nao_encontrada`, `empresa_ambigua`, `cadastro_transferido`, `escopo_insuficiente`, `infodesk_indisponivel` |
+| `cadastrar_solicitante` (A8b) | `cadastro/cadastrar` | `sem_proposta`, `escopo_insuficiente`, `infodesk_indisponivel` |
 
 ## Regra: erro de negócio é HTTP 200
 
@@ -118,6 +120,8 @@ configurável.
 | `cliente_id`, `nome_cadastro` | `contato/identificar/ok.json`, `contrato-a/chat-request.json` | **T4 / P2** — respondido em 2026-10-19: `GET /contacts/lookup?phone=` preenche quando o telefone foi reconhecido; `null` no fallback por CPF/contrato. `contato.forma` ganhou o valor `"telefone"` (lookup) ao lado de `"cpf"` e `"contrato"` — mesma chave, valor novo |
 | posse (`erro-posse_nao_verificada`) | `ticket/consultar` | **P3 / T5** — respondido em 2026-10-19: posse por código (tabela local, `conversationId`, telefone do ticket, `requester_id`); sem prova, nenhum campo do ticket sai |
 | `identificacao` = `{forma, valor_mascarado}` | `ticket/preparar/request.json`, `ticket/consultar/request.json` | o 01 escreve o injetado como `{cpf\|contrato}`; o contrato manda a visão **mascarada** (regra 5 do CLAUDE.md) e o gateway resolve pela tabela `contatos` via `telefone` — hipótese, `TODO(E2.3)` confirmar e atualizar as linhas A2/A4 do 01 |
+| `proposta.chave` | `cadastro/preparar/ok.json`, `cadastro/cadastrar/request.json` | **ADR 0009 / E5.3:** sha256 calculado pelo **gateway** (conversa + telefone + `cliente_id` + nome normalizado + e-mail); valor de exemplo ilustrativo. O `clientId` nunca aparece no contrato: fica na tabela `cadastros` do gateway |
+| `candidatos` | `cadastro/preparar/erro-empresa_ambigua.json` | só o **nome** de cada empresa (até 5); o LLM não recebe `clientId` |
 | `erro-chamados_indisponiveis` | `ticket/listar` | confirmado na E3.1 (a linha A5 do 01 o lista): as duas partes da lista (Infodesk e tabela local) falharam |
 | `observacao` | `ticket/listar/ok.json` | texto fixo do gateway: `abertos no Infodesk + abertos por aqui` (ver `_notas.md`) |
 | `classificar-*` | `contrato-a/` | o 01 não fixa o JSON de `POST /classificar`; formato é hipótese para a E2.2 (`TODO(E2.2)`) |

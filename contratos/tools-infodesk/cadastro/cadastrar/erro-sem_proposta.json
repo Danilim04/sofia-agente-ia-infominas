@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "não há cadastro preparado; prepare o cadastro e peça a confirmação do cliente antes",
+  "motivo": "sem_proposta"
+}

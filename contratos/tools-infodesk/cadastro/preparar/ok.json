@@ -1,0 +1,12 @@
+{
+  "status": true,
+  "proposta": {
+    "nome": "Maria Souza",
+    "email": "maria@acme.com.br",
+    "empresa": {
+      "nome": "ACME Ltda"
+    },
+    "telefone_mascarado": "****0001",
+    "chave": "47065c9aa6eda48e147b541734fc27a1115a34e27bccd140f6b7eb8550b28a4f"
+  }
+}

@@ -53,6 +53,17 @@ MOTIVOS: dict[str, set[str]] = {
     # registrada em contratos/README.md (TODO(E3.1): confirmar no 01).
     "ticket/listar": {"chamados_indisponiveis"},
     "conversa/transferir": {"ja_transferida", "infodesk_indisponivel"},
+    # A8 (E5.3, ADR 0009): cadastro de solicitante em duas fases.
+    "cadastro/preparar": {
+        "campo_invalido",
+        "ja_cadastrado",
+        "empresa_nao_encontrada",
+        "empresa_ambigua",
+        "cadastro_transferido",
+        "escopo_insuficiente",
+        "infodesk_indisponivel",
+    },
+    "cadastro/cadastrar": {"sem_proposta", "escopo_insuficiente", "infodesk_indisponivel"},
 }
 
 # Esquema mínimo: chaves de primeiro nível de request.json e ok.json por
@@ -91,6 +102,14 @@ ESQUEMA: dict[str, dict[str, set[str]]] = {
         "request": {"conversation_id", "motivo", "categoria"},
         "ok": {"status", "departamento", "mensagem_ao_cliente"},
     },
+    "cadastro/preparar": {
+        "request": {"telefone", "conversation_id", "nome", "empresa", "email"},
+        "ok": {"status", "proposta"},
+    },
+    "cadastro/cadastrar": {
+        "request": {"telefone", "conversation_id", "proposta"},
+        "ok": {"status", "cadastrado", "criado", "solicitante", "empresa", "requester_id"},
+    },
 }
 
 # Chaves obrigatórias dentro de objetos aninhados que os dois lados leem.
@@ -120,11 +139,27 @@ ANINHADO: dict[str, dict[str, set[str]]] = {
             "criada_em",
         },
     },
+    "cadastro/preparar": {
+        "ok.proposta": {"nome", "email", "empresa", "telefone_mascarado", "chave"},
+    },
+    "cadastro/cadastrar": {
+        "request.proposta": {
+            "nome",
+            "email",
+            "empresa",
+            "telefone_mascarado",
+            "chave",
+            "criada_em",
+        },
+        "ok.solicitante": {"nome"},
+        "ok.empresa": {"nome"},
+    },
 }
 
 # Extras que um erro específico carrega além de status/erro/motivo.
 EXTRAS_ERRO: dict[str, dict[str, set[str]]] = {
     "ticket/preparar": {"chamado_aberto": {"chamados_abertos"}},
+    "cadastro/preparar": {"empresa_ambigua": {"candidatos"}},
 }
 
 # Listas de objetos que os dois lados leem item a item: trilha até a lista →
@@ -135,6 +170,9 @@ ANINHADO_LISTA: dict[str, dict[str, set[str]]] = {
     },
     "ticket/listar": {
         "ok.chamados": {"numero", "titulo", "categoria", "status_ticket", "aberto_em"},
+    },
+    "cadastro/preparar": {
+        "erro-empresa_ambigua.candidatos": {"nome"},
     },
 }
 
