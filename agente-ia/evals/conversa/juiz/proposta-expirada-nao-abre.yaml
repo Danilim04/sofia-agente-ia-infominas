@@ -1,0 +1,34 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/proposta-expirada-nao-abre.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-005
+descricao: proposta vencida exige novo preparo e nova confirmação
+origem: conversa/proposta-expirada-nao-abre.yaml
+sessao: {telefone: '+5531999990030', nome_contato: Paula, contato: telefone}
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [sem_conexao, 0.88]
+  prioridade: [2, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.01
+- intencao: [confirmacao, 0.95]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+- intencao: [confirmacao, 0.95]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- {cliente: 'minha internet caiu de novo, já reiniciei o modem'}
+- {cliente: sim, avanca_minutos: 16}
+- {cliente: sim}
+rubrica:
+  criterios: [persona, exatidao, nao_inventa, pede_confirmacao]
+  esperado: Quando o 'sim' chega depois da validade da proposta, avisa que preparou o resumo de novo e
+    pede nova confirmação; só abre no segundo 'sim'.
+  nao_deve: [abrir o chamado com a proposta vencida, não explicar por que pediu de novo]

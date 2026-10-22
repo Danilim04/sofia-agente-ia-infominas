@@ -1,0 +1,23 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/duvida-respondida-com-rag.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-006
+descricao: dúvida é respondida com o trecho do RAG embrulhado como dado, e a citação não chega ao cliente
+origem: conversa/duvida-respondida-com-rag.yaml
+sessao: {telefone: '+5531999990011', nome_contato: Paulo, contato: telefone}
+jev:
+- intencao: [duvida_informacao, 0.9]
+  categoria: [indefinida, 0.3]
+  prioridade: [1, 0.6]
+  frustracao: [0, 0.9]
+  malicioso: 0.02
+  fora_de_escopo: 0.05
+turnos:
+- cliente: como eu reinicio o roteador direito?
+  rag:
+  - {source: guia-roteador.md, secao: Reiniciar, texto: 'Para reiniciar o roteador, desligue da tomada,
+      espere 30 segundos e ligue de novo.'}
+rubrica:
+  criterios: [persona, exatidao, nao_inventa]
+  esperado: Responde como reiniciar o roteador usando o trecho da base (desligar da tomada, esperar cerca
+    de 30 segundos, ligar de novo), sem citar nome de arquivo ou fonte.
+  nao_deve: [acrescentar passos que não estão na base, mencionar 'guia-roteador.md' ou a fonte]

@@ -1,0 +1,19 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/horario-de-atendimento-nao-inventa.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-008
+descricao: pergunta sobre horário de atendimento não recebe horário inventado
+origem: conversa/horario-de-atendimento-nao-inventa.yaml
+sessao: {telefone: '+5531999990058', nome_contato: Alice, contato: telefone}
+jev:
+- intencao: [duvida_informacao, 0.9]
+  categoria: [indefinida, 0.3]
+  prioridade: [1, 0.6]
+  frustracao: [0, 0.9]
+  malicioso: 0.02
+  fora_de_escopo: 0.05
+turnos:
+- {cliente: 'até que horas vocês atendem?'}
+rubrica:
+  criterios: [persona, exatidao, nao_inventa]
+  esperado: 'Não tem o horário de atendimento: diz que não tem a informação e oferece um atendente.'
+  nao_deve: [inventar horário de funcionamento, afirmar que atende 24 horas]

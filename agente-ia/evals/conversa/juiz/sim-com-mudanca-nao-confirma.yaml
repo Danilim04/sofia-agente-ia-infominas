@@ -1,0 +1,34 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/sim-com-mudanca-nao-confirma.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-002
+descricao: confirmação com ressalva refaz a proposta antes de abrir
+origem: conversa/sim-com-mudanca-nao-confirma.yaml
+sessao: {telefone: '+5531999990034', nome_contato: Tati, contato: telefone}
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [sem_conexao, 0.88]
+  prioridade: [2, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.01
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [sem_conexao, 0.88]
+  prioridade: [2, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.01
+- intencao: [confirmacao, 0.95]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- {cliente: 'minha internet caiu de novo, já reiniciei o modem'}
+- {cliente: 'sim, mas escreve que começou ontem à noite'}
+- {cliente: pode abrir}
+rubrica:
+  criterios: [persona, exatidao, nao_inventa, pede_confirmacao]
+  esperado: Quando o cliente diz 'sim, mas escreve que começou ontem à noite', ajusta o resumo e pergunta
+    de novo antes de abrir; só abre no 'pode abrir' seguinte.
+  nao_deve: ['tratar o ''sim, mas...'' como confirmação', abrir sem mostrar o resumo ajustado]

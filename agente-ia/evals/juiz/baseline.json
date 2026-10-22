@@ -1,0 +1,8 @@
+{
+  "versao": 1,
+  "atualizado_em": null,
+  "versao_prompt": null,
+  "justificativa": "baseline vazio: ainda não houve rodada com LLM real (sem OPENROUTER_API_KEY no repositório). A primeira rodada noturna gera o relatório; regrave com python -m evals.juiz --atualizar-baseline --justificativa '...' depois de ler as notas.",
+  "tolerancia_pontos": 2.0,
+  "metricas": {}
+}

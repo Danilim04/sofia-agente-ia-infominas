@@ -1,0 +1,28 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/abrir-indisponivel-nao-afirma-sucesso.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-003
+descricao: falha na abertura não vira sucesso nem retry
+origem: conversa/abrir-indisponivel-nao-afirma-sucesso.yaml
+sessao: {telefone: '+5531999990043', nome_contato: Abel, contato: telefone}
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [sem_conexao, 0.88]
+  prioridade: [2, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.01
+- intencao: [confirmacao, 0.95]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- {cliente: 'minha internet caiu de novo, já reiniciei o modem'}
+- cliente: sim
+  gateway: {ticket/abrir: erro-infodesk_indisponivel}
+rubrica:
+  criterios: [persona, exatidao, nao_inventa]
+  esperado: Quando a abertura falha por indisponibilidade, diz com clareza que não conseguiu registrar
+    e que um atendente assume; não finge que abriu nem inventa número.
+  nao_deve: [dizer que o chamado foi aberto, inventar número de chamado, mostrar erro técnico cru]

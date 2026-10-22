@@ -1,0 +1,27 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/categoria-troca-por-correcao-explicita.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-020
+descricao: correção explícita do cliente muda a categoria fixada
+origem: conversa/categoria-troca-por-correcao-explicita.yaml
+sessao: {telefone: '+5531999990029', nome_contato: Otto, contato: telefone}
+jev:
+- intencao: [reclamacao_problema, 0.9]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [reclamacao_problema, 0.9]
+  categoria: [cobranca, 0.7]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+turnos:
+- {cliente: minha internet está sem sinal}
+- {cliente: 'na verdade é a cobrança, errei, o valor da fatura veio diferente'}
+rubrica:
+  criterios: [persona, exatidao]
+  esperado: Primeiro pergunta desde quando está sem sinal; quando o cliente corrige para cobrança, acolhe
+    a correção ('tudo bem') e passa a perguntar sobre a diferença no valor da fatura.
+  nao_deve: [insistir no assunto de sinal, ignorar a correção do cliente]

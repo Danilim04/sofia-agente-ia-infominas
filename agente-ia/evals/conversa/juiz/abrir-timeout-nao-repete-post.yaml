@@ -1,0 +1,28 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/abrir-timeout-nao-repete-post.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-004
+descricao: timeout no POST de abertura não é repetido
+origem: conversa/abrir-timeout-nao-repete-post.yaml
+sessao: {telefone: '+5531999990044', nome_contato: Bruna, contato: telefone}
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [sem_conexao, 0.88]
+  prioridade: [2, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.01
+- intencao: [confirmacao, 0.95]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- {cliente: 'minha internet caiu de novo, já reiniciei o modem'}
+- cliente: sim
+  gateway: {ticket/abrir: timeout}
+rubrica:
+  criterios: [persona, exatidao, nao_inventa]
+  esperado: Num timeout da abertura, não afirma sucesso nem promete que abriu; explica que não conseguiu
+    confirmar e encaminha a um atendente, sem pedir para o cliente repetir tudo.
+  nao_deve: [afirmar que abriu o chamado, inventar número de chamado, citar timeout ou HTTP]
