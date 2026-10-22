@@ -247,7 +247,7 @@ func (h *Handler) recusaCadastroInfodesk(w http.ResponseWriter, conv, onde strin
 		h.alertar(AlertaConfiguracao, "Infodesk recusou o cadastro de solicitante",
 			onde+" devolveu 400 ("+he.Code+"): campo exigido pela organização ou referência inválida.", conv)
 	} else {
-		h.log.Warn("cadastro: Infodesk indisponível", "conversation_id", conv, "onde", onde, "err", err)
+		h.log.Warn("cadastro: Infodesk indisponível", "conversation_id", conv, "onde", onde, "err", descreverErro(err))
 	}
 	responderRecusa(w, "infodesk_indisponivel", textoIndisponivel)
 }
@@ -311,7 +311,7 @@ func (h *Handler) handlePrepararCadastro(w http.ResponseWriter, r *http.Request)
 	}
 	cliente, validos, achou := escolherCliente(cands, empresa)
 	if !achou {
-		h.empresaNaoResolvida(ctx, w, conv, validos)
+		h.empresaNaoResolvida(ctx, w, conv, tel, validos)
 		return
 	}
 
@@ -325,7 +325,7 @@ func (h *Handler) handlePrepararCadastro(w http.ResponseWriter, r *http.Request)
 		responderRecusa(w, "infodesk_indisponivel", txtCadIndisponivel)
 		return
 	}
-	if err := h.d.Store.ZerarTentativasCadastro(ctx, conv); err != nil {
+	if err := h.d.Store.ZerarTentativasCadastro(ctx, h.chaveTentativasCadastro(tel)); err != nil {
 		h.log.Warn("cadastro: zerar tentativas", "conversation_id", conv, "err", err)
 	}
 	h.log.Info("cadastro preparado", "conversation_id", conv, "telefone", mascararTelefone(tel), "candidatos", len(validos))
@@ -343,12 +343,12 @@ func (h *Handler) handlePrepararCadastro(w http.ResponseWriter, r *http.Request)
 
 // empresaNaoResolvida conta a tentativa e responde: pedir de novo, ou — esgotadas
 // CADASTRO_MAX_TENTATIVAS — aplicar CADASTRO_SEM_CLIENTE.
-func (h *Handler) empresaNaoResolvida(ctx context.Context, w http.ResponseWriter, conv string, validos []infodesk.Cliente) {
+func (h *Handler) empresaNaoResolvida(ctx context.Context, w http.ResponseWriter, conv, tel string, validos []infodesk.Cliente) {
 	motivo, texto := "empresa_nao_encontrada", txtCadNaoEncontrada
 	if len(validos) > 1 {
 		motivo, texto = "empresa_ambigua", txtCadAmbigua
 	}
-	n, err := h.d.Store.IncrementarTentativasCadastro(ctx, conv)
+	n, err := h.d.Store.IncrementarTentativasCadastro(ctx, h.chaveTentativasCadastro(tel))
 	if err != nil {
 		h.log.Error("cadastro: contar tentativa", "conversation_id", conv, "err", err)
 		n = 1 // sem contador, nunca transfere por engano: pede de novo
@@ -436,8 +436,10 @@ func (h *Handler) handleCadastrar(w http.ResponseWriter, r *http.Request) {
 		responderRecusa(w, "infodesk_indisponivel", txtCadFalhouAoCadastro)
 		return
 	}
+	// Linha `feito` perdeu nome e e-mail (E4.5, I2): a chave não se recalcula, mas
+	// ela só chega aqui vinda do cérebro e precisa ser da MESMA conversa e telefone.
 	if linha == nil || linha.ConversationID != conv || !mesmoTelefone(linha.Telefone, tel) ||
-		linha.Chave != chaveCadastro(conv, linha.Telefone, linha.ClienteID, linha.Nome, linha.Email) {
+		(linha.Status != store.CadastroFeito && linha.Chave != chaveCadastro(conv, linha.Telefone, linha.ClienteID, linha.Nome, linha.Email)) {
 		h.log.Warn("cadastrar: proposta desconhecida ou de outra conversa", "conversation_id", conv, "existe", linha != nil)
 		responderRecusa(w, "sem_proposta", txtCadSemProposta)
 		return
@@ -446,6 +448,7 @@ func (h *Handler) handleCadastrar(w http.ResponseWriter, r *http.Request) {
 	if linha.Status == store.CadastroFeito {
 		// Já concluído (retry, ou "sim" repetido): devolve o resultado, sem novo POST.
 		h.log.Info("cadastrar: já concluído; devolvendo o resultado guardado", "conversation_id", conv)
+		linha.Nome = h.nomeDoContato(ctx, tel) // a linha não guarda mais o nome (I2); o contato, com TTL, sim
 		// Se a primeira chamada concluiu no Infodesk mas não gravou o contato, este é o
 		// retry que repara (a gravação é idempotente).
 		if err := h.salvarContatoCadastrado(ctx, tel, linha); err != nil {
@@ -521,4 +524,24 @@ func (h *Handler) respostaCadastro(w http.ResponseWriter, l *store.Cadastro) {
 		"empresa":      map[string]any{"nome": l.ClienteNome},
 		"requester_id": l.RequesterID,
 	})
+}
+
+// chaveTentativasCadastro identifica QUEM tenta cadastrar: o hash do telefone
+// (nunca o número em claro na tabela). Contar por conversa deixava um mesmo
+// telefone tentar sem fim abrindo conversas novas (E4.5, M5).
+func (h *Handler) chaveTentativasCadastro(tel string) string {
+	sal := h.op.IdentSal
+	if sal == "" {
+		sal = h.token
+	}
+	return "tel:" + hashComSal(sal, "cadastro-tentativas:"+normalizarTelefone(tel))
+}
+
+// nomeDoContato devolve o nome do cadastro que ficou em `contatos` (com TTL),
+// ou "" se já expirou: a linha `cadastros` concluída não guarda mais o nome.
+func (h *Handler) nomeDoContato(ctx context.Context, tel string) string {
+	if c, err := h.d.Store.ObterContato(ctx, tel, h.agora()); err == nil && c != nil {
+		return c.NomeCadastro
+	}
+	return ""
 }

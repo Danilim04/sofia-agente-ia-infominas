@@ -180,3 +180,25 @@ func TestVigiaPassaAEsperaParaANota(t *testing.T) {
 		t.Fatalf("pedidos = %+v", a.eng.pedidos)
 	}
 }
+
+// I2 (E4.5): o ciclo apaga a proposta de cadastro vencida (nome/e-mail em claro) e
+// preserva a recente.
+func TestCicloApagaPropostasDeCadastroVencidas(t *testing.T) {
+	ctx := context.Background()
+	o, relogio := opcoesComRelogio(time.Now())
+	a := novoAmbiente(t, nil, o, false, 16)
+	_, err := a.st.GravarCadastroProposta(ctx, &store.Cadastro{Chave: "cad-velha", ConversationID: "c", Telefone: telefone, Nome: "Maria Souza", Email: "m@x.com", ClienteID: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	*relogio = relogio.Add(10 * time.Minute)
+	a.rec.Executar(ctx)
+	if c, _ := a.st.ObterCadastro(ctx, "cad-velha"); c == nil {
+		t.Fatal("com 10 min a proposta ainda vale (15 min) e fica")
+	}
+	*relogio = relogio.Add(30 * time.Minute)
+	a.rec.Executar(ctx)
+	if c, _ := a.st.ObterCadastro(ctx, "cad-velha"); c != nil {
+		t.Fatalf("a proposta vencida devia ser apagada: %+v", c)
+	}
+}

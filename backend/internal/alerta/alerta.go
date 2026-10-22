@@ -25,6 +25,7 @@ const (
 	TipoWebhookTimestamp      = "webhook_timestamp_fora_da_janela" // entrega autêntica fora da janela: replay ou relógio errado
 	TipoChaveSemEscopo        = "chave_sem_escopo"                 // GET /me no boot: falta escopo ou a chave não conduz conversas
 	TipoHandoffFalhou         = "handoff_falhou"                   // o Infodesk não aceitou o handoff; o bot cala mesmo assim
+	TipoProducaoAberta        = "producao_aberta"                  // boot em produção aberta: sem lista de testadores, todo cliente fala com a Sofia
 	TipoEventoIlegivel        = "evento_ilegivel"                  // Data.Erro != nil: objeto presente mas não decodificável
 	TipoLookupIlegivel        = "lookup_ilegivel"                  // Lookup.Erro != nil: cai no fallback CPF, mas o motivo precisa aparecer
 	TipoOrganizacaoDivergente = "organizacao_divergente"           // organizationId do webhook ≠ GET /me

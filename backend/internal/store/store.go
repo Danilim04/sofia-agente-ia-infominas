@@ -123,6 +123,10 @@ type Ticket struct {
 	UpdatedAt      time.Time
 }
 
+// TentativasCadastroJanela: depois deste tempo sem tentativa, o contador de
+// empresas não resolvidas recomeça (um telefone não fica bloqueado para sempre).
+const TentativasCadastroJanela = 24 * time.Hour
+
 // Status de `cadastros.status`.
 const (
 	CadastroProposta = "proposta" // preparado pelo gateway; ainda não foi para o Infodesk
@@ -239,6 +243,14 @@ type Store interface {
 	// deixou de precisar dele); false se não havia.
 	LimparHandoffPendente(ctx context.Context, convID string) (bool, error)
 
+	// GravarPropostaTicket guarda o hash da última proposta de chamado que o
+	// `preparar` devolveu para a conversa (uma por conversa; a nova substitui a
+	// anterior). O `abrir` só executa uma proposta cujo hash confere (E4.5, M8).
+	GravarPropostaTicket(ctx context.Context, convID, hash string, criadaEm time.Time) error
+	// ObterPropostaTicket devolve o hash e o instante da última proposta preparada
+	// da conversa; hash "" = nenhuma.
+	ObterPropostaTicket(ctx context.Context, convID string) (string, time.Time, error)
+
 	// GravarCadastroProposta grava (ou renova, se ainda for `proposta`) a
 	// proposta de cadastro e devolve a linha como ficou. Uma linha `feito` NUNCA
 	// é alterada. CreatedAt passa a ser "agora" ao renovar (validade de 15 min).
@@ -246,13 +258,22 @@ type Store interface {
 	// ObterCadastro devolve o cadastro pela chave ou nil.
 	ObterCadastro(ctx context.Context, chave string) (*Cadastro, error)
 	// ConcluirCadastro marca como `feito` com o solicitante devolvido pelo
-	// Infodesk; erro se a chave não existe.
+	// Infodesk; erro se a chave não existe. Zera `nome` e `email` da linha (PII
+	// que só servia para montar o POST): depois de `feito` ela guarda só o
+	// resultado (requester_id, cliente, telefone — o telefone fica, ADR 0008).
 	ConcluirCadastro(ctx context.Context, chave, requesterID string, criado bool) error
+	// ExpirarCadastros apaga as propostas (`proposta`) criadas antes de `antes` —
+	// nunca foram para o Infodesk e carregam nome e e-mail em claro — e limpa
+	// nome/e-mail de qualquer linha `feito` que ainda os tenha (linhas anteriores
+	// a E4.5). Devolve quantas propostas apagou.
+	ExpirarCadastros(ctx context.Context, antes time.Time) (int, error)
 	// IncrementarTentativasCadastro soma 1 às vezes em que a empresa não foi
-	// resolvida na conversa e devolve o total (CADASTRO_MAX_TENTATIVAS).
-	IncrementarTentativasCadastro(ctx context.Context, convID string) (int, error)
-	// ZerarTentativasCadastro apaga o contador da conversa.
-	ZerarTentativasCadastro(ctx context.Context, convID string) error
+	// resolvida e devolve o total (CADASTRO_MAX_TENTATIVAS). `chave` identifica
+	// QUEM tenta (o toolsapi passa o hash do telefone: trocar de conversa não zera
+	// o contador). Sem tentativa há mais de TentativasCadastroJanela, recomeça em 1.
+	IncrementarTentativasCadastro(ctx context.Context, chave string) (int, error)
+	// ZerarTentativasCadastro apaga o contador de `chave`.
+	ZerarTentativasCadastro(ctx context.Context, chave string) error
 
 	// RegistrarFalha grava uma ocorrência (tabela `falhas`). CreatedAt vazio =
 	// agora.
