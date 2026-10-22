@@ -2,12 +2,12 @@
 """Runner dos cenários de conversa (E3.5): executa cada YAML contra o grafo REAL.
 
 Monta `build_graph(llm=<LLM scriptado>, tools=get_default_tools(),
-buscar_chunks=sem_rag, classificador=<ServicoClassificacao com FakeJEV>)` e
+buscar_chunks=<retriever por turno>, classificador=<ServicoClassificacao com FakeJEV>)` e
 `httpx.post` das tools apontado para um gateway falso que responde com os JSON
-de `contratos/tools-infodesk/` (sempre o `ok.json`: erros do gateway não são
-scriptáveis em YAML, TODO(E3.5): `gateway:` por turno). O LLM e o JEV são
-reescritos A CADA TURNO com o script daquele turno — um turno barrado antes do
-LLM (jailbreak na regex) não desalinha os turnos seguintes.
+de `contratos/tools-infodesk/` (o `ok.json`, ou o `erro-*`/falha de transporte que o
+turno pedir em `gateway:`). O LLM e o JEV são reescritos A CADA TURNO com o script
+daquele turno — um turno barrado antes do LLM (jailbreak na regex) não desalinha os
+turnos seguintes.
 
 Semântica das esperas (`CHAVES_ESPERA`), todas sobre o que o turno produziu:
 
@@ -23,6 +23,15 @@ Semântica das esperas (`CHAVES_ESPERA`), todas sobre o que o turno produziu:
   (`chave_idempotencia: "*"` exige a chave preenchida);
 - `classificacao`: `categoria`/`origem` do estado ao fim do turno.
 
+Além das chaves do formato base, os cenários usam as extensões de
+`evals/conversa/extensoes.py` (`rag` e `gateway` por turno, `relogio`,
+`avanca_minutos` e as esperas `prompt_contem`, `llm_chamadas`, `gateway_json`,
+`gateway_nao_recebeu`, `gateway_vezes`, `estado`, `estado_nao_contem`).
+
+Persona (CLAUDE.md, regra 10): TODA bolha de resposta final de TODO cenário passa
+por `verificar_persona` (≤ 1 emoji, sem tratamento corporativo, sem prometer prazo),
+inclusive as respostas fixas do código (`RESPOSTA_OFF_TOPIC` etc.).
+
 `sessao.contato` aceita, além do id, os atalhos `telefone`, `cpf` e `contrato`:
 o gateway já identificou o cliente por essa forma (Contrato A, `contato.forma`).
 """
@@ -31,20 +40,31 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Final
 from unittest.mock import patch
 
-from evals.formatos import CenarioConversa, Taxonomia, Turno, carregar_cenario, carregar_taxonomia
+from evals.conversa.extensoes import (
+    GATEWAY_PREFIXO,
+    PADRAO_RELOGIO,
+    RAIZ_CONTRATOS,
+    CenarioEval,
+    ExtrasTurno,
+    Observado,
+    carregar_cenario_eval,
+    verificar_extras,
+)
+from evals.formatos import CenarioConversa, Taxonomia, Turno, carregar_taxonomia
 
 DIRETORIO: Final[Path] = Path(__file__).resolve().parent
 RAIZ_AGENTE_IA: Final[Path] = DIRETORIO.parent.parent
 GATEWAY_URL: Final[str] = "http://gateway.eval"
-GATEWAY_PREFIXO: Final[str] = "/tools/infodesk/"
 #: Endpoint do gateway (`gateway_recebeu.endpoint`) → pasta do contrato com o `ok.json`.
 CAMINHOS_OK: Final[tuple[str, ...]] = (
     "contato/identificar",
@@ -85,6 +105,8 @@ class _Turno:
     estado: dict[str, Any] = field(default_factory=dict)
     chamadas_gateway: list[dict[str, Any]] = field(default_factory=list)
     bloqueado: bool = False
+    prompt_sistema: str = ""
+    llm_chamadas: int = 0
 
 
 def arquivos_de_cenario(diretorio: Path = DIRETORIO) -> list[Path]:
@@ -98,7 +120,9 @@ def carregar_cenarios(
     """Carrega e valida todos os cenários; ids têm de ser únicos."""
     if taxonomia is None:
         taxonomia = carregar_taxonomia()
-    cenarios = [carregar_cenario(p, taxonomia.categorias) for p in arquivos_de_cenario(diretorio)]
+    cenarios: list[CenarioConversa] = [
+        carregar_cenario_eval(p, taxonomia.categorias) for p in arquivos_de_cenario(diretorio)
+    ]
     vistos: dict[str, Path] = {}
     for c in cenarios:
         assert c.arquivo is not None
@@ -128,14 +152,21 @@ def _contato_da_sessao(valor: str | None) -> dict[str, Any] | None:
 
 
 class _GatewayFalso:
-    """`httpx.post` das tools: responde `ok.json` do contrato e registra o que recebeu."""
+    """`httpx.post` das tools: responde `ok.json` do contrato e registra o que recebeu.
+
+    `sobrescritas` (por turno, vem do YAML) troca a resposta de um caminho por outro
+    arquivo do contrato (`erro-*`) ou por uma falha de transporte (`http_500`, `timeout`).
+    Erros de negócio do gateway chegam como HTTP 200 `{status: false, motivo}` (contrato).
+    """
 
     def __init__(self) -> None:
-        raiz = RAIZ_AGENTE_IA.parent / "contratos" / "tools-infodesk"
-        self._ok: dict[str, Any] = {
-            c: json.loads((raiz / c / "ok.json").read_text(encoding="utf-8")) for c in CAMINHOS_OK
-        }
+        self._ok: dict[str, Any] = {c: self._arquivo(c, "ok") for c in CAMINHOS_OK}
         self.chamadas: list[dict[str, Any]] = []
+        self.sobrescritas: Mapping[str, str] = {}
+
+    @staticmethod
+    def _arquivo(caminho: str, nome: str) -> Any:
+        return json.loads((RAIZ_CONTRATOS / caminho / f"{nome}.json").read_text(encoding="utf-8"))
 
     def post(self, url: str, *, json: Any = None, headers: Any = None, timeout: Any = None) -> Any:
         import httpx
@@ -146,14 +177,43 @@ class _GatewayFalso:
         self.chamadas.append({"endpoint": GATEWAY_PREFIXO + caminho, "json": json})
         if caminho not in self._ok:
             raise AssertionError(f"chamada inesperada ao gateway: {caminho}")
-        return httpx.Response(200, json=self._ok[caminho], request=httpx.Request("POST", url))
+        pedido = httpx.Request("POST", url)
+        troca = self.sobrescritas.get(caminho)
+        if troca == "timeout":
+            raise httpx.ReadTimeout("gateway eval: timeout simulado", request=pedido)
+        if troca == "http_500":
+            return httpx.Response(500, text="erro interno do gateway", request=pedido)
+        corpo = self._arquivo(caminho, troca) if troca else self._ok[caminho]
+        return httpx.Response(200, json=corpo, request=pedido)
+
+
+class _Relogio:
+    """ "Agora" do cenário: o carimbo/validade da proposta e o período do dia leem daqui."""
+
+    def __init__(self, inicio: datetime) -> None:
+        self.agora = inicio
+
+    def avancar(self, minutos: float) -> None:
+        self.agora += timedelta(minutes=minutos)
+
+
+class _Retriever:
+    """Retriever do nó `retrieve`: devolve os chunks do turno corrente (vazio por default)."""
+
+    def __init__(self) -> None:
+        self.chunks: tuple[Mapping[str, Any], ...] = ()
+
+    def __call__(self, pergunta: str) -> dict[str, Any]:
+        chunks = [dict(c) for c in self.chunks]
+        return {"encontrado": bool(chunks), "total": len(chunks), "chunks": chunks}
 
 
 @contextmanager
-def _ambiente(gateway: _GatewayFalso) -> Iterator[None]:
-    """Troca `httpx.post` e as configurações das tools do Infodesk (desfeito ao sair)."""
+def _ambiente(gateway: _GatewayFalso, relogio: _Relogio) -> Iterator[None]:
+    """Troca `httpx.post`, as configs das tools do Infodesk e o relógio (desfeito ao sair)."""
+    from src.agent import nodes
     from src.config import get_settings
-    from src.tools import infodesk_tools
+    from src.tools import infodesk_tools, proposta
 
     cfg = SimpleNamespace(
         infodesk_tools_base_url=GATEWAY_URL,
@@ -164,11 +224,21 @@ def _ambiente(gateway: _GatewayFalso) -> Iterator[None]:
     chave = (
         {} if os.environ.get("OPENROUTER_API_KEY") else {"OPENROUTER_API_KEY": "chave-falsa-evals"}
     )
+
+    class _DatetimeCongelado(datetime):
+        """`datetime` cujo `now()` é o relógio do cenário (período do dia da saudação)."""
+
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            return relogio.agora.astimezone(tz) if tz else relogio.agora
+
     get_settings.cache_clear()
     with (
         patch.dict(os.environ, chave),
         patch.object(infodesk_tools.httpx, "post", gateway.post),
         patch.object(infodesk_tools, "get_settings", lambda: cfg),
+        patch.object(proposta, "relogio", lambda: relogio.agora.astimezone(UTC)),
+        patch.object(nodes, "datetime", _DatetimeCongelado),
     ):
         yield
 
@@ -186,14 +256,22 @@ def _resposta_jev(r: Any) -> Any:
     )
 
 
-def _script_llm(turno: Turno, indice: int) -> list[Any]:
-    """`AIMessage`s do turno: uma por tool (a menos de `pular`) e o texto final."""
+def _script_llm(turno: Turno, indice: int, extras: ExtrasTurno) -> list[Any]:
+    """`AIMessage`s do turno: uma por tool (a menos de `pular`) e o texto final.
+
+    Um passo `paralelo:` emite todas as suas tool calls na MESMA mensagem."""
     from langchain_core.messages import AIMessage
 
     saida: list[Any] = []
     for n, passo in enumerate(turno.llm):
         if passo.texto is not None:
             saida.append(AIMessage(content=passo.texto))
+        elif n in extras.paralelas:
+            chamadas = [
+                {"id": f"t{indice}-{n}-{k}", "name": nome, "args": dict(args)}
+                for k, (nome, args) in enumerate(extras.paralelas[n])
+            ]
+            saida.append(AIMessage(content="", tool_calls=chamadas))
         elif not passo.pular:
             assert passo.tool is not None
             chamada = {"id": f"t{indice}-{n}", "name": passo.tool, "args": dict(passo.args)}
@@ -233,8 +311,38 @@ def _colher_turno(saida: Mapping[str, Any]) -> _Turno:
     return t
 
 
-def _verificar(espera: Mapping[str, Any], t: _Turno, rotulo: str) -> list[str]:
+#: Emoji = pictogramas e símbolos (a persona aceita no máximo UM por mensagem).
+_EMOJI = re.compile("[\U0001f300-\U0001faff\u2600-\u27bf\u2b50\u2b55]")
+#: Promessas que a Sofia nunca faz (prazo, retorno): `docs/plano/00` D7 e system prompt.
+_PROMESSAS = re.compile(
+    r"\bem at[eé] \d|\bdentro de \d|\bprazo (?:de|é|e) |\bpr[oó]ximas? \d+ (?:horas|dias)\b|"
+    r"\bainda hoje\b|\bem breve te (?:retorn|ligamos)",
+    re.IGNORECASE,
+)
+_CORPORATIVO = re.compile(
+    r"\b(?:prezad[oa]s?|sua solicita[cç][aã]o|conforme alinhado)\b", re.IGNORECASE
+)
+
+
+def verificar_persona(texto: str, rotulo: str) -> list[str]:
+    """Persona Sofia sobre uma resposta final (regra 10 do CLAUDE.md), bolha a bolha."""
     falhas: list[str] = []
+    for n, bolha in enumerate(dividir_bolhas(texto), start=1):
+        onde = f"{rotulo} bolha {n}"
+        if len(_EMOJI.findall(bolha)) > 1:
+            falhas.append(f"{onde}: persona — mais de um emoji")
+        if (m := _PROMESSAS.search(bolha)) is not None:
+            falhas.append(f"{onde}: persona — promete prazo/retorno ({m.group(0)!r})")
+        if (m := _CORPORATIVO.search(bolha)) is not None:
+            falhas.append(f"{onde}: persona — linguagem corporativa ({m.group(0)!r})")
+        letras = [c for c in bolha if c.isalpha()]
+        if len(letras) >= 12 and sum(c.isupper() for c in letras) / len(letras) > 0.6:
+            falhas.append(f"{onde}: persona — CAPS LOCK")
+    return falhas
+
+
+def _verificar(espera: Mapping[str, Any], t: _Turno, rotulo: str) -> list[str]:
+    falhas: list[str] = verificar_persona(t.texto, rotulo)
     baixo = t.texto.lower()
     for nome in espera.get("chama", ()):
         if nome not in t.executadas:
@@ -280,6 +388,18 @@ def _verificar(espera: Mapping[str, Any], t: _Turno, rotulo: str) -> list[str]:
             (c["json"] or {}).get("chave_idempotencia") for c in casadas
         ):
             falhas.append(f"{rotulo}: gateway_recebeu {g['endpoint']} sem chave_idempotencia")
+    falhas.extend(
+        verificar_extras(
+            espera,
+            Observado(
+                prompt_sistema=t.prompt_sistema,
+                llm_chamadas=t.llm_chamadas,
+                chamadas_gateway=t.chamadas_gateway,
+                estado=t.estado,
+            ),
+            rotulo,
+        )
+    )
     if "classificacao" in espera:
         atual = t.estado.get("classificacao") or {}
         for chave, valor in espera["classificacao"].items():
@@ -295,26 +415,36 @@ def executar(cenario: CenarioConversa) -> ResultadoCenario:
     from langchain_core.messages import HumanMessage
 
     from src.agent.graph import build_graph, get_default_tools
-    from tests.fakes import FakeJEV, fake_llm, sem_rag, servico_fake
+    from tests.fakes import FakeJEV, _texto_de, fake_llm, servico_fake
 
     jev = FakeJEV()
     llm = fake_llm()
     gateway = _GatewayFalso()
+    relogio = _Relogio(PADRAO_RELOGIO)
+    retriever = _Retriever()
+    if isinstance(cenario, CenarioEval):
+        relogio = _Relogio(cenario.extras.relogio)
     thread = f"conv-{cenario.id}"
     config = {"configurable": {"thread_id": thread}}
     falhas: list[str] = []
     executados = 0
-    with _ambiente(gateway):
+    with _ambiente(gateway, relogio):
         grafo = build_graph(
             llm=llm,
             tools=get_default_tools(),
-            buscar_chunks=sem_rag,
+            buscar_chunks=retriever,
             classificador=servico_fake(jev),
         )
         for i, turno in enumerate(cenario.turnos, start=1):
             rotulo = f"turno {i}"
+            extras = (
+                cenario.extras.turnos[i - 1] if isinstance(cenario, CenarioEval) else ExtrasTurno()
+            )
+            relogio.avancar(extras.avanca_minutos)
+            retriever.chunks = extras.rag
+            gateway.sobrescritas = extras.gateway
             jev._padrao = _resposta_jev(cenario.jev[i - 1])
-            llm.invoke.side_effect = _script_llm(turno, i)
+            llm.invoke.side_effect = _script_llm(turno, i, extras)
             entrada: dict[str, Any] = {"messages": [HumanMessage(content=turno.cliente)]}
             if i == 1:
                 entrada.update(
@@ -324,6 +454,7 @@ def executar(cenario: CenarioConversa) -> ResultadoCenario:
                     contato=_contato_da_sessao(cenario.sessao.contato),
                 )
             antes = len(gateway.chamadas)
+            llm_antes = len(llm.invoke.call_args_list)
             try:
                 saida = grafo.invoke(entrada, config=config)
             except StopIteration:
@@ -335,14 +466,19 @@ def executar(cenario: CenarioConversa) -> ResultadoCenario:
             executados += 1
             colhido = _colher_turno(saida)
             colhido.chamadas_gateway = gateway.chamadas[antes:]
-            falhas.extend(_verificar(turno.espera, colhido, rotulo))
+            chamadas_llm = llm.invoke.call_args_list[llm_antes:]
+            colhido.llm_chamadas = len(chamadas_llm)
+            colhido.prompt_sistema = "\n".join(
+                dict.fromkeys(_texto_de(c.args[0][0].content) for c in chamadas_llm)
+            )
+            falhas.extend(_verificar({**turno.espera, **extras.espera}, colhido, rotulo))
     return ResultadoCenario(cenario.id, tuple(falhas), executados)
 
 
 def resumo(cenarios: Sequence[CenarioConversa], resultados: Mapping[str, ResultadoCenario]) -> str:
     """Tabela dos cenários com o resultado da execução (e o motivo do xfail, se houver)."""
     linhas = [f"{len(cenarios)} cenário(s) em {DIRETORIO}:"]
-    for c in cenarios:
+    for c in sorted(cenarios, key=lambda c: c.id):
         r = resultados.get(c.id)
         estado = "?" if r is None else ("ok" if r.passou else f"{len(r.falhas)} falha(s)")
         marca = " [xfail]" if c.xfail else ""
@@ -350,3 +486,34 @@ def resumo(cenarios: Sequence[CenarioConversa], resultados: Mapping[str, Resulta
             f"  {c.id:<18} {len(c.turnos)} turno(s)  {estado:<10}{marca}  — {c.descricao}"
         )
     return "\n".join(linhas)
+
+
+def relatorio_markdown(
+    cenarios: Sequence[CenarioConversa], resultados: Mapping[str, ResultadoCenario]
+) -> str:
+    """Relatório curto em Markdown: uma linha por cenário (arquivo = o comportamento provado)."""
+    normais = [c for c in cenarios if not c.xfail]
+    passaram = sum(1 for c in normais if (r := resultados.get(c.id)) is not None and r.passou)
+    xfails = [c for c in cenarios if c.xfail]
+    linhas = [
+        "# Evals de conversa (determinísticos)",
+        "",
+        f"- cenários: {len(cenarios)} ({passaram}/{len(normais)} normais passaram, "
+        f"{len(xfails)} xfail documentando bug de produto)",
+        "",
+        "| id | comportamento | turnos | resultado |",
+        "|---|---|---|---|",
+    ]
+    for c in sorted(cenarios, key=lambda c: c.id):
+        r = resultados.get(c.id)
+        if r is None:
+            estado = "não executado"
+        elif c.xfail:
+            estado = "xfail (esperado)" if not r.passou else "PASSOU — remova o xfail"
+        else:
+            estado = "ok" if r.passou else f"FALHOU ({len(r.falhas)})"
+        nome = c.arquivo.stem if c.arquivo is not None else c.id
+        linhas.append(f"| {c.id} | {nome} | {len(c.turnos)} | {estado} |")
+    for c in xfails:
+        linhas += ["", f"**{c.id}** xfail: {c.xfail}"]
+    return "\n".join(linhas) + "\n"

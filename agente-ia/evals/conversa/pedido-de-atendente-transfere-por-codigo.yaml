@@ -1,0 +1,16 @@
+# Comportamento: pedido explícito de pessoa (JEV pedir_atendente) transfere por código (acoes).
+# Negativo: não insiste no atendimento automático nem promete prazo.
+id: conversa-019
+descricao: pedido de atendente vira transferência decidida pelo sistema
+sessao: {telefone: "+5531999990019", nome_contato: "Vera", contato: telefone}
+jev:
+  - {intencao: [pedir_atendente, 0.92], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "prefiro falar com uma pessoa, pode ser?"
+    llm:
+      - texto: "Claro! Vou te passar para um atendente."
+    espera:
+      transfere: true
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      contem: ["atendente"]
+      nao_contem: ["encaminhei", "repassei", "prazo"]

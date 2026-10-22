@@ -1,0 +1,31 @@
+# Comportamento: categoria com confiança < 0.40 => UMA pergunta de esclarecimento; depois fixa e prepara.
+# Negativo: com a categoria indefinida a política recusa o preparo (o gateway não é chamado).
+id: conversa-026
+descricao: baixa confiança pergunta antes de classificar e só então prepara o chamado
+sessao: {telefone: "+5531999990026", nome_contato: "Ana", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.8], categoria: [sem_conexao, 0.3], prioridade: [1, 0.5], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.02}
+  - {intencao: [reclamacao_problema, 0.9], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.02}
+turnos:
+  - cliente: "tá com problema aqui, não funciona direito"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Problema não especificado", descricao: "Cliente relata problema sem detalhes."}
+      - texto: "Poxa, sinto muito! Me conta melhor: a internet está sem conexão ou só lenta?"
+    espera:
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/ticket/preparar]
+      transfere: false
+      prompt_contem: ["UMA pergunta curta de esclarecimento"]
+      estado: {esclarecimentos: 1, classificacao: {categoria: indefinida, origem: esclarecimento}}
+  - cliente: "sem conexão nenhuma, as luzes do modem estão vermelhas"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão, luzes vermelhas no modem", descricao: "Cliente relata ausência total de conexão e luzes vermelhas no modem."}
+      - texto: "Obrigada! Vou registrar assim: sem conexão e luzes vermelhas no modem. Posso abrir o chamado?"
+    espera:
+      chama: [preparar_abertura_chamado]
+      nao_chama: [abrir_chamado]
+      proposta_no_estado: true
+      classificacao: {categoria: sem_conexao, origem: jev}
+      gateway_json: {endpoint: /tools/infodesk/ticket/preparar, campos: {categoria: sem_conexao, prioridade: alta}}

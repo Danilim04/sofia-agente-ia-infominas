@@ -1,0 +1,18 @@
+# Comportamento: a prioridade mínima da categoria (tabela) vence o score baixo do JEV.
+# Negativo: a prioridade enviada ao gateway nunca é 'baixa' para sem_conexao.
+id: conversa-046
+descricao: prioridade é tabela/código, não opinião do modelo
+sessao: {telefone: "+5531999990046", nome_contato: "Duda", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.9], prioridade: [0, 0.9], frustracao: [0, 0.9], malicioso: 0.02, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha net caiu mas sem pressa, resolve quando der"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão", descricao: "Cliente relata queda da internet e diz que não tem pressa."}
+      - texto: "Combinado! Vou registrar assim: sem conexão, sem urgência da sua parte. Posso abrir o chamado?"
+    espera:
+      chama: [preparar_abertura_chamado]
+      nao_chama: [abrir_chamado]
+      gateway_json: {endpoint: /tools/infodesk/ticket/preparar, campos: {categoria: sem_conexao, prioridade: alta}}
+      estado: {classificacao: {prioridade: alta}}

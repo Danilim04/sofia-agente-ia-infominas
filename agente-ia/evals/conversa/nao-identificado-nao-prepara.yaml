@@ -1,0 +1,18 @@
+# Comportamento: sem identificação (contato null) o preparo é recusado por código e a Sofia pede o CPF.
+# Negativo: o gateway não recebe o preparo.
+id: conversa-040
+descricao: cliente não identificado não chega ao gateway com um preparo
+sessao: {telefone: "+5531999990040", nome_contato: "Xuxa", contato: null}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar o modem", descricao: "Cliente relata queda total da internet; já reiniciou o modem."}
+      - texto: "Poxa! Para registrar o chamado, me passa seu CPF ou o número do contrato?"
+    espera:
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/ticket/preparar]
+      proposta_no_estado: false
+      contem: ["CPF"]

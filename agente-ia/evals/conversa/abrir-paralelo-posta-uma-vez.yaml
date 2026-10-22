@@ -1,0 +1,29 @@
+# Comportamento ESPERADO: duas chamadas a abrir_chamado emitidas JUNTAS (tool calls paralelas) geram um único POST.
+# Bug de produto observado (nodes.make_tools_node): a política de cada chamada do lote lê o estado de ANTES do lote, então a
+# proposta ainda existe para a 2a chamada e o gateway recebe 2 POSTs (a chave de idempotência igual evita o ticket duplicado,
+# mas viola 'nunca retry em POST /tickets' na camada Python). Chamadas em sequência (uma por mensagem) já são seguras: ver conversa-044.
+id: conversa-062
+descricao: tool calls paralelas de abertura não duplicam o POST
+xfail: "make_tools_node aplica a política de todas as tool calls do lote sobre o estado anterior ao lote; abrir_chamado paralelo faz 2 POSTs (src/agent/nodes.py, fora da zona da E3.5)"
+sessao: {telefone: "+5531999990062", nome_contato: "Elaine", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+  - {intencao: [confirmacao, 0.95], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar o modem", descricao: "Cliente relata queda total da internet; já reiniciou o modem."}
+      - texto: "Entendi, ficar sem internet atrapalha mesmo. Vou registrar assim: sem conexão mesmo depois de reiniciar o modem. Posso abrir o chamado?"
+    espera: {chama: [preparar_abertura_chamado], nao_chama: [abrir_chamado], proposta_no_estado: true, contem: ["Posso abrir"]}
+  - cliente: "sim"
+    llm:
+      - paralelo:
+          - {tool: abrir_chamado, args: {}}
+          - {tool: abrir_chamado, args: {}}
+      - texto: "Pronto! Seu chamado é o 48213. A equipe responsável assume daqui. 😊"
+    espera:
+      chama: [abrir_chamado]
+      contem: ["48213"]
+      nao_contem: ["prazo"]
+      gateway_vezes: {/tools/infodesk/ticket/abrir: 1}

@@ -1,0 +1,25 @@
+# Comportamento: depois de 1 esclarecimento sem categoria, o sistema transfere (JEV_ACAO_INDEFINIDA=transferir).
+# TODO(P11): transferir x triagem para categoria indefinida é decisão da Infominas (hipótese de trabalho).
+# Negativo: nenhum chamado é preparado com a categoria indefinida.
+id: conversa-027
+descricao: categoria que não se resolve após esclarecer termina em atendente
+sessao: {telefone: "+5531999990027", nome_contato: "Ivo", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.8], categoria: [sem_conexao, 0.3], prioridade: [1, 0.5], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.02}
+  - {intencao: [reclamacao_problema, 0.8], categoria: [sem_conexao, 0.3], prioridade: [1, 0.5], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.02}
+turnos:
+  - cliente: "não tá legal aqui em casa"
+    llm:
+      - texto: "Sinto muito! Pode me contar um pouco mais do que está acontecendo?"
+    espera:
+      transfere: false
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      estado: {esclarecimentos: 1}
+  - cliente: "ah, tá estranho, sei lá"
+    llm:
+      - texto: "Não consegui entender direitinho o problema, então vou te passar para um atendente."
+    espera:
+      transfere: true
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      nao_contem: ["prazo"]
+      estado: {classificacao: {categoria: indefinida}}

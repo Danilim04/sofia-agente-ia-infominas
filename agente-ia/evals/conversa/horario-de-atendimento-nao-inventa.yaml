@@ -1,0 +1,18 @@
+# Comportamento: sem o horário oficial (P7 pendente) a Sofia não inventa janela de atendimento.
+# TODO(P7): quando a Infominas informar o horário, a regra vira config e este cenário ganha a resposta oficial (E5.5).
+# Negativo: nenhum horário aparece na resposta nem no prompt.
+id: conversa-058
+descricao: pergunta sobre horário de atendimento não recebe horário inventado
+sessao: {telefone: "+5531999990058", nome_contato: "Alice", contato: telefone}
+jev:
+  - {intencao: [duvida_informacao, 0.9], categoria: [indefinida, 0.3], prioridade: [1, 0.6], frustracao: [0, 0.9], malicioso: 0.02, fora_de_escopo: 0.05}
+turnos:
+  - cliente: "até que horas vocês atendem?"
+    llm:
+      - texto: "Esse horário eu não tenho por aqui para te confirmar. Se quiser, passo você para um atendente que informa certinho."
+    espera:
+      nao_chama: [abrir_chamado, preparar_abertura_chamado]
+      transfere: false
+      contem: ["atendente"]
+      nao_contem: ["24 horas", "24h", "segunda a sexta", "das 8", "das 9"]
+      prompt_nao_contem: ["24 horas", "segunda a sexta", "horário de atendimento é"]

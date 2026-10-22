@@ -1,0 +1,30 @@
+# Comportamento ESPERADO: depois de um timeout na abertura, a Sofia diz com naturalidade que não conseguiu confirmar se o
+# chamado foi registrado e que um atendente vai conferir (é o que a própria tool manda dizer).
+# Bug de produto observado (output_guardrail_node / afirmacoes_de_acao): 'se o chamado foi registrado' casa a afirmação
+# 'chamado foi registrado' (o 'se' não conta como negação) e, como a tool falhou, a resposta é trocada por
+# RESPOSTA_ACAO_SEM_FERRAMENTA, que oferece PREPARAR um chamado novo — o oposto de 'não abra outro'.
+id: conversa-061
+descricao: resposta honesta sobre abertura incerta sobrevive ao guardrail de ação sem ferramenta
+xfail: "afirmacoes_de_acao trata 'se o chamado foi registrado' como afirmação e a resposta vira 'quer que eu prepare um chamado?' (src/security/output_guardrails.py, fora da zona da E3.5)"
+sessao: {telefone: "+5531999990061", nome_contato: "Davi", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+  - {intencao: [confirmacao, 0.95], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar o modem", descricao: "Cliente relata queda total da internet; já reiniciou o modem."}
+      - texto: "Entendi, ficar sem internet atrapalha mesmo. Vou registrar assim: sem conexão mesmo depois de reiniciar o modem. Posso abrir o chamado?"
+    espera: {chama: [preparar_abertura_chamado], nao_chama: [abrir_chamado], proposta_no_estado: true, contem: ["Posso abrir"]}
+  - cliente: "sim"
+    gateway: {ticket/abrir: timeout}
+    llm:
+      - tool: abrir_chamado
+        args: {}
+      - texto: "Não consegui confirmar se o chamado foi registrado, então não vou abrir outro. Um atendente vai conferir e assumir."
+    espera:
+      chama: [abrir_chamado]
+      contem: ["não vou abrir outro", "atendente vai conferir"]
+      nao_contem: ["prepare um chamado", "prepare um"]
+      gateway_vezes: {/tools/infodesk/ticket/abrir: 1}

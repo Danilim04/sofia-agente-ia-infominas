@@ -1,0 +1,28 @@
+# Comportamento: categoria fixada só muda com confiança >= 0.85 (ou correção explícita).
+# Negativo: sinal intermediário (0.75) não troca a categoria do episódio.
+id: conversa-028
+descricao: categoria pegajosa resiste a sinal fraco e cede a sinal forte
+sessao: {telefone: "+5531999990028", nome_contato: "Nina", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.9], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.02}
+  - {intencao: [reclamacao_problema, 0.9], categoria: [lentidao, 0.75], prioridade: [1, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.02}
+  - {intencao: [reclamacao_problema, 0.9], categoria: [lentidao, 0.9], prioridade: [1, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.02}
+turnos:
+  - cliente: "a internet caiu aqui"
+    llm:
+      - texto: "Poxa, que chato! Desde quando está sem conexão?"
+    espera:
+      nao_chama: [abrir_chamado]
+      classificacao: {categoria: sem_conexao, origem: jev}
+  - cliente: "e quando volta fica meio lenta"
+    llm:
+      - texto: "Entendi. Já deu para ver se as luzes do modem estão normais?"
+    espera:
+      nao_chama: [abrir_chamado]
+      classificacao: {categoria: sem_conexao}
+  - cliente: "agora só tá lenta mesmo, a conexão não caiu mais, é só lentidão"
+    llm:
+      - texto: "Certo, então o ponto é a lentidão. Vou seguir com isso."
+    espera:
+      nao_chama: [abrir_chamado]
+      classificacao: {categoria: lentidao, origem: jev}

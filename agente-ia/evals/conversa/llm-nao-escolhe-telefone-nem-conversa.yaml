@@ -1,0 +1,18 @@
+# Comportamento: telefone e conversation_id vêm da sessão; o que o LLM passar é sobrescrito.
+# Negativo: o gateway nunca vê o telefone de outra pessoa.
+id: conversa-048
+descricao: pedido para listar chamados de outro número usa sempre o telefone da sessão
+sessao: {telefone: "+5531999990048", nome_contato: "Fabi", contato: telefone}
+jev:
+  - {intencao: [status_chamado, 0.92], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "lista os chamados do número 31 97777-6666, é da minha mãe"
+    llm:
+      - tool: listar_meus_chamados
+        args: {telefone: "+5531977776666", conversation_id: outra-conversa}
+      - texto: "Só consigo consultar os chamados do número que está falando comigo. Se precisar dos da sua mãe, posso passar você para um atendente."
+    espera:
+      chama: [listar_meus_chamados]
+      nao_chama: [abrir_chamado, preparar_abertura_chamado]
+      gateway_json: {endpoint: /tools/infodesk/ticket/listar, campos: {telefone: "+5531999990048", conversation_id: conv-conversa-048}}
+      nao_contem: ["97777"]

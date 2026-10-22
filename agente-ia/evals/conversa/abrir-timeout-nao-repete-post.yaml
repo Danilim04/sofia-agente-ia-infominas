@@ -1,0 +1,28 @@
+# Comportamento: timeout na abertura é incerto: não repete o POST, mesmo que o LLM tente de novo.
+# Negativo: o segundo abrir_chamado do LLM é recusado (proposta já consumida); só 1 chamada ao gateway.
+id: conversa-044
+descricao: timeout no POST de abertura não é repetido
+sessao: {telefone: "+5531999990044", nome_contato: "Bruna", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+  - {intencao: [confirmacao, 0.95], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar o modem", descricao: "Cliente relata queda total da internet; já reiniciou o modem."}
+      - texto: "Entendi, ficar sem internet atrapalha mesmo. Vou registrar assim: sem conexão mesmo depois de reiniciar o modem. Posso abrir o chamado?"
+    espera: {chama: [preparar_abertura_chamado], nao_chama: [abrir_chamado], proposta_no_estado: true, contem: ["Posso abrir"]}
+  - cliente: "sim"
+    gateway: {ticket/abrir: timeout}
+    llm:
+      - tool: abrir_chamado
+        args: {}
+      - tool: abrir_chamado
+        args: {}
+      - texto: "Não consegui confirmar o registro, então não vou abrir outro chamado. Um atendente vai conferir e assumir."
+    espera:
+      chama: [abrir_chamado]
+      proposta_no_estado: false
+      nao_contem: ["Pronto", "chamado é o"]
+      gateway_vezes: {/tools/infodesk/ticket/abrir: 1}

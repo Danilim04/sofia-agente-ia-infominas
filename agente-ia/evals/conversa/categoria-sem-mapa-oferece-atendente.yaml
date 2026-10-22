@@ -1,0 +1,20 @@
+# Comportamento: categoria sem mesa configurada => não abre; oferece atendente sem citar o motivo técnico.
+# Negativo: sem proposta no estado, sem abertura.
+id: conversa-042
+descricao: preparo recusado por categoria sem mapa não vaza o motivo e oferece atendente
+sessao: {telefone: "+5531999990042", nome_contato: "Zilda", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    gateway: {ticket/preparar: erro-categoria_sem_mapa}
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar o modem", descricao: "Cliente relata queda total da internet; já reiniciou o modem."}
+      - texto: "Não consigo abrir esse chamado por aqui agora. Quer que eu te passe para um atendente?"
+    espera:
+      chama: [preparar_abertura_chamado]
+      nao_chama: [abrir_chamado]
+      proposta_no_estado: false
+      contem: ["atendente"]
+      nao_contem: ["categoria_sem_mapa", "mesa"]

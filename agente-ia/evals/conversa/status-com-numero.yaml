@@ -1,0 +1,22 @@
+# Comportamento: pergunta sobre chamado com número consulta o status; nunca vira chamado novo.
+# Negativo: não prepara nem abre; não promete prazo.
+id: conversa-013
+descricao: status de chamado com número consulta o gateway com a sessão injetada pelo código
+sessao: {telefone: "+5531999990013", nome_contato: "Kelly", contato: telefone}
+jev:
+  - {intencao: [status_chamado, 0.92], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "boa tarde, tem novidade do chamado 48213?"
+    llm:
+      - tool: consultar_status_chamado
+        args: {numero: "48213"}
+      - texto: "Encontrei o chamado 48213 (internet sem conexão desde ontem à noite). Por aqui não consigo ver o andamento; se quiser, passo você para um atendente."
+    espera:
+      chama: [consultar_status_chamado]
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      transfere: false
+      contem: ["48213"]
+      nao_contem: ["prazo", "em até"]
+      gateway_json:
+        endpoint: /tools/infodesk/ticket/consultar
+        campos: {numero: "48213", telefone: "+5531999990013", conversation_id: conv-conversa-013, identificacao.forma: telefone}

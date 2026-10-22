@@ -1,0 +1,29 @@
+# Comportamento: CPF com dígito verificador errado é barrado pela política; a Sofia pede para conferir.
+# Negativo: nada é enviado ao gateway; nenhum chamado é preparado.
+id: conversa-037
+descricao: CPF inválido não é registrado nem leva a chamado
+sessao: {telefone: "+5531999990037", nome_contato: "Rosana", contato: null}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [lentidao, 0.86], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.02, fora_de_escopo: 0.02}
+  - {intencao: [outro, 0.8], categoria: [lentidao, 0.9], prioridade: [1, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "a rede está lenta aqui há dois dias"
+    llm:
+      - texto: "Entendi! Para registrar o chamado, me passa seu CPF ou o número do contrato?"
+    espera:
+      nao_chama: [abrir_chamado, preparar_abertura_chamado]
+      contem: ["CPF"]
+      prompt_contem: ["identificação: NÃO informada"]
+  - cliente: "123.456.789-00"
+    llm:
+      - tool: informar_identificacao
+        args: {cpf: "123.456.789-00"}
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Rede lenta há dois dias", descricao: "Cliente relata lentidão há dois dias."}
+      - texto: "Esse CPF não passou na conferência. Pode dar uma olhadinha nos números e me mandar de novo?"
+    espera:
+      nao_chama: [informar_identificacao, preparar_abertura_chamado, abrir_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/contato/identificar, /tools/infodesk/ticket/preparar]
+      proposta_no_estado: false
+      contem: ["conferência"]
+      estado: {identificacao: null}
