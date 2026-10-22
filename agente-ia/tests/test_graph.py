@@ -297,7 +297,7 @@ def test_tools_node_injeta_args_de_sessao_sobrescrevendo_o_modelo(monkeypatch):
 
 def test_tools_node_loga_so_nomes_dos_args_em_info(caplog):
     """Os VALORES dos args propostos pelo LLM podem ser PII (CPF/contrato):
-    em INFO só os nomes; o conteúdo fica em DEBUG."""
+    em INFO só os nomes; o conteúdo fica em DEBUG, e mesmo ali mascarado (E3.7)."""
     import logging
 
     tn = nodes.make_tools_node([_tool_simples])
@@ -307,7 +307,9 @@ def test_tools_node_loga_so_nomes_dos_args_em_info(caplog):
     debug = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
     assert any(m.startswith("tool_exec ") and "['x']" in m for m in info)
     assert not any("123.456.789-09" in m for m in info)
-    assert any("123.456.789-09" in m for m in debug)
+    # E3.7: nem em DEBUG o CPF aparece em claro — o log leva a forma mascarada.
+    assert not any("123.456.789-09" in m for m in debug)
+    assert any(m.startswith("tool_exec_args ") and "***.***.789-**" in m for m in debug)
 
 
 # ---------------------------------------------------------------------------
