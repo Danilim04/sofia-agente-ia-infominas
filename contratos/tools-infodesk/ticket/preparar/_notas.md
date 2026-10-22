@@ -7,9 +7,8 @@
   no POST e sai um alerta `taxonomia_invalida`. Mesa, departamento e item de
   catálogo também vêm da taxonomia (`config/taxonomia.yaml`), nunca do LLM.
 - `identificacao` no request é a visão mascarada do estado
-  (`{forma, valor_mascarado}`), **não** o `{cpf|contrato}` escrito na linha A2
-  do 01 — hipótese de trabalho pela regra 5 (PII só mascarada fora do
-  gateway); `TODO(E2.3)`: confirmar e atualizar o 01. O gateway ignora o corpo e
+  (`{forma, valor_mascarado}`) — decisão da regra 5 (PII só mascarada fora do
+  gateway), confirmada na E2.3 e refletida na linha A2 do 01 (E3.7). O gateway ignora o corpo e
   valida contra a tabela `contatos` pelo `telefone` (TTL 24 h). Sem entrada
   válida (lookup, CPF ou contrato) → `erro-nao_identificado`.
 - `erro-chamado_aberto.json` carrega `chamados_abertos`: o chamado vinculado à
