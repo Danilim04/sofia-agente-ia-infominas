@@ -243,7 +243,10 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           govulncheck ./...
       # O lock já fixa tudo: sem resolver nada, só compara versões+hashes com o banco de avisos.
+      # `!cancelled()`: roda mesmo se o govulncheck acima falhar (na 1ª execução o
+      # pip-audit foi pulado por isso e ninguém viu os avisos do Python).
       - name: pip-audit (Python, requirements-prod.lock)
+        if: ${{ !cancelled() }}
         run: |
           pip install pip-audit==2.10.1
           pip-audit --requirement agente-ia/requirements-prod.lock --require-hashes --no-deps --disable-pip --progress-spinner off
