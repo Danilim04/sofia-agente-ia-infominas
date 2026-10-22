@@ -38,6 +38,10 @@ CHAVES_PII = frozenset(
         "nome",
         "nome_contato",
         "nome_cadastro",
+        "nome_completo",
+        "name",  # campo real do Infodesk em `requester` e `contact`
+        "full_name",
+        "whatsapp",
         "valor",  # `informar_identificacao(valor=...)`: CPF ou nº de contrato
         "email",
     }
@@ -100,8 +104,15 @@ def esquecer_nomes() -> None:
 #: nº longo (`SOF-20261021-1530-01`: senão o ID do log não casa com o do
 #: gateway) e a apresentação da própria Sofia ("sou a Sofia").
 _PROTEGIDOS = re.compile(
-    r"\bSOF-\d{8}-\d{4}-\d{2,}\b|\b(?:conversation_id|id_ocorrencia)=[\w.:-]+"
-    r"|(?i:\b(?:sou|aqui [ée]) (?:a|o) )Sofia\b"
+    r"\bSOF-\d{8}-\d{4}-\d{2,}\b"
+    # UUID e data/hora também têm cara de nº longo e não são PII (IPv4 não: pode ser um CPF digitado errado).
+    r"|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+    r"|\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\b"
+    # `chave=valor` de correlação: só valor com formato de ID e SEM 9+ dígitos
+    # seguidos — senão o cliente escreveria `conversation_id=<CPF>` para furar a máscara.
+    r"|\b(?:conversation_id|id_ocorrencia)=(?![\w.:-]*\d{9})[A-Za-z0-9][\w.:-]{3,63}"
+    # A apresentação da persona ("sou a Sofia"), mas não "sou a Sofia Souza".
+    r"|(?i:\b(?:sou|aqui [ée]) (?:a|o) )Sofia\b(?!\s+[A-ZÀ-Ý])"
 )
 _MARCA_INICIO, _MARCA_FIM = "", ""
 
@@ -155,7 +166,8 @@ def _mascarar(valor: Any, chave: str, nivel: int) -> Any:
         # nº longo (CPF/telefone/contrato como int) é PII mesmo sob chave inocente
         return valor if len(str(valor)) < 9 else mascarar_texto(str(valor))
     if isinstance(valor, Mapping):
-        return {str(k): _mascarar(v, str(k), nivel + 1) for k, v in valor.items()}
+        # a própria CHAVE pode ser PII (`{"5531999998888": 1}`)
+        return {mascarar_texto(str(k)): _mascarar(v, str(k), nivel + 1) for k, v in valor.items()}
     if isinstance(valor, list | tuple | set | frozenset):
         return [_mascarar(v, "", nivel + 1) for v in valor]
     dump = getattr(valor, "model_dump", None)  # pydantic / mensagens do LangChain

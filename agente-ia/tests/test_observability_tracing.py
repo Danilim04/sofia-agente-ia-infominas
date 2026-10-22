@@ -34,7 +34,11 @@ CLASSIFICACAO = {
 class SpanFalso:
     def __init__(self, falhar_em: str | None = None):
         self.updates: list[dict] = []
+        self.marcas: list[dict] = []
         self.falhar_em = falhar_em
+
+    def update(self, **kwargs):
+        self.marcas.append(kwargs)
 
     def update_trace(self, **kwargs):
         if self.falhar_em == "update_trace":
@@ -122,12 +126,14 @@ def test_traco_sem_telefone_nao_manda_user_id():
     assert cliente.span.updates[0]["user_id"] is None
 
 
-def test_traco_nao_engole_excecao_do_corpo():
+def test_traco_nao_engole_excecao_do_corpo_mas_so_o_nome_do_tipo_vai_ao_sdk():
     cliente = ClienteFalso()
     with pytest.raises(ValueError, match="do turno"):
         with TracoDoTurno(conversation_id="c", canal="whatsapp", cliente=cliente):
-            raise ValueError("do turno")
-    assert cliente.fechou_com == [ValueError]
+            raise ValueError(f"do turno {CPF}")
+    # a exceção sobe para o chamador, mas o SDK a vê limpa: só o NOME do tipo
+    assert cliente.fechou_com == [None]
+    assert cliente.span.marcas == [{"level": "ERROR", "status_message": "ValueError"}]
 
 
 # ---------------------------------------------------------------------------
@@ -324,3 +330,22 @@ def test_span_de_tool_com_pii_nao_leva_cpf_nem_telefone_nem_nome(langfuse_real):
     for proibido in (CPF, "52998224725", TELEFONE, "Marlene"):
         assert proibido not in atributos, proibido
     assert "_tool_com_pii" in atributos
+
+
+def test_excecao_do_turno_com_pii_nao_chega_ao_span_exportado(langfuse_real):
+    """Bloqueante da revisão: o OTel grava `exception.message`/`stacktrace` em claro."""
+    cliente, memoria = langfuse_real
+    with pytest.raises(RuntimeError):
+        with TracoDoTurno(
+            conversation_id="conv-x", canal="whatsapp", telefone=TELEFONE, cliente=cliente
+        ):
+            raise RuntimeError(f"falha cpf {CPF} tel +55{TELEFONE}")
+    spans = memoria.get_finished_spans()
+    assert spans
+    tudo = " | ".join(
+        f"{dict(s.attributes)} {[dict(e.attributes) for e in s.events]} {s.status.description}"
+        for s in spans
+    )
+    for proibido in (CPF, "52998224725", TELEFONE):
+        assert proibido not in tudo, proibido
+    assert "RuntimeError" in tudo

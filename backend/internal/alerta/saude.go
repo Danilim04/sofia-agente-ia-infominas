@@ -16,11 +16,17 @@ const (
 	FeedFalhando   = "falhando"   // a última leitura falhou (rede, 5xx…)
 )
 
+// CarenciaFeed: depois deste tempo de processo no ar, o reconciliador ligado
+// que ainda não leu o feed nenhuma vez (loop morto) deixa de ser "ok".
+const CarenciaFeed = 5 * time.Minute
+
 // Motivos de "degradado" no /health (vocabulário fechado; sem texto livre, sem PII).
 const (
 	MotivoReferenciaNaoCarregada = "referencia_nao_carregada"
 	MotivoTaxonomiaNaoCarregada  = "taxonomia_nao_carregada"
 	MotivoTaxonomiaInvalida      = "taxonomia_invalida"
+	MotivoTaxonomiaNaoVerificada = "taxonomia_nao_verificada" // carregou depois do boot: divergências desconhecidas
+	MotivoFeedSemLeitura         = "feed_sem_leitura"         // reconciliador ligado e nenhuma leitura do feed após a carência
 	MotivoFeedSemEscopo          = "feed_sem_escopo"
 	MotivoFeedFalhando           = "feed_falhando"
 	MotivoReconciliadorDesligado = "reconciliador_desligado"
@@ -34,6 +40,7 @@ type Sonda struct {
 	agora      func() time.Time
 	ultimoOK   time.Time
 	ultimoErro time.Time
+	ok         bool   // resultado da ÚLTIMA chamada (não depende de comparar instantes)
 	classe     string // classe do último erro ("HTTP 403 FORBIDDEN", "falha de rede…"); nunca o corpo
 	estado     string // estado resumido pelo chamador (FeedOK, FeedSemEscopo…)
 }
@@ -52,7 +59,7 @@ func (s *Sonda) OK() {
 		return
 	}
 	s.mu.Lock()
-	s.ultimoOK, s.estado = s.agora(), FeedOK
+	s.ultimoOK, s.estado, s.ok = s.agora(), FeedOK, true
 	s.mu.Unlock()
 }
 
@@ -63,13 +70,14 @@ func (s *Sonda) Falha(estado, classe string) {
 		return
 	}
 	s.mu.Lock()
-	s.ultimoErro, s.estado, s.classe = s.agora(), estado, classe
+	s.ultimoErro, s.estado, s.classe, s.ok = s.agora(), estado, classe, false
 	s.mu.Unlock()
 }
 
 type fotoSonda struct {
 	ultimoOK, ultimoErro time.Time
 	classe, estado       string
+	ok                   bool
 }
 
 func (s *Sonda) foto() fotoSonda {
@@ -78,12 +86,12 @@ func (s *Sonda) foto() fotoSonda {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return fotoSonda{s.ultimoOK, s.ultimoErro, s.classe, s.estado}
+	return fotoSonda{s.ultimoOK, s.ultimoErro, s.classe, s.estado, s.ok}
 }
 
 // carregada: houve leitura bem-sucedida e nenhuma falha depois dela.
 func (f fotoSonda) carregada() bool {
-	return !f.ultimoOK.IsZero() && !f.ultimoErro.After(f.ultimoOK)
+	return f.ok
 }
 
 // StatusTaxonomia é o que o /health sabe da taxonomia (foto do carregamento).
@@ -92,6 +100,10 @@ type StatusTaxonomia struct {
 	Carregada   bool
 	Placeholder bool // categorias/mesas ainda são hipótese de trabalho (P1)
 	Problemas   int  // divergências com o Infodesk no último carregamento
+	// Inferida: o boot não carregou e a referência foi lida depois; as
+	// divergências dessa carga não são conhecidas, então a taxonomia não pode
+	// ser declarada válida.
+	Inferida bool
 }
 
 // Saude monta a resposta de GET /health do gateway. Tudo é injetado (relógio,
@@ -125,6 +137,9 @@ type respostaTaxonomia struct {
 	Valida      bool `json:"valida"`
 	Placeholder bool `json:"placeholder"`
 	Problemas   int  `json:"problemas"`
+	// Inferida: "carregada" foi deduzida da leitura da referência após um boot
+	// sem carga; "valida" fica false porque ninguém conferiu as divergências.
+	Inferida bool `json:"inferida"`
 }
 
 type respostaFeed struct {
@@ -192,7 +207,8 @@ func (s *Saude) Relatorio(ctx context.Context) RespostaSaude {
 	}
 	r.Taxonomia = respostaTaxonomia{
 		Habilitada: tx.Habilitada, Carregada: tx.Carregada, Placeholder: tx.Placeholder, Problemas: tx.Problemas,
-		Valida: tx.Habilitada && tx.Carregada && tx.Problemas == 0,
+		Valida:   tx.Habilitada && tx.Carregada && tx.Problemas == 0 && !tx.Inferida,
+		Inferida: tx.Inferida,
 	}
 	// A taxonomia só entra na conta quando a API de tools está ligada: sem ela
 	// não há abertura de ticket e a referência do Infodesk nem é lida.
@@ -205,6 +221,8 @@ func (s *Saude) Relatorio(ctx context.Context) RespostaSaude {
 			degradar(MotivoTaxonomiaNaoCarregada)
 		case tx.Problemas > 0:
 			degradar(MotivoTaxonomiaInvalida)
+		case tx.Inferida:
+			degradar(MotivoTaxonomiaNaoVerificada)
 		}
 	}
 
@@ -227,6 +245,8 @@ func (s *Saude) Relatorio(ctx context.Context) RespostaSaude {
 		degradar(MotivoFeedSemEscopo)
 	case estado == FeedFalhando:
 		degradar(MotivoFeedFalhando)
+	case estado == FeedSemLeitura && time.Duration(r.UptimeSeg)*time.Second > CarenciaFeed:
+		degradar(MotivoFeedSemLeitura)
 	}
 
 	if s.Seq != nil {

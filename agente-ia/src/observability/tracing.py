@@ -162,11 +162,17 @@ class TracoDoTurno:
             self._desistir("marcar", exc)
 
     def __exit__(self, tipo: Any, valor: Any, tb: Any) -> None:
-        cm, self._cm, self._span = self._cm, None, None
+        cm, span, self._cm, self._span = self._cm, self._span, None, None
         if cm is None:
             return
         try:
-            cm.__exit__(tipo, valor, tb)
+            # Exceção do turno NUNCA vai ao SDK: o OTel grava `exception.message`,
+            # `exception.stacktrace` e `status.description` em claro (CPF numa
+            # validação do pydantic, telefone num erro de provedor) e o `mask=` não
+            # cobre esses campos. Marca o span com o NOME do tipo e fecha limpo.
+            if tipo is not None and span is not None:
+                span.update(level="ERROR", status_message=tipo.__name__)
+            cm.__exit__(None, None, None)
         except Exception as exc:
             logger.warning("langfuse_tracing_falhou etapa=fechar erro=%s", type(exc).__name__)
 

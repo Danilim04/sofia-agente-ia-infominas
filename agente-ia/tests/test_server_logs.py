@@ -101,3 +101,14 @@ def test_falha_do_turno_nao_vaza_cpf_da_excecao(saida_debug):
     assert resposta.erro is not None
     texto = saida_debug.getvalue()
     assert "chat_erro" in texto and CPF not in texto
+
+
+def test_nome_do_cadastro_tambem_e_mascarado_na_resposta(saida_debug):
+    req = server.ChatRequest(
+        conversation_id="conv-cad",
+        mensagem="oi",
+        nome_contato="Mari",
+        contato={"forma": "cpf", "nome_cadastro": "Genoveva Albuquerque"},
+    )
+    asyncio.run(server.processar_chat(_Grafo("Olá, Genoveva! Em que posso ajudar?"), req))
+    assert "Genoveva" not in saida_debug.getvalue()

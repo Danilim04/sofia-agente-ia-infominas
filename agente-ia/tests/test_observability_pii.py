@@ -200,3 +200,43 @@ def test_instalar_e_idempotente():
     primeiro = handler.formatter
     instalar_mascara_pii([handler])
     assert handler.formatter is primeiro and isinstance(primeiro, FormatadorPII)
+
+
+# ---------------------------------------------------------------------------
+# achados da revisão
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "texto",
+    ["conversation_id=52998224725", "id_ocorrencia=11999998888", "conversation_id=a52998224725"],
+)
+def test_chave_valor_de_correlacao_nao_serve_de_bypass_para_cpf(texto):
+    saida = mascarar_texto(texto)
+    assert "52998224725" not in saida and "11999998888" not in saida
+
+
+def test_id_de_conversa_com_formato_de_id_continua_intacto():
+    assert mascarar_texto("conversation_id=cm9x2k4a0001abc") == "conversation_id=cm9x2k4a0001abc"
+
+
+def test_apresentacao_da_sofia_so_e_protegida_sem_sobrenome():
+    assert "Sofia" in mascarar_texto("Oi, sou a Sofia, da Infominas")
+    assert "Souza" not in mascarar_texto("sou a Sofia Souza", ["Souza"])
+    assert "Souza" not in mascarar_texto("aqui é a Sofia Souza")
+
+
+def test_uuid_e_data_hora_nao_sao_mutilados():
+    uuid = "12345678-1234-1234-1234-123456789012"
+    assert (
+        mascarar_texto(f"conv {uuid} em 2026-10-21 15:30:01")
+        == f"conv {uuid} em 2026-10-21 15:30:01"
+    )
+
+
+def test_campo_name_do_infodesk_e_chave_de_telefone_sao_mascarados():
+    saida = mascarar_dado(
+        data={"requester": {"name": "Maria Souza", "whatsapp": "x"}, "5531999998888": 1}
+    )
+    assert "Maria" not in repr(saida) and "5531999998888" not in repr(saida)
+    assert saida["requester"] == {"name": "<PII>", "whatsapp": "<PII>"}

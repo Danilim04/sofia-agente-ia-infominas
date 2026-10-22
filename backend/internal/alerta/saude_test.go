@@ -113,12 +113,49 @@ func TestSaudeSemToolsAPINaoCobraReferenciaNemTaxonomia(t *testing.T) {
 	}
 }
 
-func TestSaudeFeedAindaSemLeituraNaoDegrada(t *testing.T) {
+func TestSaudeFeedAindaSemLeituraNaCarenciaNaoDegrada(t *testing.T) {
 	s, _, _ := saudeSaudavel()
 	s.Feed = NovaSonda(nil)
+	s.Iniciado = s.Agora().Add(-time.Minute) // acabou de subir
 	r := s.Relatorio(context.Background())
 	if r.Status != "ok" || r.Reconciliador.Feed.Estado != FeedSemLeitura || r.Reconciliador.Feed.UltimoOK != nil {
 		t.Fatalf("sem leitura ainda: %+v", r.Reconciliador.Feed)
+	}
+}
+
+// Loop do reconciliador morto: ligado, no ar há horas e nunca leu o feed.
+func TestSaudeFeedSemLeituraDepoisDaCarenciaDegrada(t *testing.T) {
+	s, _, _ := saudeSaudavel()
+	s.Feed = NovaSonda(nil)
+	r := s.Relatorio(context.Background())
+	if r.Status != "degradado" || len(r.Motivos) != 1 || r.Motivos[0] != MotivoFeedSemLeitura {
+		t.Fatalf("esperava feed_sem_leitura: %+v", r)
+	}
+	s.ReconciliaAtivo = false // desligado é outro motivo, não este
+	if r := s.Relatorio(context.Background()); r.Motivos[0] != MotivoReconciliadorDesligado || len(r.Motivos) != 1 {
+		t.Fatalf("desligado: %+v", r.Motivos)
+	}
+}
+
+// Taxonomia que só carregou depois do boot (carga sob demanda): ninguém viu as divergências.
+func TestSaudeTaxonomiaInferidaNaoEValida(t *testing.T) {
+	s, _, _ := saudeSaudavel()
+	s.Taxonomia = func() StatusTaxonomia {
+		return StatusTaxonomia{Habilitada: true, Carregada: true, Inferida: true}
+	}
+	r := s.Relatorio(context.Background())
+	if r.Taxonomia.Valida || !r.Taxonomia.Inferida || r.Status != "degradado" || r.Motivos[0] != MotivoTaxonomiaNaoVerificada {
+		t.Fatalf("inferida não é válida: %+v", r)
+	}
+}
+
+// Relógio que não anda: a falha logo depois do OK tem o MESMO instante e ainda assim vale.
+func TestSondaFalhaNoMesmoInstanteDoOKNaoContaComoCarregada(t *testing.T) {
+	s := NovaSonda(func() time.Time { return t0 })
+	s.OK()
+	s.Falha("falha", "HTTP 503 UNAVAILABLE")
+	if s.Carregada() {
+		t.Fatal("a última chamada falhou")
 	}
 }
 
@@ -159,7 +196,7 @@ func TestSaudeJSONTemSoAsChavesDocumentadas(t *testing.T) {
 	}
 	quer := map[string]string{
 		"referencia":    "carregada ultima_leitura_ok ultimo_erro ultimo_erro_em",
-		"taxonomia":     "carregada habilitada placeholder problemas valida",
+		"taxonomia":     "carregada habilitada inferida placeholder problemas valida",
 		"reconciliador": "ativo feed ultimo_seq ultimo_seq_webhook",
 	}
 	for k, v := range quer {

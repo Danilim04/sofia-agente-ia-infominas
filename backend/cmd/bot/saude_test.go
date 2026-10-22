@@ -176,11 +176,32 @@ func TestFotoTaxonomiaConsideraACargaSobDemanda(t *testing.T) {
 	if f.status(false).Carregada {
 		t.Fatal("sem leitura da referência, segue não carregada")
 	}
-	if s := f.status(true); !s.Carregada || !s.Placeholder {
+	if s := f.status(true); !s.Carregada || !s.Placeholder || !s.Inferida {
 		t.Fatalf("referência lida depois do boot: %+v", s)
 	}
 	f.definir(alerta.StatusTaxonomia{})
 	if f.status(true).Carregada {
 		t.Fatal("API de tools desligada nunca fica carregada")
+	}
+}
+
+func TestHealthTaxonomiaInferidaNaoSeDizValida(t *testing.T) {
+	st := storeDeTeste(t)
+	sondaRef, sondaFeed, tax := alerta.NovaSonda(nil), alerta.NovaSonda(nil), &fotoTaxonomia{}
+	tax.definir(alerta.StatusTaxonomia{Habilitada: true}) // o boot falhou…
+	sondaRef.OK()                                         // …e a referência foi lida depois
+	sondaFeed.OK()
+	r, _ := consultar(t, novaSaude(st, sondaRef, sondaFeed, tax, true))
+	if r.Taxonomia.Valida || !r.Taxonomia.Carregada || !r.Taxonomia.Inferida || r.Status != "degradado" {
+		t.Fatalf("taxonomia inferida: %+v", r)
+	}
+}
+
+func TestClasseDoErroSoExpoeCodigoSeguro(t *testing.T) {
+	if got := classeDoErro(&infodesk.HTTPError{Status: 400, Code: "INVALID_REFERENCE"}); got != "HTTP 400 INVALID_REFERENCE" {
+		t.Fatalf("got %q", got)
+	}
+	if got := classeDoErro(&infodesk.HTTPError{Status: 400, Code: "cpf 529.982.247-25 inválido"}); got != "HTTP 400" {
+		t.Fatalf("code do corpo vazou: %q", got)
 	}
 }

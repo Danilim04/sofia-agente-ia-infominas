@@ -16,10 +16,10 @@ O gateway escreve **JSON** (`slog`, stdout); o cérebro escreve **linhas** `nome
 |---|---|---|---|---|
 | `chat_request` | cérebro | INFO | `conversation_id`, `canal`, `telefone` (mascarado, 3 últimos), `identificado`, `estado_conversa`, `len_mensagem` | chegou um turno (`POST /chat`). A mensagem do cliente **não** entra |
 | `classificacao` | cérebro | INFO | `intencao`, `categoria`, `origem` (`jev`/`llm`/`esclarecimento`/`indefinida`), `prioridade`, `frustracao`, `jev` (o JEV respondeu?), `esclarecer`, `acoes` | o roteador decidiu o turno |
-| `tool_exec` | cérebro | INFO | `nome`, `args` (só os **nomes** dos argumentos) | o agente chamou uma tool. Valores só em DEBUG (`tool_exec_args`), mascarados |
+| `tool_exec` | cérebro | INFO | `nome`, `args` (só os **nomes** dos argumentos) | o agente chamou uma tool. Valores só em DEBUG (`tool_exec_args`), mascarados. **Exceção:** `agent_tool_calls` (`agent/nodes.py`) ainda loga os valores dos args em INFO; só a máscara do formatter os protege (ver seção 6) |
 | `transferencia` | cérebro | INFO | `conversation_id`, `origem` (`frustracao`/`confianca`/`pedido_cliente`) | o cérebro **pediu** a transferência (ação devolvida ao gateway) |
-| `transferencia` | gateway | INFO | `id_ocorrencia`, `conversation_id`, `origem`, `departamento` | o handoff foi **executado** (contrato em `alerta.LogTransferencia`; ver "Limites" abaixo) |
-| `ticket_aberto` | gateway | INFO | `numero`, `conversation_id`, `categoria`, `mesa`, `reconciliado` | o ticket existe no Infodesk (`reconciliado=true`: foi achado pela listagem, não pelo POST) |
+| `transferencia` | gateway | INFO | `id_ocorrencia`, `conversation_id`, `origem`, `departamento` | o handoff foi **executado**. **Contrato pronto (`alerta.LogTransferencia`), ainda não emitido com este nome:** hoje a mensagem é `conversa transferida para atendimento humano` (seção 6) |
+| `ticket_aberto` | gateway | INFO | `numero`, `conversation_id`, `categoria`, `mesa`, `reconciliado` | o ticket existe no Infodesk (`reconciliado=true`: foi achado pela listagem, não pelo POST). **Hoje o campo da conversa se chama `conversa`, não `conversation_id`** (`alerta.LogTicketAberto` é o contrato; seção 6) |
 | `sofia_alerta` | gateway | ERROR | `tipo`, `titulo`, `texto`, `id_ocorrencia`, `conversation_id`, `link` | um alerta saiu (tabela da seção 4). `titulo` e `texto` passam por `alerta.MascararPII` |
 | `sofia_falha` | gateway | ERROR | `id_ocorrencia`, `conversation_id`, `origem`, `classe`, `causa`, `detalhe` | uma transferência por falha foi registrada; o `id_ocorrencia` (`SOF-AAAAMMDD-HHMM-NN`) é o mesmo no cérebro (`chat_erro`) e na tabela `falhas` |
 | `jev_indisponivel` | cérebro | WARNING | `erro` (só o tipo da exceção) | o JEV falhou neste turno; o roteador seguiu em fail-soft |
@@ -29,7 +29,7 @@ Os campos de cada evento são **contrato**: `agente-ia/src/observability/eventos
 
 **Correlação:** `conversation_id` está em todos; `id_ocorrencia` liga cérebro × gateway × tabela `falhas`; `numero` é o ticket no Infodesk.
 
-**Máscara:** o cérebro instala um formatter em todos os handlers (`FormatadorPII`) que mascara CPF, telefone, e-mail, números longos e o nome do contato em **qualquer** mensagem de log, em qualquer nível, inclusive traceback. IDs `SOF-…`, `conversation_id=` e `id_ocorrencia=` ficam intactos.
+**Máscara:** o cérebro instala um formatter (`FormatadorPII`) nos handlers do logger-raiz e do `uvicorn`/`uvicorn.error` (não no `uvicorn.access`, cujo formatter lê `record.args`) que mascara CPF, telefone, e-mail, números longos e os nomes do contato (WhatsApp e cadastro) em **qualquer** mensagem de log, em qualquer nível, inclusive traceback. Ficam intactos: `SOF-…`, UUID, data/hora e `conversation_id=`/`id_ocorrencia=` com valor em formato de ID (sem 9+ dígitos seguidos). É rede de segurança, não licença para logar PII: não pega telefone fixo sem DDD nem nome que o sistema não conhece.
 
 ### Métricas
 
@@ -47,6 +47,7 @@ Desligado por padrão: sem `LANGFUSE_PUBLIC_KEY` e `LANGFUSE_SECRET_KEY` o cére
 - 1 trace por turno, `session_id` = `conversation_id`, `user_id` = telefone **mascarado**;
 - **tags** filtráveis no painel: `canal:whatsapp`, `intencao:<…>`, `categoria:<…>`, `origem:<…>` (as três últimas entram depois que o grafo classificou; só rótulos da taxonomia, nunca texto livre);
 - **sem PII em nenhum span:** o cliente Langfuse é criado com `mask=` (`observability/pii.py`), que o SDK aplica a `input`, `output` e `metadata` de todo span — inclusive o span de entrada de tool, onde a política injeta o `telefone`. Chaves `telefone`, `cpf`, `nome*`, `contrato`, `valor`, `email` viram `<PII>`; texto livre perde CPF, telefone, e-mail, nº longo e o nome do contato; `<documento_externo>` é omitido.
+- **Exceção do turno não vai ao SDK:** o span fecha com `level=ERROR` e só o **nome** do tipo (`status_message`); a mensagem e o stacktrace (que podem ter CPF/telefone) ficam no log mascarado, não no trace. Os spans do `CallbackHandler` do SDK (`on_tool_error`) guardam `str(erro)` por conta própria: não deixe mensagem de erro de tool carregar PII.
 - Falha do Langfuse nunca derruba um turno: vira `langfuse_tracing_falhou etapa=… erro=<Tipo>` (WARNING) e o atendimento segue sem trace.
 
 ## 3. `GET /health` do gateway
@@ -72,14 +73,15 @@ Sem segredo, URL, nome nem telefone: só flags, contagens, instantes e a **class
 |---|---|
 | `referencia.carregada` | a última leitura de mesas/catálogo/departamentos do Infodesk (cache de referência) deu certo. `ultimo_erro` aparece se a última leitura falhou |
 | `taxonomia.habilitada` | `TOOLS_API_TOKEN` definido (sem ele não há API de tools nem abertura de ticket, e a taxonomia não é cobrada) |
-| `taxonomia.valida` | habilitada, carregada e **0** divergências com o Infodesk |
+| `taxonomia.valida` | habilitada, carregada **no boot** e **0** divergências com o Infodesk |
+| `taxonomia.inferida` | o boot não carregou e a referência foi lida depois: `carregada=true`, mas ninguém conferiu as divergências (`valida=false`, motivo `taxonomia_nao_verificada`). Reinicie o gateway ou veja o alerta `taxonomia_invalida` |
 | `taxonomia.placeholder` | `config/taxonomia.yaml` ainda é a hipótese de trabalho (P1): não é degradação, é aviso |
 | `taxonomia.problemas` | divergências vistas no carregamento do boot (nomes de mesa/departamento/prioridade que o Infodesk não tem) |
 | `reconciliador.ativo` | `RECONCILIA_ATIVO` |
 | `reconciliador.ultimo_seq` / `ultimo_seq_webhook` | cursor do feed processado pelo reconciliador × maior `seq` visto pelo webhook. Parado com tráfego = feed/ciclo travado |
 | `reconciliador.feed.estado` | `ok`, `sem_leitura` (ainda não leu neste processo), `sem_escopo` (403), `falhando` (rede/5xx) |
 
-**Motivos de `degradado`** (vocabulário fechado): `referencia_nao_carregada`, `taxonomia_nao_carregada`, `taxonomia_invalida`, `feed_sem_escopo`, `feed_falhando`, `reconciliador_desligado`, `store_indisponivel`.
+**Motivos de `degradado`** (vocabulário fechado): `referencia_nao_carregada`, `taxonomia_nao_carregada`, `taxonomia_invalida`, `taxonomia_nao_verificada`, `feed_sem_escopo`, `feed_falhando`, `feed_sem_leitura` (reconciliador ligado, nenhuma leitura do feed 5 min depois de subir: loop morto), `reconciliador_desligado`, `store_indisponivel`.
 
 Cérebro: `GET :8001/health` continua `{"status":"ok"}` (processo vivo, grafo compilado).
 
@@ -152,6 +154,7 @@ O mesmo `tipo` + conversa não repete dentro de 5 minutos. Destino: log `sofia_a
 ## 6. Limites conhecidos (follow-ups)
 
 - **Nomes de evento do gateway fora da zona da E4.3.** `ticket_aberto` (em `toolsapi/abrir.go`) usa o campo `conversa` em vez de `conversation_id`, e a transferência do `engine` (`transferencia.go`) loga a mensagem `conversa transferida para atendimento humano`, não `transferencia`. O contrato e os helpers estão prontos em `alerta.LogTicketAberto`/`alerta.LogTransferencia`; falta cada dono trocar a chamada (uma linha em cada).
-- **`taxonomia.*` do `/health` é a foto do boot** (o pacote `taxonomia` não expõe estado vivo). Se o boot não carregou mas a referência foi lida depois, `carregada` passa a `true`; as divergências dessa carga só aparecem no alerta `taxonomia_invalida`. Um `Taxonomia.Estado()` tornaria isso vivo.
+- **`taxonomia.*` do `/health` é a foto do boot** (o pacote `taxonomia` não expõe estado vivo). Se o boot não carregou mas a referência foi lida depois, `carregada` passa a `true` com `inferida=true` e `valida=false`; as divergências dessa carga só aparecem no alerta `taxonomia_invalida`. Um `Taxonomia.Estado()` tornaria isso vivo.
+- **`agent/nodes.py` loga os valores dos args das tools em INFO** (`agent_tool_calls`), contra o que o catálogo promete para `tool_exec`. Fora da zona: trocar por `sorted(args)`. Até lá, só a máscara do formatter protege (um nº de contrato curto, < 9 dígitos, passa por ela).
 - **A métrica `jev_indisponivel` conta pelo log** do roteador (nome do evento), por isso exige `LOG_LEVEL` ≤ WARNING. Chamar `metricas.contar("jev_indisponivel")` direto no roteador tiraria essa dependência.
 - **Sem servidor de métricas** (Prometheus): os contadores vivem em memória e no log `sofia_metrica`.

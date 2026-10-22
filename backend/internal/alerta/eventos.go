@@ -81,8 +81,11 @@ var (
 	reTelefone = regexp.MustCompile(`(?:\+?55[\s-]?)?\(?\d{2}\)?[\s-]?9?\d{4}[-\s]?\d{4}`)
 	reSeqLonga = regexp.MustCompile(`\d(?:[ .\-/]?\d){8,}`)
 	reEmail    = regexp.MustCompile(`[\w.+-]+@[\w-]+(?:\.[\w-]+)+`)
-	// IDs de correlação com cara de número longo (SOF-20261021-1530-01) não são PII.
-	reIDOcorrencia = regexp.MustCompile(`SOF-\d{8}-\d{4}-\d{2,}`)
+	// Trechos com cara de número longo que NÃO são PII: ID de ocorrência
+	// (SOF-20261021-1530-01), UUID e data/hora.
+	reProtegido = regexp.MustCompile(`SOF-\d{8}-\d{4}-\d{2,}` +
+		`|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}` +
+		`|\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}`)
 )
 
 // MascararPII troca e-mail, CPF, telefone e números longos por <EMAIL>, <CPF>,
@@ -97,7 +100,7 @@ func MascararPII(s string) string {
 	var out strings.Builder
 	resto := s
 	for resto != "" {
-		loc := reIDOcorrencia.FindStringIndex(resto)
+		loc := reProtegido.FindStringIndex(resto)
 		if loc == nil {
 			out.WriteString(mascararTrecho(resto))
 			break
@@ -111,12 +114,15 @@ func MascararPII(s string) string {
 
 func mascararTrecho(s string) string {
 	s = reEmail.ReplaceAllString(s, "<EMAIL>")
-	s = substituirComLimite(s, reCPF, "<CPF>")
-	s = substituirComLimite(s, reTelefone, "<TEL>")
-	return substituirComLimite(s, reSeqLonga, "<NUM>")
+	// CPF e telefone: só um dígito colado invalida (`CPF5299…` e `phone_5531…` são
+	// campo+valor e precisam ser mascarados). Sequência longa: letra colada também
+	// invalida, para não mutilar IDs alfanuméricos.
+	s = substituirComLimite(s, reCPF, "<CPF>", ehDigito)
+	s = substituirComLimite(s, reTelefone, "<TEL>", ehDigito)
+	return substituirComLimite(s, reSeqLonga, "<NUM>", ehAlnum)
 }
 
-func substituirComLimite(s string, re *regexp.Regexp, token string) string {
+func substituirComLimite(s string, re *regexp.Regexp, token string, colado func(string, int) bool) string {
 	idx := re.FindAllStringIndex(s, -1)
 	if len(idx) == 0 {
 		return s
@@ -124,7 +130,7 @@ func substituirComLimite(s string, re *regexp.Regexp, token string) string {
 	var out strings.Builder
 	ultimo := 0
 	for _, m := range idx {
-		if ultimo > m[0] || ehAlnum(s, m[0]-1) || ehAlnum(s, m[1]) {
+		if ultimo > m[0] || colado(s, m[0]-1) || colado(s, m[1]) {
 			continue
 		}
 		out.WriteString(s[ultimo:m[0]])
@@ -141,4 +147,8 @@ func ehAlnum(s string, i int) bool {
 	}
 	c := s[i]
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_'
+}
+
+func ehDigito(s string, i int) bool {
+	return i >= 0 && i < len(s) && s[i] >= '0' && s[i] <= '9'
 }

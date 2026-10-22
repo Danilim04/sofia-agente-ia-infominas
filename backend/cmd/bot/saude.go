@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sync"
 
 	"bot-infominas/internal/alerta"
@@ -15,11 +16,17 @@ import (
 // expõem seu estado, então o gateway observa de fora: decora o cliente do
 // Infodesk que cada um recebe e anota o resultado da última chamada.
 
+var codigoSeguro = regexp.MustCompile(`^[A-Z_]{1,40}$`)
+
 // classeDoErro descreve o erro sem expor corpo de resposta (sem PII).
 func classeDoErro(err error) string {
 	var he *infodesk.HTTPError
 	if errors.As(err, &he) {
-		return fmt.Sprintf("HTTP %d %s", he.Status, he.Code)
+		// `code` vem do corpo da resposta e o /health é público: só um token seguro.
+		if codigoSeguro.MatchString(he.Code) {
+			return fmt.Sprintf("HTTP %d %s", he.Status, he.Code)
+		}
+		return fmt.Sprintf("HTTP %d", he.Status)
 	}
 	if infodesk.Transitorio(err) {
 		return "falha de rede ou 5xx"
@@ -113,7 +120,7 @@ func (f *fotoTaxonomia) status(referenciaLida bool) alerta.StatusTaxonomia {
 	v := f.v
 	f.mu.RUnlock()
 	if v.Habilitada && !v.Carregada && referenciaLida {
-		v.Carregada = true
+		v.Carregada, v.Inferida = true, true
 	}
 	return v
 }

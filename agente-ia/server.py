@@ -94,6 +94,11 @@ def _setup_logging() -> None:
     # PII (CPF, telefone, nome) mascarada em TODA mensagem de log, em qualquer nível
     # (E4.3): rede de segurança para o que um módulo esquecer de mascarar.
     instalar_mascara_pii()
+    # O uvicorn tem handlers próprios (propagate=False): o traceback "Exception in
+    # ASGI application" sairia sem máscara. `uvicorn.access` fica de fora (o
+    # formatter dele lê `record.args`).
+    for nome in ("uvicorn", "uvicorn.error"):
+        instalar_mascara_pii(logging.getLogger(nome).handlers)
     # Métrica `jev_indisponivel` (contador + log `sofia_metrica`).
     instalar_contador()
 
@@ -196,7 +201,9 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
     # PII fora do log (LGPD, E4.3): telefone mascarado; a mensagem do cliente NÃO
     # entra em log em claro em nível nenhum — só o tamanho (INFO) e a versão
     # mascarada (DEBUG); o nome do contato nunca entra.
-    registrar_nomes(req.conversation_id, (req.nome_contato,))
+    registrar_nomes(
+        req.conversation_id, (req.nome_contato, (req.contato or {}).get("nome_cadastro"))
+    )
     eventos.registrar(
         logger,
         eventos.CHAT_REQUEST,

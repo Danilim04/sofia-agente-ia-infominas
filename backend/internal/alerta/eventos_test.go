@@ -106,6 +106,8 @@ func TestMascararPII(t *testing.T) {
 		{"contrato 123456789012 vencido", "contrato <NUM> vencido"},
 		{"ocorrência SOF-20261022-0900-01 (conversa c1d2e3f4a5b6)", "ocorrência SOF-20261022-0900-01 (conversa c1d2e3f4a5b6)"},
 		{"ticket 4821 na mesa 7", "ticket 4821 na mesa 7"},
+		{"CPF52998224725 e phone_5531999998888", "CPF<CPF> e phone_<TEL>"},
+		{"em 2026-10-21 15:30:01 conv 12345678-1234-1234-1234-123456789012", "em 2026-10-21 15:30:01 conv 12345678-1234-1234-1234-123456789012"},
 		{"", ""},
 	}
 	for _, c := range casos {
