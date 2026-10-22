@@ -122,6 +122,12 @@ type Config struct {
 	// taxonomia; vazio = procura nos caminhos padrão (taxonomia.CaminhoDoAmbiente).
 	StrictTaxonomia bool
 	TaxonomiaPath   string
+
+	// TestadoresTelefones (TESTADORES_TELEFONES, E3.9): lista de telefones E.164
+	// separados por vírgula. Vazia = desligada (todo mundo fala com a Sofia). Ligada,
+	// só estes números falam com ela; os demais vão direto para um atendente, sem
+	// mensagem ao cliente. Ver testadores.go.
+	TestadoresTelefones []string
 }
 
 // Avisos lista o que, na configuração carregada, funciona mas merece atenção
@@ -131,6 +137,15 @@ func (c *Config) Avisos() []string {
 	if c.ToolsAPIToken != "" && c.IdentHashSal == "" {
 		out = append(out, "IDENT_HASH_SAL vazio: o sal dos hashes de CPF/contrato cai no TOOLS_API_TOKEN; "+
 			"rotacionar o TOOLS_API_TOKEN invalida os hashes já gravados (defina um IDENT_HASH_SAL próprio em produção)")
+	}
+	if c.TestadoresAtivo() {
+		out = append(out, fmt.Sprintf("TESTADORES_TELEFONES LIGADA com %d número(s): SÓ eles falam com a Sofia; todo outro cliente que "+
+			"escrever é passado direto a um atendente, sem resposta automática. Para a produção aberta, deixe a variável vazia",
+			len(c.Testadores())))
+		if c.DepartamentoHumanoPadrao == "" {
+			out = append(out, "TESTADORES_TELEFONES ligada com DEPARTAMENTO_HUMANO_PADRAO vazio: os clientes de fora do grupo "+
+				"vão para a distribuição automática do Infodesk, sem departamento")
+		}
 	}
 	return out
 }
@@ -210,6 +225,11 @@ func Load() (*Config, error) {
 		}
 		*d.dst = v
 	}
+	testadores, err := parseTestadores(os.Getenv("TESTADORES_TELEFONES"))
+	if err != nil {
+		return nil, err
+	}
+	cfg.TestadoresTelefones = testadores
 	if _, err := regexp.Compile(cfg.IdentContratoRE); err != nil {
 		return nil, fmt.Errorf("IDENT_CONTRATO_RE inválido: %w", err)
 	}
