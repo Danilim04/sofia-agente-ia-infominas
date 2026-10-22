@@ -882,3 +882,34 @@ func TestStoreExpirarCadastros(t *testing.T) {
 		})
 	}
 }
+
+// TestStorePropostaTicket (E4.5, M8): uma proposta preparada por conversa; a nova
+// substitui a anterior; conversa sem proposta devolve hash vazio.
+func TestStorePropostaTicket(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			a, b := unico("pt-a"), unico("pt-b")
+			if h, _, err := st.ObterPropostaTicket(ctx, a); err != nil || h != "" {
+				t.Fatalf("sem proposta: %q err=%v", h, err)
+			}
+			t1 := time.Now().Truncate(time.Millisecond)
+			if err := st.GravarPropostaTicket(ctx, a, "hash-1", t1); err != nil {
+				t.Fatal(err)
+			}
+			if h, quando, err := st.ObterPropostaTicket(ctx, a); err != nil || h != "hash-1" || !quando.Equal(t1) {
+				t.Fatalf("1ª: %q %v err=%v", h, quando, err)
+			}
+			t2 := t1.Add(time.Minute)
+			if err := st.GravarPropostaTicket(ctx, a, "hash-2", t2); err != nil {
+				t.Fatal(err)
+			}
+			if h, quando, _ := st.ObterPropostaTicket(ctx, a); h != "hash-2" || !quando.Equal(t2) {
+				t.Fatalf("a nova substitui a anterior: %q %v", h, quando)
+			}
+			if h, _, _ := st.ObterPropostaTicket(ctx, b); h != "" {
+				t.Fatalf("outra conversa não enxerga: %q", h)
+			}
+		})
+	}
+}

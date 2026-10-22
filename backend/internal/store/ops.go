@@ -403,6 +403,12 @@ CREATE INDEX IF NOT EXISTS tickets_numero ON gw.tickets (numero);
 CREATE INDEX IF NOT EXISTS tickets_conversa ON gw.tickets (conversation_id);
 CREATE INDEX IF NOT EXISTS tickets_telefone ON gw.tickets (telefone);
 
+CREATE TABLE IF NOT EXISTS gw.propostas_ticket (
+    conversation_id TEXT PRIMARY KEY,
+    hash            TEXT NOT NULL DEFAULT '',
+    created_at      BIGINT NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS gw.cadastros (
     chave           TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL DEFAULT '',
@@ -667,4 +673,30 @@ func (o *ops) IncrementarTentativasCadastro(ctx context.Context, chave string) (
 func (o *ops) ZerarTentativasCadastro(ctx context.Context, chave string) error {
 	_, err := o.db.ExecContext(ctx, o.rebind(`DELETE FROM gw.cadastro_tentativas WHERE conversation_id = ?`), chave)
 	return err
+}
+
+// ---------------------------------------------------------------------------
+// Proposta de ticket preparada (E4.5, M8)
+// ---------------------------------------------------------------------------
+
+func (o *ops) GravarPropostaTicket(ctx context.Context, convID, hash string, criadaEm time.Time) error {
+	_, err := o.db.ExecContext(ctx, o.rebind(
+		`INSERT INTO gw.propostas_ticket (conversation_id, hash, created_at) VALUES (?, ?, ?)
+		 ON CONFLICT (conversation_id) DO UPDATE SET hash = excluded.hash, created_at = excluded.created_at`),
+		convID, hash, criadaEm.UnixMilli())
+	return err
+}
+
+func (o *ops) ObterPropostaTicket(ctx context.Context, convID string) (string, time.Time, error) {
+	var hash string
+	var criada int64
+	err := o.db.QueryRowContext(ctx, o.rebind(
+		`SELECT hash, created_at FROM gw.propostas_ticket WHERE conversation_id = ?`), convID).Scan(&hash, &criada)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", time.Time{}, nil
+	}
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return hash, time.UnixMilli(criada), nil
 }

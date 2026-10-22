@@ -492,6 +492,7 @@ func TestAbrir_PrioridadeSemUUIDNaMesa_PriorityIDOmitidoEAlerta(t *testing.T) {
 	a.conversa(convTeste, telTeste)
 	a.identificadoPorCPF()
 	p, chave := propostaTeste("cobranca") // Financeiro não tem "Alta"
+	a.selar(p)
 	_, out := a.post("ticket/abrir", map[string]any{"telefone": telTeste, "conversation_id": convTeste, "proposta": p, "chave_idempotencia": chave})
 	if out["status"] != true {
 		t.Fatalf("o chamado abre mesmo assim: %+v", out)
@@ -527,6 +528,7 @@ func TestAbrir_PropostaInvalidaEChaveDoGateway(t *testing.T) {
 	}
 	// Chave errada do chamador: o gateway usa a da fórmula; reenviar o mesmo abrir não duplica.
 	p, _ := propostaTeste("sem_conexao")
+	a.selar(p)
 	corpo := map[string]any{"telefone": telTeste, "conversation_id": convTeste, "proposta": p, "chave_idempotencia": "lixo"}
 	a.post("ticket/abrir", corpo)
 	a.post("ticket/abrir", corpo)
@@ -542,6 +544,7 @@ func TestAbrir_PedidoDoCerebroNaoDecideDestino(t *testing.T) {
 	p, chave := propostaTeste("sem_conexao")
 	p["mesa"] = map[string]any{"id": "mesa-forjada", "nome": "Outra"}
 	p["departamento"] = map[string]any{"id": "dep-forjado", "nome": "Outro"}
+	a.selar(p)
 	a.post("ticket/abrir", map[string]any{"telefone": telTeste, "conversation_id": convTeste, "proposta": p, "chave_idempotencia": chave})
 	if got := a.idk.posts[0].DeskID; got != idMesaSuporte {
 		t.Fatalf("a mesa vem da taxonomia, nunca da proposta: %s", got)
@@ -882,5 +885,103 @@ func TestConsultarEListar_ExigemConversaNoStore(t *testing.T) {
 	}
 	if _, out := listar(a); out["motivo"] != "chamados_indisponiveis" {
 		t.Fatalf("listar: %+v", out)
+	}
+}
+
+// M8 (E4.5): o `preparar` sela a proposta e o `abrir` só cria o ticket do que foi
+// preparado: proposta que o gateway nunca viu, adulterada, de outra conversa ou
+// vencida é recusada (sem_proposta) e nada vai ao Infodesk.
+func TestAbrir_SoExecutaPropostaPreparadaPeloGateway(t *testing.T) {
+	a := novoAmb(t)
+	a.conversa(convTeste, telTeste)
+	a.identificadoPorCPF()
+	p, chave := propostaTeste("sem_conexao")
+	corpo := func(p map[string]any) map[string]any {
+		return map[string]any{"telefone": telTeste, "conversation_id": convTeste, "proposta": p, "chave_idempotencia": chave}
+	}
+
+	// 1) Nunca preparada.
+	if _, out := a.post("ticket/abrir", corpo(p)); out["motivo"] != "sem_proposta" || a.idk.totalPosts() != 0 {
+		t.Fatalf("sem preparar: %+v (POSTs=%d)", out, a.idk.totalPosts())
+	}
+
+	// 2) Preparada pelo gateway de verdade (a rota preparar grava o selo).
+	_, prep := a.post("ticket/preparar", corpoPreparar(nil))
+	if prep["status"] != true {
+		t.Fatalf("preparar: %+v", prep)
+	}
+	pp := prep["proposta"].(map[string]any)
+	propOK := map[string]any{
+		"titulo": pp["titulo"], "descricao": pp["descricao"], "categoria": pp["categoria"],
+		"prioridade": map[string]any{"nome": pp["prioridade"].(map[string]any)["nome"]}, "criada_em": "2026-10-20T14:32:05-03:00",
+	}
+
+	// 3) Adulterada depois do preparar (título, descrição, categoria, prioridade).
+	for campo, valor := range map[string]any{
+		"titulo": "Título trocado", "descricao": "Descrição trocada", "categoria": "cobranca",
+		"prioridade": map[string]any{"nome": "baixa"},
+	} {
+		adulterada := map[string]any{}
+		for k, v := range propOK {
+			adulterada[k] = v
+		}
+		adulterada[campo] = valor
+		if _, out := a.post("ticket/abrir", corpo(adulterada)); out["motivo"] != "sem_proposta" {
+			t.Errorf("%s adulterado devia ser recusado: %+v", campo, out)
+		}
+	}
+	if a.idk.totalPosts() != 0 {
+		t.Fatalf("nada adulterado vai ao Infodesk: %d POSTs", a.idk.totalPosts())
+	}
+
+	// 4) A proposta exatamente como foi preparada abre.
+	if _, out := a.post("ticket/abrir", corpo(propOK)); out["status"] != true || a.idk.totalPosts() != 1 {
+		t.Fatalf("a proposta preparada abre: %+v", out)
+	}
+}
+
+func TestAbrir_PropostaPreparadaVenceEExigeIdentificacao(t *testing.T) {
+	a := novoAmb(t)
+	a.conversa(convTeste, telTeste)
+	p, chave := propostaTeste("sem_conexao")
+	corpo := map[string]any{"telefone": telTeste, "conversation_id": convTeste, "proposta": p, "chave_idempotencia": chave}
+
+	// Selo válido mas telefone NÃO identificado: recusa.
+	a.selar(p)
+	if _, out := a.post("ticket/abrir", corpo); out["motivo"] != "sem_proposta" || a.idk.totalPosts() != 0 {
+		t.Fatalf("sem identificação não abre: %+v", out)
+	}
+
+	// Identificado, mas o selo é antigo (> 15 min).
+	a.identificadoPorCPF()
+	titulo, _ := sanitizarTexto(p["titulo"].(string), tituloMax, true)
+	descricao, _ := sanitizarTexto(p["descricao"].(string), descricaoMax, false)
+	velho := hashProposta(convTeste, titulo, descricao, "sem_conexao", "alta")
+	if err := a.st.GravarPropostaTicket(context.Background(), convTeste, velho, time.Now().Add(-propostaPreparadaValidade-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, out := a.post("ticket/abrir", corpo); out["motivo"] != "sem_proposta" || a.idk.totalPosts() != 0 {
+		t.Fatalf("selo vencido: %+v", out)
+	}
+
+	// Selo de outra conversa não vale para esta.
+	if err := a.st.GravarPropostaTicket(context.Background(), "outra-conversa", velho, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, out := a.post("ticket/abrir", corpo); out["motivo"] != "sem_proposta" {
+		t.Fatalf("selo de outra conversa: %+v", out)
+	}
+
+	// Selo novo: abre. E o retry da MESMA chave depois de a proposta vencer segue
+	// devolvendo o chamado (idempotência), sem pedir nova proposta.
+	a.selar(p)
+	if _, out := a.post("ticket/abrir", corpo); out["status"] != true {
+		t.Fatalf("selo novo: %+v", out)
+	}
+	if err := a.st.GravarPropostaTicket(context.Background(), convTeste, velho, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, out := a.post("ticket/abrir", corpo); out["status"] != true || a.idk.totalPosts() != 1 {
+		t.Fatalf("retry idempotente depois de vencer: %+v (POSTs=%d)", out, a.idk.totalPosts())
 	}
 }

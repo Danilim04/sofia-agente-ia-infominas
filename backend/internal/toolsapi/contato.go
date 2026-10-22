@@ -24,7 +24,7 @@ func (h *Handler) handleIdentificar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	_, tel, ok := h.sessao(ctx, req.ConversationID, req.Telefone)
+	_, tel, ok := h.sessaoEstrita(ctx, req.ConversationID, req.Telefone)
 	if !ok {
 		responderRecusa(w, "campo_invalido", txtSessaoInvalida)
 		return

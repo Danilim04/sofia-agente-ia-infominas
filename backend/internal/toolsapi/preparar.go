@@ -70,7 +70,7 @@ func (h *Handler) handlePreparar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	conv, tel, ok := h.sessao(ctx, req.ConversationID, req.Telefone)
+	conv, tel, ok := h.sessaoEstrita(ctx, req.ConversationID, req.Telefone)
 	if !ok {
 		responderRecusa(w, "campo_invalido", txtCampoInvalidoPreparar)
 		return
@@ -110,6 +110,12 @@ func (h *Handler) handlePreparar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.avisarDegradacao(res, conv)
+	// Sela a proposta (E4.5, M8): o `abrir` só cria o ticket de uma proposta que o
+	// gateway preparou. Falhar em gravar não bloqueia o cliente aqui, mas o
+	// `abrir` vai recusar (sem_proposta) e o cérebro prepara de novo.
+	if err := h.d.Store.GravarPropostaTicket(ctx, conv, hashProposta(conv, titulo, descricao, res.Categoria, res.PrioridadeNome), h.agora()); err != nil {
+		h.log.Error("preparar: gravar o selo da proposta", "conversation_id", conv, "err", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": true,
 		"proposta": propostaOut{

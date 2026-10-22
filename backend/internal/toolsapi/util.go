@@ -241,3 +241,19 @@ func (h *Handler) alertar(tipo, titulo, texto, convID string) {
 	}
 	h.d.Alertas.Aviso(tipo, titulo, texto, convID)
 }
+
+// propostaPreparadaValidade é por quanto tempo uma proposta preparada pode ser
+// aberta (casa com PROPOSTA_VALIDADE do cérebro, 15 min).
+const propostaPreparadaValidade = 15 * time.Minute
+
+// hashProposta é o selo da proposta de chamado: o que o `preparar` devolveu e o
+// `abrir` precisa receber de volta, byte a byte, para criar o ticket (E4.5, M8).
+// Cobre o que vai ao Infodesk e o que decide o destino: conversa, título e
+// descrição (já sanitizados), categoria e prioridade (comparadas sem caixa).
+func hashProposta(conv, titulo, descricao, categoria, prioridade string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		"proposta-ticket", conv, titulo, descricao,
+		strings.ToLower(strings.TrimSpace(categoria)), strings.ToLower(strings.TrimSpace(prioridade)),
+	}, "\x00")))
+	return hex.EncodeToString(sum[:])
+}

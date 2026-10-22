@@ -243,6 +243,14 @@ type Store interface {
 	// deixou de precisar dele); false se não havia.
 	LimparHandoffPendente(ctx context.Context, convID string) (bool, error)
 
+	// GravarPropostaTicket guarda o hash da última proposta de chamado que o
+	// `preparar` devolveu para a conversa (uma por conversa; a nova substitui a
+	// anterior). O `abrir` só executa uma proposta cujo hash confere (E4.5, M8).
+	GravarPropostaTicket(ctx context.Context, convID, hash string, criadaEm time.Time) error
+	// ObterPropostaTicket devolve o hash e o instante da última proposta preparada
+	// da conversa; hash "" = nenhuma.
+	ObterPropostaTicket(ctx context.Context, convID string) (string, time.Time, error)
+
 	// GravarCadastroProposta grava (ou renova, se ainda for `proposta`) a
 	// proposta de cadastro e devolve a linha como ficou. Uma linha `feito` NUNCA
 	// é alterada. CreatedAt passa a ser "agora" ao renovar (validade de 15 min).

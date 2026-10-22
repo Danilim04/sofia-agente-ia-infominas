@@ -2,6 +2,7 @@ package toolsapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -111,6 +112,14 @@ func (h *Handler) handleAbrir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A proposta precisa ter sido preparada pelo gateway e o telefone precisa estar
+	// identificado (E4.5, M8): o `abrir` não cria ticket só porque o cérebro (ou um
+	// LLM induzido por injeção) mandou uma proposta e uma chave consistentes.
+	if motivo, erro := h.conferirPropostaPreparada(ctx, a); motivo != "" {
+		responderRecusa(w, motivo, erro)
+		return
+	}
+
 	// Defesa (docs/infodesk/07 T12): a conversa já tem chamado vinculado. Não
 	// abre outro e NÃO diz que abriu: recusa (sem handoff) para o LLM não
 	// anunciar um chamado que o cliente não confirmou. O `preparar` já devolve
@@ -162,7 +171,7 @@ func (h *Handler) handleAbrir(w http.ResponseWriter, r *http.Request) {
 
 // validarAbertura confere a proposta e calcula a chave. motivo != "" = recusa.
 func (h *Handler) validarAbertura(ctx context.Context, req *reqAbrir) (*abertura, string, string) {
-	conv, tel, ok := h.sessao(ctx, req.ConversationID, req.Telefone)
+	conv, tel, ok := h.sessaoEstrita(ctx, req.ConversationID, req.Telefone)
 	p := req.Proposta
 	if !ok || p == nil || strings.TrimSpace(p.Categoria) == "" || strings.TrimSpace(p.CriadaEm) == "" {
 		return nil, "sem_proposta", txtSemProposta
@@ -486,4 +495,30 @@ func (h *Handler) registrarRecusa(ctx context.Context, a *abertura) {
 		h.log.Warn("abrir: recusa do Infodesk, mas o ticket local já não estava pendente",
 			"conversation_id", a.conv, "chave", chavePrefixo(a.chave))
 	}
+}
+
+// conferirPropostaPreparada exige contato identificado e o selo da proposta
+// (gravado pelo `preparar`): mesmo conteúdo, da mesma conversa, dentro da
+// validade. Motivo `sem_proposta` nos dois casos: o cérebro volta ao `preparar`,
+// que diz o que falta (inclusive `nao_identificado`).
+func (h *Handler) conferirPropostaPreparada(ctx context.Context, a *abertura) (string, string) {
+	if h.contatoIdentificado(ctx, a.tel) == nil {
+		h.log.Warn("abrir: telefone sem identificação; proposta recusada", "conversation_id", a.conv)
+		return "sem_proposta", txtSemProposta
+	}
+	selo, quando, err := h.d.Store.ObterPropostaTicket(ctx, a.conv)
+	if err != nil {
+		h.log.Error("abrir: ler o selo da proposta", "conversation_id", a.conv, "err", err)
+		return "sem_proposta", txtSemProposta
+	}
+	quer := hashProposta(a.conv, a.titulo, a.descricao, a.prop.Categoria, a.prop.Prioridade.Nome)
+	if selo == "" || subtle.ConstantTimeCompare([]byte(selo), []byte(quer)) != 1 {
+		h.log.Warn("abrir: a proposta não é a que o gateway preparou; recusada", "conversation_id", a.conv, "preparada", selo != "")
+		return "sem_proposta", txtSemProposta
+	}
+	if h.agora().Sub(quando) > propostaPreparadaValidade {
+		h.log.Info("abrir: proposta preparada vencida; recusada", "conversation_id", a.conv)
+		return "sem_proposta", txtSemProposta
+	}
+	return "", ""
 }
