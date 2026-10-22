@@ -75,6 +75,7 @@ const (
 	OrigemLookup   = "lookup"
 	OrigemCPF      = "cpf"
 	OrigemContrato = "contrato"
+	OrigemCadastro = "cadastro" // solicitante cadastrado pela Sofia (ADR 0009)
 
 	FormaTelefone = "telefone"
 	FormaCPF      = "cpf"
@@ -118,6 +119,30 @@ type Ticket struct {
 	Encerrado      bool
 	Reconciliado   bool
 	RawResposta    string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// Status de `cadastros.status`.
+const (
+	CadastroProposta = "proposta" // preparado pelo gateway; ainda não foi para o Infodesk
+	CadastroFeito    = "feito"    // POST /requesters concluído
+)
+
+// Cadastro é uma linha de `cadastros` (ADR 0009): a proposta de cadastro de
+// solicitante que o gateway preparou e a idempotência local do POST
+// /requesters. O gateway só executa o que gravou aqui. Nome e Email são PII.
+type Cadastro struct {
+	Chave          string // sha256 de conversa + telefone + cliente + nome + e-mail (PK)
+	ConversationID string
+	Telefone       string
+	Nome           string
+	Email          string
+	ClienteID      string // escolhido pelo gateway entre os candidatos de GET /clients
+	ClienteNome    string
+	Status         string // CadastroProposta | CadastroFeito
+	RequesterID    string // preenchido em CadastroFeito
+	Criado         bool   // `created` do POST /requesters (false = já existia)
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -213,6 +238,21 @@ type Store interface {
 	// LimparHandoffPendente apaga a marca (handoff confirmado, ou a conversa
 	// deixou de precisar dele); false se não havia.
 	LimparHandoffPendente(ctx context.Context, convID string) (bool, error)
+
+	// GravarCadastroProposta grava (ou renova, se ainda for `proposta`) a
+	// proposta de cadastro e devolve a linha como ficou. Uma linha `feito` NUNCA
+	// é alterada. CreatedAt passa a ser "agora" ao renovar (validade de 15 min).
+	GravarCadastroProposta(ctx context.Context, c *Cadastro) (*Cadastro, error)
+	// ObterCadastro devolve o cadastro pela chave ou nil.
+	ObterCadastro(ctx context.Context, chave string) (*Cadastro, error)
+	// ConcluirCadastro marca como `feito` com o solicitante devolvido pelo
+	// Infodesk; erro se a chave não existe.
+	ConcluirCadastro(ctx context.Context, chave, requesterID string, criado bool) error
+	// IncrementarTentativasCadastro soma 1 às vezes em que a empresa não foi
+	// resolvida na conversa e devolve o total (CADASTRO_MAX_TENTATIVAS).
+	IncrementarTentativasCadastro(ctx context.Context, convID string) (int, error)
+	// ZerarTentativasCadastro apaga o contador da conversa.
+	ZerarTentativasCadastro(ctx context.Context, convID string) error
 
 	// RegistrarFalha grava uma ocorrência (tabela `falhas`). CreatedAt vazio =
 	// agora.

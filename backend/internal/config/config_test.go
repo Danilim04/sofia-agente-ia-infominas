@@ -270,3 +270,44 @@ func TestDuracoesDaE36ToleramEspacos(t *testing.T) {
 		t.Fatalf("valores: %+v", cfg)
 	}
 }
+
+// Cadastro de solicitante (E5.3, ADR 0009): hipóteses configuráveis.
+func TestCadastroDefaultsELidos(t *testing.T) {
+	comObrigatorias(t)
+	t.Setenv("CADASTRO_SEM_CLIENTE", "")
+	t.Setenv("CADASTRO_MAX_TENTATIVAS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if cfg.CadastroSemCliente != CadastroSemClienteTransferir || cfg.CadastroMaxTentativas != 2 {
+		t.Fatalf("defaults inesperados: %q %d", cfg.CadastroSemCliente, cfg.CadastroMaxTentativas)
+	}
+
+	t.Setenv("CADASTRO_SEM_CLIENTE", " Oferecer ")
+	t.Setenv("CADASTRO_MAX_TENTATIVAS", "3")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if cfg.CadastroSemCliente != CadastroSemClienteOferecer || cfg.CadastroMaxTentativas != 3 {
+		t.Fatalf("valores lidos inesperados: %q %d", cfg.CadastroSemCliente, cfg.CadastroMaxTentativas)
+	}
+}
+
+func TestCadastroInvalidosDerrubamOBoot(t *testing.T) {
+	for _, c := range []struct{ env, valor string }{
+		{"CADASTRO_SEM_CLIENTE", "criar"},
+		{"CADASTRO_MAX_TENTATIVAS", "0"},
+		{"CADASTRO_MAX_TENTATIVAS", "dois"},
+		{"CADASTRO_MAX_TENTATIVAS", "99"},
+	} {
+		t.Run(c.env+"="+c.valor, func(t *testing.T) {
+			comObrigatorias(t)
+			t.Setenv(c.env, c.valor)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), c.env) {
+				t.Fatalf("esperava erro citando %s, veio %v", c.env, err)
+			}
+		})
+	}
+}

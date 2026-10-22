@@ -8,12 +8,19 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // Valores de IDENT_LOOKUP_AMBIGUO.
 const IdentAmbiguoPedirCPF = "pedir_cpf"
+
+// Valores de CADASTRO_SEM_CLIENTE (ADR 0009; hipótese, TODO(decisão do produto)).
+const (
+	CadastroSemClienteTransferir = "transferir" // handoff com nota por código
+	CadastroSemClienteOferecer   = "oferecer"   // só orienta o cliente a falar com um atendente
+)
 
 // Config agrega todos os parâmetros de execução do gateway.
 type Config struct {
@@ -108,6 +115,9 @@ type Config struct {
 	TicketDedupJanela     time.Duration // TICKET_DEDUP_JANELA (24h): mesma categoria + telefone nesta janela = chamado já aberto
 	DedupConsultaInfodesk bool          // DEDUP_CONSULTA_INFODESK (true): consulta tickets abertos do telefone no Infodesk (07 T5)
 	IdentContratoRE       string        // IDENT_CONTRATO_RE (^\d{4,12}$): formato aceito de número de contrato
+	// Cadastro de solicitante (E5.3, ADR 0009). Hipóteses sem decisão do produto.
+	CadastroSemCliente    string // CADASTRO_SEM_CLIENTE (transferir|oferecer): empresa não achada/ambígua após as tentativas
+	CadastroMaxTentativas int    // CADASTRO_MAX_TENTATIVAS (2): falhas de empresa antes de desistir
 	// IdentHashSal: sal do hash do CPF/contrato (IDENT_HASH_SAL). Vazio = usa o
 	// TOOLS_API_TOKEN, e rotacionar o token invalida os hashes já gravados.
 	IdentHashSal string
@@ -154,6 +164,7 @@ func Load() (*Config, error) {
 		IdentLookupAmbiguo:       strings.ToLower(strings.TrimSpace(getenv("IDENT_LOOKUP_AMBIGUO", IdentAmbiguoPedirCPF))),
 		IdentContratoRE:          getenv("IDENT_CONTRATO_RE", `^\d{4,12}$`),
 		IdentHashSal:             os.Getenv("IDENT_HASH_SAL"),
+		CadastroSemCliente:       strings.ToLower(strings.TrimSpace(getenv("CADASTRO_SEM_CLIENTE", CadastroSemClienteTransferir))),
 		TaxonomiaPath:            strings.TrimSpace(getenv("TAXONOMIA_PATH", "")),
 	}
 
@@ -230,6 +241,18 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("%s inválido: %w", d.env, err)
 		}
 		*d.dst = v
+	}
+
+	if cfg.CadastroSemCliente != CadastroSemClienteTransferir && cfg.CadastroSemCliente != CadastroSemClienteOferecer {
+		return nil, fmt.Errorf("CADASTRO_SEM_CLIENTE inválido (%q): use %q ou %q", cfg.CadastroSemCliente, CadastroSemClienteTransferir, CadastroSemClienteOferecer)
+	}
+	cfg.CadastroMaxTentativas = 2
+	if v, ok := os.LookupEnv("CADASTRO_MAX_TENTATIVAS"); ok && strings.TrimSpace(v) != "" {
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || n < 1 || n > 10 {
+			return nil, fmt.Errorf("CADASTRO_MAX_TENTATIVAS inválido (%q): use um inteiro de 1 a 10", v)
+		}
+		cfg.CadastroMaxTentativas = n
 	}
 
 	if cfg.IdentLookupAmbiguo != IdentAmbiguoPedirCPF {
