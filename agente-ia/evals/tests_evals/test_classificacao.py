@@ -17,7 +17,7 @@ TAXONOMIA = carregar_taxonomia()
 
 def test_dataset_sintetico_valido_e_cobre_taxonomia():
     casos = cls.carregar_dataset(cls.FONTES_ARQUIVO["sintetico"], TAXONOMIA)
-    assert len(casos) >= 165
+    assert len(casos) >= 165  # E2.4: ≥ 150 exigidos; o v0 já tinha 189 e a v1 passa de 230
     por_categoria = cls.contar_por_categoria(casos)
     assert set(por_categoria) == set(TAXONOMIA.categorias), (
         "toda categoria do placeholder tem casos"
@@ -105,10 +105,20 @@ def test_rodar_mede_latencia_com_relogio_injetado():
     assert [round(r.latencia_ms) for r in resultados] == [10, 10]
 
 
-def test_obter_classificador_cai_no_nulo_ate_e22():
-    for modo in ("jev", "llm", "nulo"):
-        _, nome = cls.obter_classificador(modo)
-        assert nome == "nulo"
+def test_obter_classificador_por_modo(monkeypatch: pytest.MonkeyPatch):
+    """E2.2 existe: `jev`/`llm` não caem mais no nulo — sem chave, recusam com ErroModo."""
+    from evals.classificacao.adaptador import ErroModo
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    assert cls.obter_classificador("nulo")[1] == "nulo"
+    classificador, nome = cls.obter_classificador("offline")
+    assert nome == "offline"
+    classificador.fechar()  # type: ignore[attr-defined]
+    with pytest.raises(ErroModo, match="TYPESAFE_API_KEY"):
+        cls.obter_classificador("jev")
+    with pytest.raises(ErroModo, match="OPENROUTER_API_KEY"):
+        cls.obter_classificador("llm")
     with pytest.raises(ValueError, match="modo"):
         cls.obter_classificador("mágico")
 
@@ -120,7 +130,7 @@ def test_cli_gera_relatorio_e_metricas(tmp_path: Path):
         [
             "--fonte",
             "sintetico",
-            "--llm",
+            "--offline",
             "--relatorio",
             str(md),
             "--baseline",
@@ -133,13 +143,12 @@ def test_cli_gera_relatorio_e_metricas(tmp_path: Path):
     assert codigo == 0
     assert md.exists()
     texto = md.read_text(encoding="utf-8")
-    assert texto.startswith("# Evals de classificação — sintetico/llm")
-    assert "placeholder" in texto and "TODO(E2.2)" in texto
+    assert texto.startswith("# Evals de classificação — sintetico/offline")
+    assert "placeholder" in texto
+    assert "exemplo offline com fakes, não é medição real" in texto.lower()
     metricas = json.loads(md.with_suffix(".json").read_text(encoding="utf-8"))
-    assert metricas["chave"] == "sintetico/llm"
-    assert (
-        metricas["metricas"]["categoria.cobertura_no_limiar"] == 0.0
-    )  # nulo nunca passa do limiar
+    assert metricas["chave"] == "sintetico/offline"
+    assert metricas["metricas"]["categoria.cobertura_no_limiar"] > 0.0  # o JEV simulado decide
     assert "latencia.p95_ms" in metricas["metricas"]
     assert any(linha.startswith("baseline sem métricas") for linha in linhas)
 
@@ -151,7 +160,7 @@ def test_cli_detecta_regressao_contra_baseline(tmp_path: Path):
             {
                 "versao": 1,
                 "tolerancia_pontos": 2.0,
-                "metricas": {"sintetico/llm": {"categoria.macro_f1": 50.0}},
+                "metricas": {"sintetico/offline": {"categoria.macro_f1": 99.0}},
             }
         ),
         encoding="utf-8",
@@ -240,10 +249,10 @@ def test_cli_atualiza_baseline_com_justificativa(tmp_path: Path):
     assert dado["atualizado_em"]
 
 
-def test_cli_recusa_baseline_quando_modo_cai_no_nulo(tmp_path: Path):
-    """`--llm` ainda cai no nulo (E2.2): gravar isso como referência seria mentira."""
+def test_cli_recusa_baseline_no_modo_offline(tmp_path: Path):
+    """O offline usa fakes: gravar isso como referência seria mentira (o baseline é de --jev/--llm)."""
     linhas: list[str] = []
-    args = ["--fonte", "sintetico", "--llm", "--relatorio", str(tmp_path / "r.md")]
+    args = ["--fonte", "sintetico", "--offline", "--relatorio", str(tmp_path / "r.md")]
     args += ["--baseline", str(tmp_path / "b.json"), "--max", "5"]
     codigo = cli.main(
         [*args, "--atualizar-baseline", "--justificativa", "x"], saida_texto=linhas.append

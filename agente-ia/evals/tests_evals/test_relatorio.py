@@ -168,3 +168,86 @@ def test_comparar_com_baseline():
     assert rel.comparar_com_baseline(atuais, {}, 2.0) == []
     assert rel.comparar_com_baseline({}, base, 2.0) == []  # métrica ausente não conta
     assert rel.comparar_com_baseline(atuais, base, 3.0) == []
+
+
+# ------------------------------------------------------------------ E2.4: pipeline e janelas
+def _resultado_com_extras(extras: dict[str, float | bool]) -> ResultadoCaso:
+    return ResultadoCaso(id="x", perguntas={}, latencia_ms=1.0, extras=extras)
+
+
+def test_agregar_pipeline_taxa_para_bool_e_media_para_numero():
+    resultados = [
+        _resultado_com_extras({"fallback_chamado": True, "estado_caracteres": 40.0}),
+        _resultado_com_extras({"fallback_chamado": False, "estado_caracteres": 60.0}),
+        _resultado_com_extras({"fallback_chamado": False, "estado_caracteres": 80.0}),
+        _resultado_com_extras({"fallback_chamado": False, "estado_caracteres": 20.0}),
+    ]
+    # 1 de 4 chamou o fallback; (40+60+80+20)/4 = 50
+    assert rel.agregar_pipeline(resultados) == {
+        "taxa_fallback_chamado": pytest.approx(0.25),
+        "media_estado_caracteres": pytest.approx(50.0),
+    }
+    assert rel.agregar_pipeline([]) == {}
+
+
+def test_markdown_mostra_banner_pipeline_e_secoes_extra():
+    r = rel.gerar_relatorio(
+        [
+            _resultado_com_extras({"esclarecimento": True}),
+            _resultado_com_extras({"esclarecimento": False}),
+        ],
+        {},
+        titulo="t",
+    )
+    from dataclasses import replace
+
+    texto = replace(
+        r,
+        banner="exemplo offline com fakes, não é medição real",
+        secoes_extra=("## Extra\n\nlinha",),
+    ).para_markdown()
+    assert texto.splitlines()[2] == "> **exemplo offline com fakes, não é medição real**"
+    assert "## Extra" in texto
+    assert "| taxa_esclarecimento | 50.0% |" in texto
+
+
+def _relatorio_com_f1(macro_f1_categoria: float, estado_medio: float = 100.0) -> rel.Relatorio:
+    # n=10 casos: `acertos` de 10 em A→A (resto A→B) dá macro-F1 conhecido; aqui só montamos o valor direto.
+    pergunta = rel.MetricasPergunta(
+        pergunta="categoria",
+        n=10,
+        acuracia=macro_f1_categoria,
+        macro_f1=macro_f1_categoria,
+        limiar=0.65,
+        cobertura_no_limiar=0.5,
+        acuracia_no_limiar=0.9,
+        ece=0.1,
+        calibracao=(),
+        classes=(),
+        confusao={},
+    )
+    return rel.Relatorio(
+        titulo="t",
+        n_casos=10,
+        perguntas=(pergunta,),
+        latencia_p50_ms=200.0,
+        latencia_p95_ms=300.0,
+        pipeline={"media_estado_caracteres": estado_medio},
+    )
+
+
+def test_comparar_janelas_marca_a_melhor_e_desempata_pela_menor():
+    tabela = rel.comparar_janelas(
+        {
+            10: _relatorio_com_f1(0.8),
+            1: _relatorio_com_f1(0.6),
+            3: _relatorio_com_f1(0.8),
+            6: _relatorio_com_f1(0.7),
+        }
+    )
+    linhas = [
+        linha for linha in tabela.splitlines() if linha.startswith("| ") and "---" not in linha
+    ]
+    rotulos = [linha.split("|")[1].strip() for linha in linhas[1:]]
+    assert rotulos == ["1", "**3**", "6", "10"]  # ordem crescente; empate 3×10 vai para a janela 3
+    assert "80.0%" in linhas[2] and "0.100" in linhas[2] and "| 100 |" in linhas[2]

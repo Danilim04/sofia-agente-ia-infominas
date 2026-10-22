@@ -56,8 +56,10 @@ from src.agent.nodes import (
     route_after_input_guardrail_com_classificacao,
     safe_response_node,
 )
-from src.agent.state import AgentState
+from src.agent.pii import CheckpointerMascarando, proteger_mensagem
+from src.agent.state import AgentState, instalar_protetor
 from src.classificacao import ServicoClassificacao
+from src.config import FOLGA_JEV_PADRAO_S, get_settings, validar_prazos
 
 
 def get_default_tools() -> list[BaseTool]:
@@ -87,6 +89,15 @@ def build_graph(
     classificador: ServicoClassificacao | None = None,
 ):
     """Compila o grafo. Defaults de produção podem ser sobrescritos para testes."""
+    # Boot: a ordem dos prazos do turno é pré-condição (erro claro, sem subir).
+    folga_jev = (
+        classificador.config.jev_timeout
+        if classificador is not None and classificador.jev is not None
+        else FOLGA_JEV_PADRAO_S
+    )
+    from src.tools.infodesk_tools import ABRIR_TIMEOUT_MINIMO_S
+
+    validar_prazos(get_settings(), folga_jev=folga_jev, espera_tool_minima=ABRIR_TIMEOUT_MINIMO_S)
     if llm is None:
         llm = get_llm()
     if tools is None:
@@ -94,6 +105,9 @@ def build_graph(
     if checkpointer is None:
         checkpointer = MemorySaver()
 
+    # Regra 5: CPF/contrato nunca entram em claro no estado (E3.7) — o redutor
+    # de `messages` passa cada mensagem nova por esta máscara.
+    instalar_protetor(proteger_mensagem)
     workflow: StateGraph = StateGraph(AgentState)
 
     workflow.add_node("entry", entry_node)
@@ -140,4 +154,8 @@ def build_graph(
     workflow.add_edge("output_guardrail", END)
     workflow.add_edge("safe_response", END)
 
+    # O envoltório mascara CPF/contrato também na entrada bruta que o LangGraph
+    # grava antes do redutor (E3.7); o saver original segue sendo o do chamador.
+    if not isinstance(checkpointer, CheckpointerMascarando):
+        checkpointer = CheckpointerMascarando(checkpointer)
     return workflow.compile(checkpointer=checkpointer)
