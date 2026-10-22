@@ -49,8 +49,51 @@ func TestDefaultsDoGateway(t *testing.T) {
 	if cfg.DepartamentoHumanoPadrao != "" || cfg.InfodeskWebhookSecret != "" || cfg.ToolsAPIToken != "" {
 		t.Fatalf("opcionais deviam ficar vazias: %+v", cfg)
 	}
-	if cfg.Port != "8080" || cfg.TurnoTeto != 45*time.Second || cfg.DebounceJanela != 8*time.Second || cfg.ReplyMaxChars != 900 {
+	if cfg.Port != "8080" || cfg.TurnoTeto != 105*time.Second || cfg.BrainTimeout != 80*time.Second || cfg.DebounceJanela != 8*time.Second || cfg.ReplyMaxChars != 900 {
 		t.Fatalf("defaults de transporte inesperados: %+v", cfg)
+	}
+}
+
+// TestOrdemDosPrazosDoTurno (E3.7): TURNO_TETO >= DEBOUNCE_TETO + BRAIN_TIMEOUT
+// é checado no boot (defaults: 105s >= 20s + 80s).
+func TestOrdemDosPrazosDoTurno(t *testing.T) {
+	casos := []struct {
+		nome, brain, teto, debounce string
+		ok                          bool
+	}{
+		{"defaults", "", "", "", true},
+		{"no limite", "80s", "100s", "", true},
+		{"folga", "90s", "130s", "", true},
+		{"formato composto", "1m20s", "105s", "", true},
+		{"um segundo abaixo", "80s", "99s", "", false},
+		{"so o brain sobe", "90s", "", "", false},
+		{"so o teto desce", "", "90s", "", false},
+		{"debounce maior come a folga", "", "", "30s", false},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			comObrigatorias(t)
+			t.Setenv("BRAIN_TIMEOUT", c.brain)
+			t.Setenv("TURNO_TETO", c.teto)
+			t.Setenv("DEBOUNCE_TETO", c.debounce)
+			cfg, err := Load()
+			if c.ok && err != nil {
+				t.Fatalf("esperava aceitar: %v", err)
+			}
+			if c.ok && c.nome == "defaults" && (cfg.BrainTimeout != 80*time.Second || cfg.TurnoTeto != 105*time.Second) {
+				t.Fatalf("defaults: brain=%v teto=%v", cfg.BrainTimeout, cfg.TurnoTeto)
+			}
+			if !c.ok {
+				if err == nil {
+					t.Fatal("esperava erro de configuração")
+				}
+				for _, v := range []string{"BRAIN_TIMEOUT", "TURNO_TETO", "DEBOUNCE_TETO"} {
+					if !strings.Contains(err.Error(), v) {
+						t.Fatalf("erro devia citar %s: %v", v, err)
+					}
+				}
+			}
+		})
 	}
 }
 

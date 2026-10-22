@@ -48,11 +48,10 @@ _BASE = "/tools/infodesk"
 #: (`toolsapi/abrir.go: abrirTeto`) e mais ≤ 10 s de folga própria para o handoff
 #: final (`posTeto`). Se a tool desistisse antes, o cliente ouviria "não consegui"
 #: de um chamado que o gateway ainda estava criando.
-#: ATENÇÃO: o prazo do turno inteiro (`BRAIN_TURNO_PRAZO`, 40 s) também paga o JEV
-#: e as duas chamadas do LLM; no pior caso do gateway ele estoura antes da resposta
-#: (o cliente recebe a falha transitória enquanto o ticket pode ter sido criado —
-#: o reconciliador e a chave de idempotência cobrem). Subir `BRAIN_TURNO_PRAZO`,
-#: `TURNO_TETO` e `BRAIN_TIMEOUT` juntos é decisão do orquestrador (nota no PR).
+#: O prazo do turno inteiro (`BRAIN_TURNO_PRAZO`, 70 s) também paga o JEV e as duas
+#: chamadas do LLM, e é validado no boot contra `INFODESK_TOOLS_TIMEOUT` (E3.7);
+#: se ainda assim estourar, o cliente recebe a falha transitória enquanto o ticket
+#: pode ter sido criado — o reconciliador e a chave de idempotência cobrem.
 ABRIR_ORCAMENTO_GATEWAY_S = 25.0
 ABRIR_FOLGA_POS_S = 10.0
 ABRIR_TIMEOUT_MINIMO_S = ABRIR_ORCAMENTO_GATEWAY_S + ABRIR_FOLGA_POS_S

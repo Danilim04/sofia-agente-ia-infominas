@@ -77,7 +77,13 @@ type Config struct {
 	BrainTimeout time.Duration
 	// TurnoTeto: prazo total do turno desde a MENSAGEM do cliente (coalescência
 	// + chamada ao cérebro + novas tentativas). Passado o teto, não há nova
-	// tentativa e a conversa é transferida (ZC-5). Default 45s.
+	// tentativa e a conversa é transferida (ZC-5). Default 105s. Regra de ordem
+	// (E3.7), checada no boot: TURNO_TETO >= DEBOUNCE_TETO + BRAIN_TIMEOUT (o teto
+	// conta desde a PRIMEIRA mensagem da rajada, então uma chamada ao cérebro
+	// começada no fim da coalescência ainda cabe inteira). BRAIN_TIMEOUT (80s)
+	// tem de ser MAIOR que o BRAIN_TURNO_PRAZO do cérebro (70s) — o gateway não o
+	// conhece; o cérebro confere do lado dele. A nova tentativa em falha
+	// transitória (2 s, 5 s) só cabe quando a rajada foi curta.
 	TurnoTeto time.Duration
 
 	// Alertas ao responsável (ZC-7): a decisão de QUANDO alertar é do pacote
@@ -226,8 +232,8 @@ func Load() (*Config, error) {
 	}{
 		{&cfg.InfodeskTimeout, "INFODESK_TIMEOUT", "15s"},
 		{&cfg.ReferenciaCacheTTL, "REFERENCIA_CACHE_TTL", "10m"},
-		{&cfg.BrainTimeout, "BRAIN_TIMEOUT", "60s"},
-		{&cfg.TurnoTeto, "TURNO_TETO", "45s"},
+		{&cfg.BrainTimeout, "BRAIN_TIMEOUT", "80s"},
+		{&cfg.TurnoTeto, "TURNO_TETO", "105s"},
 		{&cfg.DebounceJanela, "DEBOUNCE_JANELA", "8s"},
 		{&cfg.DebounceTeto, "DEBOUNCE_TETO", "20s"},
 		{&cfg.EventoIdadeMax, "EVENTO_IDADE_MAX", "10m"},
@@ -253,6 +259,17 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("CADASTRO_MAX_TENTATIVAS inválido (%q): use um inteiro de 1 a 10", v)
 		}
 		cfg.CadastroMaxTentativas = n
+	}
+
+	// Ordem dos prazos (E3.7): o teto do turno conta desde a primeira mensagem da
+	// rajada; a coalescência (DEBOUNCE_TETO) gasta parte dele antes de o cérebro ser
+	// chamado, e a chamada pode durar até BRAIN_TIMEOUT. Sem essa folga o gateway
+	// desistiria (e transferiria) enquanto o cérebro ainda trabalha.
+	if cfg.TurnoTeto < cfg.DebounceTeto+cfg.BrainTimeout {
+		return nil, fmt.Errorf("TURNO_TETO (%s) precisa ser maior ou igual a DEBOUNCE_TETO (%s) + "+
+			"BRAIN_TIMEOUT (%s) = %s; BRAIN_TIMEOUT, por sua vez, precisa ser maior que o "+
+			"BRAIN_TURNO_PRAZO do cérebro",
+			cfg.TurnoTeto, cfg.DebounceTeto, cfg.BrainTimeout, cfg.DebounceTeto+cfg.BrainTimeout)
 	}
 
 	if cfg.IdentLookupAmbiguo != IdentAmbiguoPedirCPF {
