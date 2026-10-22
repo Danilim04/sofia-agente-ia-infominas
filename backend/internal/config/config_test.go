@@ -172,7 +172,7 @@ var variaveisE36 = []string{
 	"RECONCILIA_ATIVO", "RECONCILIA_INTERVALO", "RECONCILIA_RETROATIVO", "RECONCILIA_ATRASO", "RECONCILIA_BACKOFF_MAX",
 	"RECONCILIA_SKEW", "BOT_TIMEOUT_HANDOFF", "TICKET_PENDENTE_TTL", "TICKET_FINISH_CONVERSA", "TICKET_RODAPE",
 	"TRANSFERIR_APOS_TICKET", "TICKET_DEDUP_JANELA", "DEDUP_CONSULTA_INFODESK", "IDENT_CONTRATO_RE", "IDENT_HASH_SAL",
-	"STRICT_TAXONOMIA", "TAXONOMIA_PATH",
+	"STRICT_TAXONOMIA", "TAXONOMIA_PATH", "TESTADORES_TELEFONES",
 }
 
 func limparE36(t *testing.T) {
@@ -311,5 +311,125 @@ func TestDuracoesDaE36ToleramEspacos(t *testing.T) {
 	}
 	if cfg.ReconciliaIntervalo != 30*time.Second || cfg.TicketPendenteTTL != 15*time.Minute {
 		t.Fatalf("valores: %+v", cfg)
+	}
+}
+
+// As variantes brasileiras do mesmo número têm a mesma chave (como o lookup do
+// Infodesk: com/sem +55, com/sem o 9º dígito); números diferentes, não.
+func TestChaveTelefoneVariantesBR(t *testing.T) {
+	mesmo := []string{
+		"+5531990000000", "5531990000000", "31990000000", "+553190000000", "553190000000", "3190000000",
+		" (31) 99000-0000 ", "+55 31 99000-0000", "+55 (31) 9000-0000",
+	}
+	quer, ok := ChaveTelefone(mesmo[0])
+	if !ok {
+		t.Fatalf("telefone válido recusado")
+	}
+	for _, s := range mesmo {
+		if k, ok := ChaveTelefone(s); !ok || k != quer {
+			t.Errorf("%q → %q ok=%v, queria %q", s, k, ok, quer)
+		}
+	}
+	for _, s := range []string{"+5531990000001", "+5511990000000", "+5531980000000", "+14155550123", "3133334444"} {
+		if k, ok := ChaveTelefone(s); !ok || k == quer {
+			t.Errorf("%q não pode casar com o número base: %q ok=%v", s, k, ok)
+		}
+	}
+	// Fixo (10 dígitos sem 9) e o mesmo com +55 casam entre si.
+	a, _ := ChaveTelefone("+553133334444")
+	b, _ := ChaveTelefone("3133334444")
+	if a != b {
+		t.Errorf("fixo com e sem +55: %q ≠ %q", a, b)
+	}
+	// Estrangeiro compara pelo E.164 inteiro.
+	if k, _ := ChaveTelefone("+14155550123"); k != "+14155550123" {
+		t.Errorf("estrangeiro: %q", k)
+	}
+}
+
+func TestChaveTelefoneRecusaLixo(t *testing.T) {
+	for _, s := range []string{"", "abc", "+55 31 9900", "12345678901234567", "31990000000x", "++5531990000000", "5531-9900-00a0",
+		"+5531990000", "+55311234567", "+55991234567", "031990000000", "+031990000000"} {
+		if k, ok := ChaveTelefone(s); ok {
+			t.Errorf("%q devia ser recusado, veio %q", s, k)
+		}
+	}
+}
+
+func TestTestadoresDesligadaPorPadrao(t *testing.T) {
+	comObrigatorias(t)
+	limparE36(t)
+	t.Setenv("TESTADORES_TELEFONES", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TestadoresAtivo() || len(cfg.Testadores()) != 0 {
+		t.Fatalf("lista vazia = desligada: %+v", cfg.TestadoresTelefones)
+	}
+	for _, a := range cfg.Avisos() {
+		if strings.Contains(a, "TESTADORES") {
+			t.Fatalf("desligada não avisa: %q", a)
+		}
+	}
+}
+
+func TestTestadoresLidosNormalizadosEComAviso(t *testing.T) {
+	comObrigatorias(t)
+	limparE36(t)
+	t.Setenv("TESTADORES_TELEFONES", "+5531990000000, 31990000000 ,+5511988887777,, ")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.TestadoresAtivo() || len(cfg.TestadoresTelefones) != 3 {
+		t.Fatalf("itens: %v", cfg.TestadoresTelefones)
+	}
+	if n := len(cfg.Testadores()); n != 2 { // as duas primeiras são o mesmo número
+		t.Fatalf("únicos = %d, queria 2", n)
+	}
+	var avisos string
+	for _, a := range cfg.Avisos() {
+		avisos += a + "\n"
+	}
+	if !strings.Contains(avisos, "TESTADORES_TELEFONES LIGADA com 2 número(s)") || !strings.Contains(avisos, "DEPARTAMENTO_HUMANO_PADRAO vazio") {
+		t.Fatalf("avisos: %q", avisos)
+	}
+	if strings.Contains(avisos, "990000000") || strings.Contains(avisos, "988887777") {
+		t.Fatalf("o aviso não pode listar os números: %q", avisos)
+	}
+}
+
+// Item que não é telefone derruba o boot e não vaza o valor.
+func TestTestadoresInvalidosFalhamNoBoot(t *testing.T) {
+	for _, v := range []string{"+5531990000000,maria", "123", "+5531990000000;+5511988887777", "+55319900x0000"} {
+		t.Run(v, func(t *testing.T) {
+			comObrigatorias(t)
+			limparE36(t)
+			t.Setenv("TESTADORES_TELEFONES", v)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "TESTADORES_TELEFONES") {
+				t.Fatalf("esperava erro citando TESTADORES_TELEFONES, veio %v", err)
+			}
+			if strings.Contains(err.Error(), "maria") || strings.Contains(err.Error(), "x0000") || strings.Contains(err.Error(), "5511988887777") {
+				t.Fatalf("o erro não pode repetir o valor: %v", err)
+			}
+		})
+	}
+}
+
+// Número truncado com +55 não pode virar o de outra pessoa (DDD 55 existe), e
+// DDD 55 completo continua válido, com e sem +55.
+func TestChaveTelefoneDDD55EFixoNaoColideComCelular(t *testing.T) {
+	a, ok1 := ChaveTelefone("+5555991234567")
+	b, ok2 := ChaveTelefone("55991234567")
+	c, ok3 := ChaveTelefone("5591234567")
+	if !ok1 || !ok2 || !ok3 || a != b || a != c {
+		t.Fatalf("DDD 55 completo: %q %q %q", a, b, c)
+	}
+	cel, _ := ChaveTelefone("31 9 3333-4444")
+	fixo, _ := ChaveTelefone("31 3333-4444")
+	if cel == fixo {
+		t.Fatalf("celular 931… e fixo 31… não podem colidir: %q", cel)
 	}
 }

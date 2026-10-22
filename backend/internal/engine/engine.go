@@ -205,6 +205,13 @@ func (e *Engine) processarLote(ctx context.Context, lote []Inbound) {
 		return
 	}
 
+	// Homologação em produção (E3.9): com TESTADORES_TELEFONES ligada, quem não
+	// está nela vai direto a um atendente, antes de qualquer outra regra.
+	if tel := e.telefoneDoLote(ctx, lote); foraDoPiloto(e.cfg, tel) {
+		e.transferirForaDoPiloto(ctx, convID, tel, len(lote))
+		return
+	}
+
 	// Mídia na rajada: o bot não lê áudio/imagem/arquivo — avisa o cliente e
 	// transfere, sem cérebro. Duas mensagens de mídia (rótulo "[imagem]" +
 	// arquivo) caem no mesmo lote ou, se separadas, a 2ª acha a conversa já

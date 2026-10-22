@@ -127,6 +127,7 @@ func run() int {
 	// taxonomia e reconciliador (alerta.Saude; sem segredo nem PII).
 	saude := novaSaude(st, sondaReferencia, sondaFeed, fotoTax, cfg.ReconciliaAtivo)
 	saude.Iniciado = time.Now()
+	saude.Testadores = len(cfg.Testadores()) // E3.9: só a contagem, nunca os números
 	mux.HandleFunc("/health", saude.Handler())
 
 	// API interna de tools que o cérebro Python chama durante o loop do
