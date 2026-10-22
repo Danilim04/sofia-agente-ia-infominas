@@ -23,10 +23,12 @@ import (
 // (senão o ticket existiria no Infodesk sem linha `aberto` aqui).
 const abrirTeto = 25 * time.Second
 
-// Orçamento: o cérebro espera ~30 s por tool (INFODESK_TOOLS_TIMEOUT). Até o
-// POST e a reconciliação valem os 25 s acima; o handoff final tem a sua folga
-// (posTeto) para a conversa nunca ficar sem atendente por falta de prazo, e o
-// vínculo do solicitante (best-effort) não pode gastar mais que vinculoTeto.
+// Orçamento: o cérebro espera pelo `abrir` até 35 s (25 s + a folga de 10 s do
+// handoff; piso próprio da tool, acima do INFODESK_TOOLS_TIMEOUT de 30 s), dentro
+// do BRAIN_TURNO_PRAZO de 70 s do turno (E3.7). Até o POST e a reconciliação
+// valem os 25 s acima; o handoff final tem a sua folga (posTeto) para a conversa
+// nunca ficar sem atendente por falta de prazo, e o vínculo do solicitante
+// (best-effort) não pode gastar mais que vinculoTeto.
 const (
 	posTeto     = 10 * time.Second
 	vinculoTeto = 5 * time.Second

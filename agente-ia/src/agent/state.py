@@ -1,8 +1,11 @@
 """Estado compartilhado do grafo da Sofia.
 
-`messages` usa o reducer `add_messages` do LangGraph — qualquer nó que
-retornar `{"messages": [...]}` *acrescenta* à lista existente, com
-deduplicação por id quando aplicável. Os demais campos são substituídos
+`messages` usa o reducer `add_messages_protegendo` (gancho para `src/agent/pii.py`): o
+`add_messages` do LangGraph — qualquer nó que retornar `{"messages": [...]}`
+*acrescenta* à lista existente, com deduplicação por id quando aplicável — que
+antes mascara CPF/contrato em claro (texto da `HumanMessage` e args de
+`tool_calls`), de modo que o checkpoint e o trace nunca os guardam (E3.7; regra
+5 do CLAUDE.md). O valor em claro vive só num cofre em memória durante o turno. Os demais campos são substituídos
 (reducer default).
 
 Campos que PERSISTEM entre turnos (checkpointer por `conversation_id`):
@@ -51,16 +54,46 @@ nó `retrieve`: vive APENAS no system prompt do turno atual — nunca entra em
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from typing import Annotated, Any, NotRequired, TypedDict
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AnyMessage, BaseMessage
+from langchain_core.messages.utils import convert_to_messages
 from langgraph.graph.message import add_messages
+
+
+def _sem_protecao(mensagem: BaseMessage) -> BaseMessage:
+    return mensagem
+
+
+_protetor: list[Callable[[BaseMessage], BaseMessage]] = [_sem_protecao]
+
+
+def instalar_protetor(protetor: Callable[[BaseMessage], BaseMessage]) -> None:
+    """Define o que o redutor faz com cada mensagem NOVA antes de ela virar estado.
+
+    `build_graph` instala `pii.proteger_mensagem` (CPF/contrato mascarados). O
+    gancho existe porque `src.agent.state` fica abaixo de `src.identity` na
+    arquitetura de camadas (import-linter): a máscara mora em `src.agent.pii`.
+    """
+    _protetor[0] = protetor
+
+
+def add_messages_protegendo(
+    left: Sequence[AnyMessage] | AnyMessage | None,
+    right: Sequence[AnyMessage] | AnyMessage,
+    **kw: Any,
+) -> list[AnyMessage]:
+    """`add_messages` que passa cada mensagem nova pelo protetor instalado."""
+    novas = right if isinstance(right, list | tuple) else [right]
+    protegidas = [_protetor[0](m) for m in convert_to_messages(list(novas))]  # type: ignore[arg-type]
+    return add_messages(left or [], protegidas, **kw)  # type: ignore[arg-type,return-value]
 
 
 class AgentState(TypedDict):
     """Estado do grafo. `messages` é obrigatório; os demais são opcionais."""
 
-    messages: Annotated[list[BaseMessage], add_messages]
+    messages: Annotated[list[BaseMessage], add_messages_protegendo]
 
     telefone: NotRequired[str]
     conversation_id: NotRequired[str]

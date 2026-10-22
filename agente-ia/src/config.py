@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -50,16 +51,25 @@ class Settings(BaseSettings):
 
     llm_temperature: float = Field(0.2, alias="LLM_TEMPERATURE")
     # Timeout por chamada de LLM. Com 1 retry do cliente e 2 chamadas por turno
-    # (classificador + agente) precisa caber no prazo do turno abaixo — 45s
-    # estourava o BRAIN_TIMEOUT do gateway (60s) e o cliente recebia erro
-    # enquanto o cérebro ainda trabalhava (e até abria chamado depois).
+    # (classificador + agente) precisa caber no prazo do turno abaixo.
     llm_timeout: float = Field(20.0, alias="LLM_TIMEOUT")
     # Prazo TOTAL do turno no cérebro (segundos): `processar_chat` interrompe o
-    # grafo e devolve falha transitória ao gateway. Tem de ser MENOR que o
-    # BRAIN_TIMEOUT do gateway (60s) e que o teto do turno dele (TURNO_TETO,
-    # 45s desde a mensagem do cliente): quem desiste primeiro é o cérebro, com
-    # classe e ID — nunca o gateway no escuro.
-    brain_turno_prazo: float = Field(40.0, alias="BRAIN_TURNO_PRAZO")
+    # grafo e devolve falha transitória ao gateway. Regra de ordem (E3.7), checada
+    # no boot por `validar_prazos`:
+    #   TURNO_TETO (105s) >= DEBOUNCE_TETO (20s) + BRAIN_TIMEOUT (80s)   [gateway]
+    #   BRAIN_TIMEOUT (80s) > BRAIN_TURNO_PRAZO (70s)
+    #                       > INFODESK_TOOLS_TIMEOUT (30s) + JEV
+    # Quem desiste primeiro é o cérebro, com classe e ID — nunca o gateway no
+    # escuro. O turno paga JEV, duas chamadas de LLM e a tool mais lenta
+    # (`abrir_chamado`, que espera até 35s). `validar_prazos` garante o piso da tool
+    # mais lenta + JEV; as chamadas de LLM (LLM_TIMEOUT, 1 retry cada) não entram na
+    # conta — no pior caso extremo o próprio prazo do turno as interrompe.
+    brain_turno_prazo: float = Field(70.0, alias="BRAIN_TURNO_PRAZO")
+    # Prazos do GATEWAY, lidos só para conferir a ordem acima quando o ambiente
+    # (.env/compose compartilhado) os traz; ausentes, o cérebro confere só o que
+    # conhece. Formato Go: "90s", "1m30s", "1500ms" (unidade obrigatória, como no Go).
+    brain_timeout_gateway: str = Field("", alias="BRAIN_TIMEOUT")
+    turno_teto_gateway: str = Field("", alias="TURNO_TETO")
     # Teto de tokens de SAÍDA por chamada. Sem ele, o OpenRouter reserva o máximo
     # do modelo (65.536 tokens) a cada chamada e recusa com 402 quando o saldo
     # não cobre a reserva — mesmo que a resposta real caiba em poucos tokens.
@@ -106,3 +116,77 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]
+
+
+class ConfigPrazosInvalida(ValueError):
+    """A ordem dos prazos do turno está quebrada (erro de configuração no boot)."""
+
+
+#: Folga mínima do turno para o JEV quando o chamador não informa o `JEV_TIMEOUT`.
+FOLGA_JEV_PADRAO_S = 2.0
+
+_DURACAO_GO = re.compile(r"(\d+(?:\.\d+)?)(ms|s|m|h)")
+_UNIDADE_S = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}
+
+
+def duracao_em_segundos(texto: str, variavel: str) -> float:
+    """ "90s"/"1m30s"/"1500ms" → segundos; inválido → erro citando a variável.
+
+    Mesma regra do gateway (`time.ParseDuration`): número sem unidade só vale "0".
+    """
+    bruto = texto.strip()
+    if bruto == "0":
+        return 0.0
+    partes = _DURACAO_GO.findall(bruto)
+    if not partes or "".join(n + u for n, u in partes) != bruto:
+        raise ConfigPrazosInvalida(
+            f"{variavel} inválido ({texto!r}): use duração como 90s ou 1m30s"
+        )
+    return sum(float(n) * _UNIDADE_S[u] for n, u in partes)
+
+
+def validar_prazos(
+    settings: Settings, *, folga_jev: float = FOLGA_JEV_PADRAO_S, espera_tool_minima: float = 0.0
+) -> None:
+    """Confere a ordem dos prazos do turno; violação levanta `ConfigPrazosInvalida`.
+
+    - cérebro: `BRAIN_TURNO_PRAZO` > espera da tool + folga do JEV (o turno paga a
+      tool e o JEV; sem folga, a tool consome o turno inteiro). A espera da tool é
+      `INFODESK_TOOLS_TIMEOUT` ou, se maior, o piso próprio de `abrir_chamado`
+      (`espera_tool_minima`);
+    - com `BRAIN_TIMEOUT` no ambiente: `BRAIN_TIMEOUT` > `BRAIN_TURNO_PRAZO`;
+    - com `TURNO_TETO` no ambiente: `TURNO_TETO` > `BRAIN_TURNO_PRAZO` (e >
+      `BRAIN_TIMEOUT`, se ambos). O gateway confere `TURNO_TETO >= DEBOUNCE_TETO +
+      BRAIN_TIMEOUT`.
+    """
+    prazo = settings.brain_turno_prazo
+    espera_tool = max(settings.infodesk_tools_timeout, espera_tool_minima)
+    piso = espera_tool + folga_jev
+    if prazo <= piso:
+        raise ConfigPrazosInvalida(
+            f"BRAIN_TURNO_PRAZO ({prazo:g}s) precisa ser maior que INFODESK_TOOLS_TIMEOUT "
+            f"({espera_tool:g}s, com o piso do abrir_chamado) + folga do JEV ({folga_jev:g}s)"
+        )
+    teto = (
+        duracao_em_segundos(settings.turno_teto_gateway, "TURNO_TETO")
+        if settings.turno_teto_gateway.strip()
+        else None
+    )
+    brain = (
+        duracao_em_segundos(settings.brain_timeout_gateway, "BRAIN_TIMEOUT")
+        if settings.brain_timeout_gateway.strip()
+        else None
+    )
+    if brain is not None and brain <= prazo:
+        raise ConfigPrazosInvalida(
+            f"BRAIN_TIMEOUT ({brain:g}s) precisa ser maior que BRAIN_TURNO_PRAZO ({prazo:g}s): "
+            "o cérebro tem de desistir antes de o gateway cortar a chamada"
+        )
+    if teto is not None and teto <= prazo:
+        raise ConfigPrazosInvalida(
+            f"TURNO_TETO ({teto:g}s) precisa ser maior que BRAIN_TURNO_PRAZO ({prazo:g}s)"
+        )
+    if brain is not None and teto is not None and teto <= brain:
+        raise ConfigPrazosInvalida(
+            f"TURNO_TETO ({teto:g}s) precisa ser maior que BRAIN_TIMEOUT ({brain:g}s)"
+        )
