@@ -70,7 +70,7 @@ func run() int {
 		log.Warn("DEPARTAMENTO_HUMANO_PADRAO vazio: o handoff vai sem departamento (distribuição automática)")
 	}
 
-	brainClient := brain.NewClient(cfg.BrainBaseURL, cfg.BrainTimeout)
+	brainClient := brain.NewClient(cfg.BrainBaseURL, cfg.BrainTimeout).ComToken(cfg.ToolsAPIToken)
 	eng := engine.New(cfg, engine.NovoTransporteInfodesk(idk), brainClient, st, log)
 	// Contexto-raiz dos workers de conversa (coalescência/fila por conversa).
 	eng.Start(ctx)

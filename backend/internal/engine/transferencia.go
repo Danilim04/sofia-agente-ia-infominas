@@ -217,7 +217,7 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 	}
 	if err := e.handoffComRetry(ctx, convID, dept, nota); err != nil {
 		e.log.Error("transferir: handoff falhou; conversa fica muda localmente e o vigia do reconciliador repete",
-			"id_ocorrencia", id, "conversation_id", convID, "departamento", dept, "err", err)
+			"id_ocorrencia", id, "conversation_id", convID, "departamento", dept, "err", DescreverErro(err))
 		texto := "Ocorrência " + id + " (origem " + t.Origem + "): o Infodesk não aceitou o handoff. A Sofia parou de responder nessa conversa; o cliente pode estar sem ninguém. O reconciliador vai repetir o handoff. Veja o log do gateway (a ocorrência está nos logs sofia_falha ou transferencia)."
 		if !e.marcarHandoffPendente(ctx, convID, t.Origem, id, dept, nota) {
 			texto = "Ocorrência " + id + " (origem " + t.Origem + "): o Infodesk não aceitou o handoff e a marca para repeti-lo não foi gravada. A Sofia parou de responder nessa conversa e NINGUÉM vai repetir o handoff sozinho: transfira à mão. Veja o log do gateway."
@@ -258,7 +258,7 @@ func (e *Engine) ReenviarHandoff(ctx context.Context, h store.HandoffPendente) e
 	}
 	if _, err := e.st.LimparHandoffPendente(context.WithoutCancel(ctx), h.ConversationID); err != nil {
 		e.log.Error("handoff repetido confirmado, mas não consegui apagar a marca (o vigia repete uma vez a mais, sem efeito)",
-			"conversation_id", h.ConversationID, "id_ocorrencia", h.IDOcorrencia, "err", err)
+			"conversation_id", h.ConversationID, "id_ocorrencia", h.IDOcorrencia, "err", DescreverErro(err))
 	}
 	e.log.Info("handoff repetido e confirmado", "conversation_id", h.ConversationID, "id_ocorrencia", h.IDOcorrencia, "tentativas_antes", h.Tentativas)
 	return nil
@@ -278,7 +278,7 @@ func (e *Engine) handoffComRetry(ctx context.Context, convID, dept, nota string)
 			return err
 		}
 		e.log.Warn("handoff transitório falhou; nova tentativa",
-			"conversation_id", convID, "tentativa", tentativa+1, "err", err)
+			"conversation_id", convID, "tentativa", tentativa+1, "err", DescreverErro(err))
 		if !e.dormir(ctx, e.esperasEnvio[tentativa]) {
 			return err
 		}

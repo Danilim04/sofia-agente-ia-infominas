@@ -75,6 +75,25 @@ func ComoErro(err error) (*Erro, bool) {
 type Client struct {
 	baseURL string
 	http    *http.Client
+	token   string // X-Brain-Token; vazio = não envia o header
+}
+
+// HeaderToken é o header com que o gateway se identifica ao cérebro (E4.5, I7).
+// O valor é o TOOLS_API_TOKEN, o mesmo segredo compartilhado do X-Tools-Token.
+// O cérebro que ainda não o exige simplesmente o ignora.
+const HeaderToken = "X-Brain-Token"
+
+// ComToken faz o cliente enviar HeaderToken em TODA chamada ao cérebro (/chat e
+// /encerrar-episodio). Devolve o próprio cliente.
+func (c *Client) ComToken(token string) *Client {
+	c.token = token
+	return c
+}
+
+func (c *Client) autenticar(r *http.Request) {
+	if c.token != "" {
+		r.Header.Set(HeaderToken, c.token)
+	}
 }
 
 // NewClient cria o cliente do cérebro.
@@ -189,6 +208,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 		return nil, &Erro{Classe: ClasseDefinitiva, Causa: "requisição ao cérebro inválida", Err: err}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	c.autenticar(httpReq)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -235,6 +255,7 @@ func (c *Client) EncerrarEpisodio(ctx context.Context, conversationID string) er
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	c.autenticar(httpReq)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {

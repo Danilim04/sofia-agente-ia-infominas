@@ -468,25 +468,7 @@ func camposCitados(mensagem string) []string {
 
 // descreverErro resume um erro do Infodesk para log SEM a mensagem do servidor
 // (que pode ecoar dado do cliente): tipo, status HTTP e `code`.
-func descreverErro(err error) string {
-	var he *infodesk.HTTPError
-	var re *infodesk.ErroRede
-	var rp *infodesk.ErroResposta
-	switch {
-	case errors.As(err, &he):
-		return "http " + strconv.Itoa(he.Status) + " " + he.Code + " " + he.Rota
-	case errors.As(err, &re):
-		return "rede " + re.Rota
-	case errors.As(err, &rp):
-		return "resposta inválida " + rp.Rota
-	case errors.Is(err, infodesk.ErrTicketSemNumero):
-		return "ticket sem número na resposta"
-	case errors.Is(err, context.DeadlineExceeded):
-		return "prazo esgotado"
-	default:
-		return "erro interno"
-	}
-}
+func descreverErro(err error) string { return engine.DescreverErro(err) }
 
 // registrarRecusa grava `falha` na linha do ticket quando o Infodesk recusou o
 // POST de forma definitiva (4xx): nada foi criado, então um segundo `abrir` com

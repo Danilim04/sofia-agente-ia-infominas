@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -308,5 +309,26 @@ func TestMsgChamadoAbertoNaPersona(t *testing.T) {
 		if strings.Contains(strings.ToLower(m), proibido) {
 			t.Fatalf("a Sofia não promete prazo (%q): %q", proibido, m)
 		}
+	}
+}
+
+// M1 (E4.5): o erro do Infodesk (que pode ecoar dado do cliente na mensagem) não
+// vai cru para o log — só tipo, status, code e rota.
+func TestLogDoHandoffQueFalhaNaoTrazAMensagemDoServidor(t *testing.T) {
+	e, _, tr, _ := engineCompleta(t)
+	comRelogioFalso(e)
+	var buf strings.Builder
+	e.log = slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	tr.handoffErr = &infodesk.HTTPError{Status: 400, Code: infodesk.CodeValidationError, Rota: "/conversations/x/handoff", Mensagem: "CPF 529.982.247-25 de Maria Souza inválido"}
+	tr.enviarErr = &infodesk.HTTPError{Status: 400, Code: infodesk.CodeValidationError, Rota: "/conversations/x/messages", Mensagem: "telefone +5531999990000 inválido"}
+	e.TransferirParaHumano(context.Background(), "c-m1", Transferencia{Origem: OrigemCliente})
+	log := buf.String()
+	for _, vazou := range []string{"529.982.247-25", "Maria Souza", "+5531999990000"} {
+		if strings.Contains(log, vazou) {
+			t.Fatalf("o log vazou %q:\n%s", vazou, log)
+		}
+	}
+	if !strings.Contains(log, "http 400 VALIDATION_ERROR /conversations/x/handoff") {
+		t.Fatalf("o log descreve o erro por tipo/status/code/rota:\n%s", log)
 	}
 }

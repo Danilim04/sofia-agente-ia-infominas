@@ -455,7 +455,7 @@ func (e *Engine) send(ctx context.Context, convID, content string) bool {
 					e.marcarEstado(ctx, convID, store.EstadoEncerrada)
 					e.EncerrarEpisodio(ctx, convID)
 				} else {
-					e.log.Error("enviar mensagem", "conversation_id", convID, "err", err)
+					e.log.Error("enviar mensagem", "conversation_id", convID, "err", DescreverErro(err))
 				}
 				return false
 			}
@@ -475,7 +475,7 @@ func (e *Engine) enviarParte(ctx context.Context, convID, parte string) error {
 			return err
 		}
 		e.log.Warn("envio transitório falhou; nova tentativa",
-			"conversation_id", convID, "tentativa", tentativa+1, "err", err)
+			"conversation_id", convID, "tentativa", tentativa+1, "err", DescreverErro(err))
 		if !e.dormir(ctx, e.esperasEnvio[tentativa]) {
 			return err
 		}
