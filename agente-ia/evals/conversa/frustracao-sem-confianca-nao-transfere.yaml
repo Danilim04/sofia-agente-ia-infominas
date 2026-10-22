@@ -1,0 +1,15 @@
+# Comportamento: frustração 3 com confiança baixa (< 0.6) não dispara transferência.
+# Negativo: sem transferência; segue com tom cuidadoso.
+id: conversa-025
+descricao: o limiar de confiança da frustração evita transferência por sinal fraco
+sessao: {telefone: "+5531999990025", nome_contato: "Mari", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.9], categoria: [lentidao, 0.85], prioridade: [1, 0.7], frustracao: [3, 0.4], malicioso: 0.02, fora_de_escopo: 0.02}
+turnos:
+  - cliente: "putz, de novo essa lentidão"
+    llm:
+      - texto: "Poxa, que chato! Há quanto tempo está assim?"
+    espera:
+      transfere: false
+      nao_chama: [abrir_chamado]
+      prompt_contem: ["impaciente ou irritado"]

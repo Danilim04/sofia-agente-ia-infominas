@@ -1,0 +1,32 @@
+# Comportamento: o gateway acusa chamado aberto; a Sofia mostra o número e não abre outro.
+# Negativo: nenhuma proposta no estado; o 'é o mesmo' seguinte não abre (não há proposta).
+id: conversa-041
+descricao: chamado já aberto sobre o assunto é apresentado em vez de duplicado
+sessao: {telefone: "+5531999990041", nome_contato: "Yara", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+  - {intencao: [status_chamado, 0.92], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet continua sem funcionar desde ontem"
+    gateway: {ticket/preparar: erro-chamado_aberto}
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Internet sem funcionar desde ontem", descricao: "Cliente relata que a internet continua sem funcionar desde ontem."}
+      - texto: "Vi aqui que você já tem o chamado 48213 aberto sobre isso (internet sem conexão desde ontem à noite). É o mesmo problema?"
+    espera:
+      chama: [preparar_abertura_chamado]
+      nao_chama: [abrir_chamado]
+      proposta_no_estado: false
+      contem: ["48213"]
+      nao_contem: ["chamado_aberto"]
+  - cliente: "é esse mesmo"
+    llm:
+      - tool: abrir_chamado
+        args: {}
+      - tool: consultar_status_chamado
+        args: {numero: "48213"}
+      - texto: "Então vamos acompanhar por ele, o 48213. Por aqui não consigo ver o andamento; se quiser, passo você para um atendente."
+    espera:
+      chama: [consultar_status_chamado]
+      nao_chama: [abrir_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/ticket/abrir]

@@ -1,0 +1,39 @@
+# Comportamento: 'esse' (dêitico) não é confirmação; só 'sim/ok/pode abrir' abre.
+# Negativo: mesmo que o LLM tente abrir, a política recusa e o gateway não recebe nada.
+id: conversa-032
+descricao: o dêitico esse não confirma a proposta e o sim do turno seguinte confirma
+sessao: {telefone: "+5531999990032", nome_contato: "Rosa", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+  - {intencao: [outro, 0.8], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [confirmacao, 0.95], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar o modem", descricao: "Cliente relata queda total da internet; já reiniciou o modem."}
+      - texto: "Entendi, ficar sem internet atrapalha mesmo. Vou registrar assim: sem conexão mesmo depois de reiniciar o modem. Posso abrir o chamado?"
+    espera: {chama: [preparar_abertura_chamado], nao_chama: [abrir_chamado], proposta_no_estado: true, contem: ["Posso abrir"]}
+  - cliente: "esse"
+    llm:
+      - tool: abrir_chamado
+        args: {}
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar o modem", descricao: "Cliente relata queda total da internet; já reiniciou o modem."}
+      - texto: "Só para eu não abrir nada errado: o resumo é sem conexão mesmo depois de reiniciar o modem. Posso abrir o chamado?"
+    espera:
+      chama: [preparar_abertura_chamado]
+      nao_chama: [abrir_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/ticket/abrir]
+      proposta_no_estado: true
+      contem: ["Posso abrir"]
+  - cliente: "sim"
+    llm:
+      - tool: abrir_chamado
+        args: {}
+      - texto: "Pronto! Seu chamado é o 48213. A equipe responsável assume daqui. 😊"
+    espera:
+      chama: [abrir_chamado]
+      gateway_recebeu: {endpoint: /tools/infodesk/ticket/abrir, chave_idempotencia: "*"}
+      contem: ["48213"]
+      nao_contem: ["prazo"]

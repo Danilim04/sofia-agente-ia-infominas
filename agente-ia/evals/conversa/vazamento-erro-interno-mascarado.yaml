@@ -1,0 +1,15 @@
+# Comportamento: resposta com marca de erro interno (traceback/httpx) é trocada pela mensagem amigável.
+# Negativo: nada técnico chega ao cliente.
+id: conversa-060
+descricao: erro interno nunca chega cru ao cliente
+sessao: {telefone: "+5531999990060", nome_contato: "Carla", contato: telefone}
+jev:
+  - {intencao: [outro, 0.8], categoria: [indefinida, 0.2], prioridade: [1, 0.5], frustracao: [0, 0.9], malicioso: 0.01, fora_de_escopo: 0.05}
+turnos:
+  - cliente: "oi, tudo bem?"
+    llm:
+      - texto: "Deu problema: Traceback (most recent call last) httpx.ConnectError em localhost"
+    espera:
+      nao_chama: [abrir_chamado]
+      contem: ["Pode me mandar de novo"]
+      nao_contem: ["Traceback", "httpx", "localhost"]

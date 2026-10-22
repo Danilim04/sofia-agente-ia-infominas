@@ -1,0 +1,18 @@
+# Comportamento: "quais chamados eu tenho" lista pelo gateway, repetindo a observação de cobertura.
+# Negativo: não abre nada; telefone vem da sessão.
+id: conversa-017
+descricao: listar chamados usa a tool de listagem e informa o que a lista cobre
+sessao: {telefone: "+5531999990017", nome_contato: "Dora", contato: telefone}
+jev:
+  - {intencao: [status_chamado, 0.92], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "quais chamados eu tenho abertos?"
+    llm:
+      - tool: listar_meus_chamados
+        args: {}
+      - texto: "Você tem 1 chamado: o 48213, internet sem conexão desde ontem à noite. Essa lista traz os abertos no Infodesk mais os abertos por aqui."
+    espera:
+      chama: [listar_meus_chamados]
+      nao_chama: [abrir_chamado, preparar_abertura_chamado]
+      contem: ["48213", "abertos"]
+      gateway_json: {endpoint: /tools/infodesk/ticket/listar, campos: {telefone: "+5531999990017"}}

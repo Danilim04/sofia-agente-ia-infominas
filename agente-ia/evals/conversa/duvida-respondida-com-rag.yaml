@@ -1,0 +1,21 @@
+# Comportamento: dúvida geral é respondida com o que o RAG trouxe, sem abrir chamado.
+# Negativo: a resposta final não cita fonte/arquivo (o guardrail remove a citação que o LLM escreveu).
+# O chunk é fictício (base de teste), não é conteúdo oficial da Infominas.
+id: conversa-011
+descricao: dúvida é respondida com o trecho do RAG embrulhado como dado, e a citação não chega ao cliente
+sessao: {telefone: "+5531999990011", nome_contato: "Paulo", contato: telefone}
+jev:
+  - {intencao: [duvida_informacao, 0.9], categoria: [indefinida, 0.3], prioridade: [1, 0.6], frustracao: [0, 0.9], malicioso: 0.02, fora_de_escopo: 0.05}
+turnos:
+  - cliente: "como eu reinicio o roteador direito?"
+    rag:
+      - {source: guia-roteador.md, secao: Reiniciar, texto: "Para reiniciar o roteador, desligue da tomada, espere 30 segundos e ligue de novo."}
+    llm:
+      - texto: "Claro! Desligue o roteador da tomada, espere uns 30 segundos e ligue de novo. (fonte: guia-roteador.md, seção Reiniciar) Se continuar sem conexão, me conta que eu preparo um chamado."
+    espera:
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      transfere: false
+      contem: ["30 segundos"]
+      nao_contem: ["fonte", "guia-roteador"]
+      prompt_contem: ['<documento_externo source="guia-roteador.md"', "Trechos da base de conhecimento"]
+      estado: {tentou_rag: true, fontes_usadas: ["guia-roteador.md — Reiniciar"]}

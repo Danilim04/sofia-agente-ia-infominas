@@ -1,0 +1,19 @@
+# Comportamento: número inexistente pede conferência; o código de erro do gateway não vaza.
+# Negativo: não abre chamado para o número que não existe.
+id: conversa-015
+descricao: chamado não encontrado pede para conferir o número
+sessao: {telefone: "+5531999990015", nome_contato: "Bia", contato: telefone}
+jev:
+  - {intencao: [status_chamado, 0.92], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "como está o chamado 99999?"
+    gateway: {ticket/consultar: erro-nao_encontrado}
+    llm:
+      - tool: consultar_status_chamado
+        args: {numero: "99999"}
+      - texto: "Não achei um chamado com esse número. Pode conferir os dígitos e me mandar de novo?"
+    espera:
+      chama: [consultar_status_chamado]
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      contem: ["conferir"]
+      nao_contem: ["nao_encontrado"]

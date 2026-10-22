@@ -1,0 +1,19 @@
+# Comportamento: o LLM pode pedir transferência pela tool; sessão e motivo chegam corretos ao gateway.
+# Negativo: nenhum chamado é preparado.
+id: conversa-020
+descricao: tool de transferência com motivo válido chega ao gateway com a conversa da sessão
+sessao: {telefone: "+5531999990020", nome_contato: "Nando", contato: telefone}
+jev:
+  - {intencao: [duvida_informacao, 0.85], categoria: [indefinida, 0.4], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.05, fora_de_escopo: 0.1}
+turnos:
+  - cliente: "dá pra me passar a senha do wifi do vizinho?"
+    llm:
+      - tool: transferir_para_atendente
+        args: {motivo: fora_do_escopo}
+      - texto: "Senhas de outras pessoas eu não consigo informar. Já estou passando você para um atendente, que vai te orientar."
+    espera:
+      chama: [transferir_para_atendente]
+      transfere: true
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      nao_contem: ["a senha é"]
+      gateway_json: {endpoint: /tools/infodesk/conversa/transferir, campos: {motivo: fora_do_escopo, conversation_id: conv-conversa-020}}

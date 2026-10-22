@@ -1,0 +1,39 @@
+# Comportamento: CPF válido é registrado; o dado em claro vai só ao gateway (estado/prompt têm só o mascarado).
+# Negativo: o CPF em claro não aparece no estado persistido nem no system prompt do turno seguinte.
+id: conversa-038
+descricao: CPF válido identifica o cliente sem sobrar em claro no estado nem no prompt
+sessao: {telefone: "+5531999990038", nome_contato: "Telma", contato: null}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+  - {intencao: [outro, 0.8], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [reclamacao_problema, 0.9], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    llm:
+      - texto: "Poxa, que chato! Para registrar o chamado, me passa seu CPF ou o número do contrato?"
+    espera:
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      contem: ["CPF"]
+  - cliente: "meu cpf é 529.982.247-25"
+    llm:
+      - tool: informar_identificacao
+        args: {cpf: "529.982.247-25"}
+      - texto: "Obrigada! Já confirmei seu cadastro. Desde quando está sem conexão?"
+    espera:
+      chama: [informar_identificacao]
+      nao_chama: [preparar_abertura_chamado, abrir_chamado]
+      gateway_json: {endpoint: /tools/infodesk/contato/identificar, campos: {cpf: "52998224725", telefone: "+5531999990038"}}
+      estado: {identificacao: {forma: cpf}}
+      estado_nao_contem: ["52998224725", "529.982.247-25"]
+  - cliente: "desde ontem à noite"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão desde ontem à noite", descricao: "Cliente relata queda total desde ontem à noite; já reiniciou o modem."}
+      - texto: "Vou registrar assim: sem conexão desde ontem à noite. Posso abrir o chamado?"
+    espera:
+      chama: [preparar_abertura_chamado]
+      nao_chama: [abrir_chamado]
+      proposta_no_estado: true
+      prompt_contem: ["já validada pelo sistema"]
+      prompt_nao_contem: ["52998224725", "529.982.247-25", "NÃO informada"]
+      estado_nao_contem: ["52998224725", "529.982.247-25"]

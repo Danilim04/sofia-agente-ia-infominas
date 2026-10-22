@@ -1,0 +1,31 @@
+# Comportamento: cliente já identificado pelo lookup do telefone não precisa informar CPF.
+# Negativo: informar_identificacao não é chamada; o prompt não manda pedir CPF.
+id: conversa-039
+descricao: contato identificado pelo telefone vai direto ao preparo e à abertura
+sessao: {telefone: "+5531999990039", nome_contato: "Wagner", contato: telefone}
+jev:
+  - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
+  - {intencao: [confirmacao, 0.95], categoria: [sem_conexao, 0.9], prioridade: [2, 0.7], frustracao: [0, 0.8], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "minha internet caiu de novo, já reiniciei o modem"
+    llm:
+      - tool: preparar_abertura_chamado
+        args: {titulo: "Sem conexão após reiniciar o modem", descricao: "Cliente relata queda total da internet; já reiniciou o modem."}
+      - texto: "Entendi, ficar sem internet atrapalha mesmo. Vou registrar assim: sem conexão mesmo depois de reiniciar o modem. Posso abrir o chamado?"
+    espera:
+      chama: [preparar_abertura_chamado]
+      nao_chama: [informar_identificacao, abrir_chamado]
+      proposta_no_estado: true
+      prompt_contem: ["já validada pelo sistema", "Não peça o CPF/contrato de novo"]
+      prompt_nao_contem: ["NÃO informada"]
+      gateway_json: {endpoint: /tools/infodesk/ticket/preparar, campos: {identificacao.forma: telefone, telefone: "+5531999990039"}}
+  - cliente: "sim"
+    llm:
+      - tool: abrir_chamado
+        args: {}
+      - texto: "Pronto! Seu chamado é o 48213. A equipe responsável assume daqui. 😊"
+    espera:
+      chama: [abrir_chamado]
+      gateway_recebeu: {endpoint: /tools/infodesk/ticket/abrir, chave_idempotencia: "*"}
+      contem: ["48213"]
+      nao_contem: ["prazo"]

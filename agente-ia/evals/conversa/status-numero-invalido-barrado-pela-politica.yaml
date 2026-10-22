@@ -1,0 +1,17 @@
+# Comportamento: número com letra é barrado pela política antes de chegar ao gateway.
+# Negativo: nenhuma chamada ao gateway; a Sofia pede para conferir.
+id: conversa-016
+descricao: número de chamado inválido é recusado por código e não consulta nada
+sessao: {telefone: "+5531999990016", nome_contato: "Beto", contato: telefone}
+jev:
+  - {intencao: [status_chamado, 0.92], categoria: [indefinida, 0.3], prioridade: [1, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "e o chamado 48x13, andou?"
+    llm:
+      - tool: consultar_status_chamado
+        args: {numero: "48x13"}
+      - texto: "Esse número parece ter alguma letra no meio. Pode conferir e me mandar só os dígitos?"
+    espera:
+      nao_chama: [consultar_status_chamado, abrir_chamado, preparar_abertura_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/ticket/consultar]
+      contem: ["dígitos"]
