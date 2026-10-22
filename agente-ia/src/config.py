@@ -56,8 +56,9 @@ class Settings(BaseSettings):
     # Prazo TOTAL do turno no cérebro (segundos): `processar_chat` interrompe o
     # grafo e devolve falha transitória ao gateway. Regra de ordem (E3.7), checada
     # no boot por `validar_prazos`:
-    #   BRAIN_TIMEOUT (90s) > TURNO_TETO (80s) > BRAIN_TURNO_PRAZO (70s)
-    #                                          > INFODESK_TOOLS_TIMEOUT (30s) + JEV
+    #   TURNO_TETO (105s) >= DEBOUNCE_TETO (20s) + BRAIN_TIMEOUT (80s)   [gateway]
+    #   BRAIN_TIMEOUT (80s) > BRAIN_TURNO_PRAZO (70s)
+    #                       > INFODESK_TOOLS_TIMEOUT (30s) + JEV
     # Quem desiste primeiro é o cérebro, com classe e ID — nunca o gateway no
     # escuro. O turno paga JEV, duas chamadas de LLM e a tool mais lenta
     # (`abrir_chamado`, que espera até 35s). `validar_prazos` garante o piso da tool
@@ -153,8 +154,10 @@ def validar_prazos(
       tool e o JEV; sem folga, a tool consome o turno inteiro). A espera da tool é
       `INFODESK_TOOLS_TIMEOUT` ou, se maior, o piso próprio de `abrir_chamado`
       (`espera_tool_minima`);
-    - com `TURNO_TETO` no ambiente: `TURNO_TETO` > `BRAIN_TURNO_PRAZO`;
-    - com `BRAIN_TIMEOUT` e `TURNO_TETO`: `BRAIN_TIMEOUT` > `TURNO_TETO`.
+    - com `BRAIN_TIMEOUT` no ambiente: `BRAIN_TIMEOUT` > `BRAIN_TURNO_PRAZO`;
+    - com `TURNO_TETO` no ambiente: `TURNO_TETO` > `BRAIN_TURNO_PRAZO` (e >
+      `BRAIN_TIMEOUT`, se ambos). O gateway confere `TURNO_TETO >= DEBOUNCE_TETO +
+      BRAIN_TIMEOUT`.
     """
     prazo = settings.brain_turno_prazo
     espera_tool = max(settings.infodesk_tools_timeout, espera_tool_minima)
@@ -174,16 +177,16 @@ def validar_prazos(
         if settings.brain_timeout_gateway.strip()
         else None
     )
+    if brain is not None and brain <= prazo:
+        raise ConfigPrazosInvalida(
+            f"BRAIN_TIMEOUT ({brain:g}s) precisa ser maior que BRAIN_TURNO_PRAZO ({prazo:g}s): "
+            "o cérebro tem de desistir antes de o gateway cortar a chamada"
+        )
     if teto is not None and teto <= prazo:
         raise ConfigPrazosInvalida(
-            f"TURNO_TETO ({teto:g}s) precisa ser maior que BRAIN_TURNO_PRAZO ({prazo:g}s): "
-            "o cérebro tem de desistir antes do gateway"
+            f"TURNO_TETO ({teto:g}s) precisa ser maior que BRAIN_TURNO_PRAZO ({prazo:g}s)"
         )
-    if brain is not None and teto is not None and brain <= teto:
+    if brain is not None and teto is not None and teto <= brain:
         raise ConfigPrazosInvalida(
-            f"BRAIN_TIMEOUT ({brain:g}s) precisa ser maior que TURNO_TETO ({teto:g}s)"
-        )
-    if brain is not None and teto is None and brain <= prazo:
-        raise ConfigPrazosInvalida(
-            f"BRAIN_TIMEOUT ({brain:g}s) precisa ser maior que BRAIN_TURNO_PRAZO ({prazo:g}s)"
+            f"TURNO_TETO ({teto:g}s) precisa ser maior que BRAIN_TIMEOUT ({brain:g}s)"
         )

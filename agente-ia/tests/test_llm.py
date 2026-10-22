@@ -90,11 +90,11 @@ def test_defaults_de_max_tokens_sao_conservadores():
 
 # ---------------------------------------------------------------------------
 # Timeouts alinhados (ZC-6): LLM_TIMEOUT 20s; prazo do turno no cérebro menor
-# que o teto do turno do gateway (80s) e que o BRAIN_TIMEOUT (90s) — E3.7.
+# que o BRAIN_TIMEOUT (80s) e que o teto do turno do gateway (105s) — E3.7.
 # ---------------------------------------------------------------------------
 
-BRAIN_TIMEOUT_GATEWAY = 90.0
-TURNO_TETO_GATEWAY = 80.0
+BRAIN_TIMEOUT_GATEWAY = 80.0
+TURNO_TETO_GATEWAY = 105.0
 
 
 def test_timeouts_cabem_no_prazo_do_gateway(monkeypatch):
@@ -106,7 +106,7 @@ def test_timeouts_cabem_no_prazo_do_gateway(monkeypatch):
     assert settings.llm_timeout == 20.0
     assert settings.brain_turno_prazo == 70.0
     assert settings.llm_timeout < settings.brain_turno_prazo
-    assert settings.brain_turno_prazo < TURNO_TETO_GATEWAY < BRAIN_TIMEOUT_GATEWAY
+    assert settings.brain_turno_prazo < BRAIN_TIMEOUT_GATEWAY < TURNO_TETO_GATEWAY
     # Uma chamada + o retry do cliente OpenAI ainda cabem no prazo do turno.
     assert 2 * settings.llm_timeout <= settings.brain_turno_prazo
     assert llm_factory.get_llm().request_timeout == settings.llm_timeout

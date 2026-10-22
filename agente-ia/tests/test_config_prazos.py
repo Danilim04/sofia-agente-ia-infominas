@@ -1,9 +1,10 @@
 """Prazos do turno alinhados (E3.7): defaults novos e ordem validada no boot.
 
-Regra: BRAIN_TIMEOUT (90s) > TURNO_TETO (80s) > BRAIN_TURNO_PRAZO (70s)
-> INFODESK_TOOLS_TIMEOUT (30s) + folga do JEV. O gateway Go confere a metade
-dele (`backend/internal/config`); o cérebro confere a dele e, quando o ambiente
-traz os prazos do gateway, a cadeia inteira.
+Regra: TURNO_TETO (105s) >= DEBOUNCE_TETO (20s) + BRAIN_TIMEOUT (80s), e
+BRAIN_TIMEOUT (80s) > BRAIN_TURNO_PRAZO (70s) > INFODESK_TOOLS_TIMEOUT (30s) +
+folga do JEV. O gateway Go confere a primeira (`backend/internal/config`); o
+cérebro confere a dele e, quando o ambiente traz os prazos do gateway, o que
+puder da cadeia.
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ def test_defaults_novos():
 
 
 def test_defaults_do_gateway_no_ambiente_fecham_a_cadeia(monkeypatch):
-    s = _settings(monkeypatch, BRAIN_TIMEOUT="90s", TURNO_TETO="80s")
+    s = _settings(monkeypatch, BRAIN_TIMEOUT="80s", TURNO_TETO="105s")
     validar_prazos(s)
 
 
@@ -68,10 +69,11 @@ def test_defaults_do_gateway_no_ambiente_fecham_a_cadeia(monkeypatch):
         # o gateway desistiria antes do cérebro
         ({"TURNO_TETO": "70s"}, "TURNO_TETO"),
         ({"TURNO_TETO": "60s"}, "TURNO_TETO"),
-        # BRAIN_TIMEOUT não pode ser menor/igual ao teto do turno
-        ({"TURNO_TETO": "80s", "BRAIN_TIMEOUT": "80s"}, "BRAIN_TIMEOUT"),
-        ({"TURNO_TETO": "80s", "BRAIN_TIMEOUT": "60s"}, "BRAIN_TIMEOUT"),
-        # só BRAIN_TIMEOUT presente: ainda tem de passar do prazo do cérebro
+        # o teto do turno precisa cobrir ao menos a chamada ao cérebro
+        ({"TURNO_TETO": "80s", "BRAIN_TIMEOUT": "80s"}, "TURNO_TETO"),
+        ({"TURNO_TETO": "75s", "BRAIN_TIMEOUT": "80s"}, "TURNO_TETO"),
+        # BRAIN_TIMEOUT tem de passar do prazo do turno do cérebro (70s)
+        ({"BRAIN_TIMEOUT": "70s"}, "BRAIN_TIMEOUT"),
         ({"BRAIN_TIMEOUT": "60s"}, "BRAIN_TIMEOUT"),
         # formato Go inválido cita a variável
         ({"TURNO_TETO": "oitenta"}, "TURNO_TETO"),
