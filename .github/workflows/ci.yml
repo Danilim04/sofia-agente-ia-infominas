@@ -165,14 +165,14 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with: { python-version: "3.12" }
       # Sobe mock-infodesk + gateway + cérebro falso (sem rede, sem chave). Cenário
-      # com bug conhecido no gateway (BUG-E4.1-1): só falha com E2E_ESTRITO=1. Hoje o
-      # padrão é 0; vira 1 (Settings › Variables › Actions › E2E_ESTRITO=1, sem
-      # commit) quando a correção do B1 estiver na main.
+      # com bug conhecido (BUG-E4.1-1, corrigido na E4.5a) só falharia com E2E_ESTRITO=1.
+      # O padrão agora é 1; a variável de repositório E2E_ESTRITO=0 (Settings ›
+      # Variables › Actions, sem commit) volta a tolerar o bug numa emergência.
       - name: E2E com mock-infodesk
         working-directory: backend
         run: go test -tags e2e -count=1 -v ./internal/e2e/...
         env:
-          E2E_ESTRITO: ${{ vars.E2E_ESTRITO || '0' }}
+          E2E_ESTRITO: ${{ vars.E2E_ESTRITO || '1' }}
           E2E_PYTHON: python
 
   evals-pr:
