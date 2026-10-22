@@ -1,11 +1,10 @@
 # Comportamento ESPERADO: depois de um timeout na abertura, a Sofia diz com naturalidade que não conseguiu confirmar se o
 # chamado foi registrado e que um atendente vai conferir (é o que a própria tool manda dizer).
-# Bug de produto observado (output_guardrail_node / afirmacoes_de_acao): 'se o chamado foi registrado' casa a afirmação
+# Bug de produto corrigido na E3.8 (era: output_guardrail_node / afirmacoes_de_acao): 'se o chamado foi registrado' casa a afirmação
 # 'chamado foi registrado' (o 'se' não conta como negação) e, como a tool falhou, a resposta é trocada por
 # RESPOSTA_ACAO_SEM_FERRAMENTA, que oferece PREPARAR um chamado novo — o oposto de 'não abra outro'.
 id: conversa-061
 descricao: resposta honesta sobre abertura incerta sobrevive ao guardrail de ação sem ferramenta
-xfail: "afirmacoes_de_acao trata 'se o chamado foi registrado' como afirmação e a resposta vira 'quer que eu prepare um chamado?' (src/security/output_guardrails.py, fora da zona da E3.5)"
 sessao: {telefone: "+5531999990061", nome_contato: "Davi", contato: telefone}
 jev:
   - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}

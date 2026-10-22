@@ -2,6 +2,9 @@
 # Gateway Go da Sofia (transporte Infodesk). Binário estático (CGO off — o
 # sqlite é modernc, Go puro) sobre Alpine: o wget do busybox serve o
 # HEALTHCHECK do compose e o ca-certificates fala TLS com o Infodesk.
+# Roda como usuário não root (uid 10001). Imagem: sofia-bot:gateway-<tag>.
+# A taxonomia vem do volume /config do compose (TAXONOMIA_PATH); o binário
+# não embute config.
 # ==============================================================================
 FROM golang:1.26-alpine AS build
 

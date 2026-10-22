@@ -209,8 +209,9 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 		}
 		e.vigia.Aviso(alerta.TipoHandoffFalhou, "Handoff para o atendente falhou", texto, convID)
 	}
-	e.log.Info("conversa transferida para atendimento humano",
-		"id_ocorrencia", id, "conversation_id", convID, "origem", t.Origem, "departamento", dept)
+	alerta.LogTransferencia(e.log, alerta.Transferencia{
+		IDOcorrencia: id, ConversationID: convID, Origem: t.Origem, Departamento: dept,
+	})
 	return id
 }
 
