@@ -6,7 +6,8 @@
 # A taxonomia vem do volume /config do compose (TAXONOMIA_PATH); o binário
 # não embute config.
 # ==============================================================================
-FROM golang:1.26-alpine AS build
+# Patch fixo, igual ao `go` do go.mod (govulncheck: stdlib corrigida a partir do 1.26.10).
+FROM golang:1.26.10-alpine AS build
 
 WORKDIR /src
 COPY go.mod go.sum ./
