@@ -60,12 +60,16 @@ services:
       # O token é o MESMO TOOLS_API_TOKEN do gateway (X-Tools-Token).
       INFODESK_TOOLS_BASE_URL: http://gateway:8080
       INFODESK_TOOLS_TOKEN: ${TOOLS_API_TOKEN:-}
-      # Índice pgvector (escrita do sync sempre; leitura só com VECTOR_BACKEND=pgvector).
+      # No compose o índice do RAG é SEMPRE o pgvector: a imagem não embute índice
+      # Chroma, então o default `chroma` deixaria o RAG vazio em silêncio.
+      VECTOR_BACKEND: pgvector
       PGVECTOR_URL: postgresql://rag:${PGVECTOR_PASSWORD:-}@pgvector:5432/rag
       # Taxonomia compartilhada com o gateway (volume abaixo).
       TAXONOMIA_PATH: /config/taxonomia.yaml
     volumes:
       - brain-data:/data
+      # Modelo de embeddings (Hugging Face) baixado uma vez, não a cada rebuild/sync.
+      - hf-cache:/app/.hf
       # config/ compartilhado: a MESMA taxonomia nos dois serviços (hoje o
       # placeholder de agente-ia/config; a real entra na E5.1 / P1). Somente leitura.
       - ${CONFIG_DIR:-./agente-ia/config}:/config:ro
@@ -120,3 +124,4 @@ volumes:
   pgvector-data:
   gateway-data:
   brain-data:
+  hf-cache:

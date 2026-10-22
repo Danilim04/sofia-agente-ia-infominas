@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: .env.example × código e docker compose config
@@ -55,10 +55,15 @@ jobs:
         run: |
           t="$TAG_INFORMADA"
           [ -n "$t" ] || t="manual-$(git rev-parse --short=7 HEAD)"
+          [[ "$t" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || { echo "tag inválida: use letras, dígitos, _ . -" >&2; exit 1; }
           echo "tag=$t" >> "$GITHUB_OUTPUT"
 
       - name: Build do gateway (Go)
-        run: docker build -t "sofia-bot:gateway-${{ steps.ver.outputs.tag }}" backend/
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: docker build -t "sofia-bot:gateway-$TAG" backend/
 
       - name: Build do cérebro (Python)
-        run: docker build -t "sofia-bot:brain-${{ steps.ver.outputs.tag }}" agente-ia/
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: docker build -t "sofia-bot:brain-$TAG" agente-ia/

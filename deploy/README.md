@@ -22,8 +22,8 @@ rede interna do compose; o gateway fala com o Infodesk pela API pública deles.
 |---|---|
 | Host Linux x86_64 ou ARM64 | CPU basta (torch CPU-only); ~4 GB de RAM livre e ~6 GB de disco para as imagens |
 | Docker Engine + `docker compose` ≥ 2.24.4 | o override de produção usa a tag `!reset` |
-| **Domínio com HTTPS público** | o Infodesk só entrega webhook em URL HTTPS pública. Quem termina o TLS (nginx, Caddy, Traefik, load balancer) é da Infominas; ele encaminha `https://<domínio>/webhook` ao gateway (`127.0.0.1:8080`, ou `gateway:8080` se o proxy rodar na rede do compose) |
-| Saída de rede | `infodesk.infominas.net` (API), `openrouter.ai` (LLM), TypeSafe (JEV) e, na primeira subida com `EMBEDDINGS_PROVIDER=local`, o Hugging Face (baixa o modelo de embeddings) |
+| **Domínio com HTTPS público** | o Infodesk só entrega webhook em URL HTTPS pública. Quem termina o TLS (nginx, Caddy, Traefik, load balancer) é da Infominas; ele encaminha `https://<domínio>/webhook` ao gateway (`127.0.0.1:8080`, ou `gateway:8080` se o proxy rodar na rede do compose). Só `/webhook` precisa ficar exposto |
+| Saída de rede | `infodesk.infominas.net` (API), `openrouter.ai` (LLM), TypeSafe (JEV) e, com `EMBEDDINGS_PROVIDER=local`, o Hugging Face (o modelo de embeddings é baixado no primeiro `sync` e fica no volume `hf-cache`) |
 | Um lugar para os segredos | ver "Segredos" abaixo |
 | Rotina de backup do volume `pgvector-data` | é o estado de produção |
 
@@ -32,14 +32,16 @@ rede interna do compose; o gateway fala com o Infodesk pela API pública deles.
 ```bash
 cp .env.example .env          # preencha as linhas da tabela "O QUE É OBRIGATÓRIO EM PRODUÇÃO"
 echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml' >> .env
-docker compose up -d --build  # constrói sofia-bot:brain-<tag> e sofia-bot:gateway-<tag>
-docker compose run --rm brain python -m src.rag.sync   # 1ª vez: popula o índice do RAG (pgvector)
-deploy/healthcheck.sh https://<seu-dominio>            # portões: banco, índice, cérebro, gateway, URL pública
+docker compose build          # sofia-bot:brain-<tag> e sofia-bot:gateway-<tag> (IMAGE_TAG por versão)
+docker compose run --rm brain python -m src.rag.sync   # sobe o pgvector e popula o índice do RAG
+docker compose up -d
+deploy/healthcheck.sh https://<seu-dominio>            # portões: banco, índice, cérebro, gateway, POST /webhook
 ```
 
-- `VECTOR_BACKEND=pgvector` no `.env` é o que faz o cérebro **ler** o índice do
-  Postgres (o default `chroma` é só de dev). Se o cérebro já estava no ar
-  antes do `sync`, `docker compose restart brain` garante que leia o índice novo.
+- No compose o cérebro **sempre lê o pgvector** (`VECTOR_BACKEND` é fiação; a
+  imagem não embute índice Chroma), por isso o `sync` vem **antes** do `up -d`.
+  Ao rodar o `sync` de novo com a stack no ar (base atualizada),
+  `docker compose restart brain` garante que o cérebro leia o índice novo.
 - A base de conhecimento placeholder vem em `agente-ia/docs/base` (já dentro da
   imagem). A fonte real da Infominas é a pendência **P6**; quando existir,
   preencha `DOCS_API_BASE_URL`/`DOCS_API_KEY` e use `--fonte api`.

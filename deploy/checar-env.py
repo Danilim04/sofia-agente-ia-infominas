@@ -35,6 +35,14 @@ NOME = r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*"
 SEGREDO = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|SAL)$")
 IGNORAR_DIRS = {"venv", ".venv", "node_modules", "__pycache__", ".git", "chroma_db", ".hf"}
 
+# Valores com cara de credencial real, mesmo em linha comentada.
+PADROES_SEGREDO = {
+    "chave do OpenRouter (sk-or-…)": re.compile(r"sk-or-[A-Za-z0-9-]{8,}"),
+    "chave do Infodesk (ik_live_…)": re.compile(r"ik_live_[A-Za-z0-9]{8,}"),
+    "segredo de webhook (whsec_…)": re.compile(r"whsec_[A-Za-z0-9]{8,}"),
+    "senha embutida em URL (usuário:senha@host)": re.compile(r"://[^/\s:@<]+:[^@\s<]+@"),
+}
+
 # Lidas por bibliotecas/ferramentas, não por código nosso, mas legítimas no .env.
 EXTRAS_PERMITIDAS: set[str] = set()
 
@@ -160,6 +168,11 @@ def main() -> int:
         erros.append(
             "segredos com valor no .env.example (devem ficar vazios): " + ", ".join(preenchidas)
         )
+
+    texto = ler(RAIZ / ".env.example")
+    for rotulo, padrao in PADROES_SEGREDO.items():
+        if padrao.search(texto):
+            erros.append(f".env.example parece conter {rotulo} (mesmo em linha comentada)")
 
     if not erros:
         print(

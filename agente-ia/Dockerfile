@@ -35,6 +35,9 @@ COPY config/ config/
 COPY docs/base/ docs/base/
 COPY server.py .
 
+# Guarda contra um .dockerignore que esvazie a base; /app/.hf nasce com o owner
+# certo para o volume hf-cache (cache do modelo de embeddings).
+RUN ls docs/base/*.md > /dev/null && mkdir -p /app/.hf
 RUN useradd --uid 10001 --create-home app && chown -R app:app /app
 # /data recebe o checkpointer SQLite (volume brain-data no compose). Criar o
 # path JÁ com o owner certo faz o volume nomeado nascer gravável pelo user app
