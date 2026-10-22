@@ -20,7 +20,7 @@ categoria são informativas.
 
 Hoje: os cenários de conversa carregam, validam e **executam** contra o grafo
 real (E3.5: LLM scriptado + `FakeJEV` + gateway falso; `python -m evals.conversa`
-imprime o resultado de cada um); `--jev` e `--llm` caem no
+imprime o resultado de cada um — só os de `conversa/*.yaml`, não os de `pendentes/`); `--jev` e `--llm` caem no
 `classificador_nulo` (sempre `outro`/`indefinida`/`media`, confiança 0; também
 acessível por `--nulo`), que serve para provar o encanamento e produzir um
 relatório — não para calibrar nada (`--atualizar-baseline` recusa nesse caso).
@@ -158,18 +158,61 @@ venv/Scripts/python.exe -m evals.anonimizar evals/bruto/conversas-whatsapp-<data
 - A lista de nomes deixa de fora palavras que o corpus escreve quase sempre em
   minúscula (`rede`, `todo`): um contato chamado "Rede Fulano" não pode virar
   `<NOME>` no texto inteiro.
-- Os cenários `conversa/real-*.yaml` são **reescritos** a partir dos padrões
-  (frase parafraseada, telefone `+5531999990xxx`, nome fictício); nenhum
-  arquivo do bruto nem do anonimizado entra no git antes da revisão.
-- Pré-rótulo do dataset de classificação: `rotulador: "jev-prelabel"` é
-  hipótese do JEV sobre o rascunho de taxonomia por área, **não** gabarito —
-  um humano revisa antes de virar `classificacao/historico.jsonl`. A chave
-  extra `confianca` é descartada na promoção (`validar_caso` a rejeita de
-  propósito).
+- Os cenários `conversa/pendentes/real-*.yaml` são **reescritos** a partir dos
+  padrões (frase parafraseada, telefone `+5531999990xxx`, nome fictício) e ainda
+  **não foram validados pelo CI**: ficam fora do glob do runner até alguém
+  promovê-los (ver "Como rodar depois"). Nenhum arquivo do bruto nem do
+  anonimizado entra no git antes da revisão.
+- `python -m evals.pre_rotular` monta `evals/bruto/historico.candidato.jsonl` (um
+  caso por conversa, as 400 mais recentes) **sem chamar o JEV**: `esperado: null`,
+  `rotulador: "pendente"`. Com `--jev` vira pré-rótulo (ver abaixo).
 - `xfail: "motivo"` no topo de um cenário marca um comportamento correto que a
   Sofia ainda não tem (xfail estrito: se passar, o teste falha e o marcador sai).
   `contato: telefone|cpf|contrato` na `sessao` diz que o gateway já identificou
   o cliente por essa forma.
+
+## Como rodar depois (nada disto foi executado na E3.5 de coleta)
+
+1. **Pré-rotular o dataset com o JEV** (hipótese a revisar por humano, não
+   gabarito; precisa de `TYPESAFE_API_KEY`, vinda de `JEV_API_TOKEN`; ~315
+   chamadas, 4 em paralelo). O rascunho da taxonomia por área vem de
+   `scripts/descobrir-taxonomia.py --mesas "Incidente,Solicitações" --por area --saida descoberta-infodesk/`:
+
+   ```bash
+   set -a && . ./.env && set +a && export TYPESAFE_API_KEY="$JEV_API_TOKEN"
+   cd agente-ia
+   venv/Scripts/python.exe -m evals.pre_rotular --jev --taxonomia ../descoberta-infodesk/taxonomia.rascunho.yaml
+   ```
+
+   Saída: `evals/bruto/historico.candidato.jsonl` com `esperado`, `confianca` e
+   `rotulador: "jev-prelabel"`. Depois da revisão humana, tire a chave `confianca`
+   e mova para `classificacao/historico.jsonl`.
+2. **Executar os cenários reais.** O runner só enxerga `conversa/*.yaml`. Para
+   promover: `git mv evals/conversa/pendentes/real-*.yaml evals/conversa/`, rode
+   `python -m evals.conversa` e `pytest -m evals_pr evals/conversa/test_cenarios.py`
+   e leia as falhas. O que a Sofia ainda não faz fica com `xfail: "motivo"` (estrito);
+   comportamento errado do cenário se corrige no YAML. Cenários com
+   `xfail` já escritos: `real-assunto-comercial-planos` e `real-financeiro-segunda-via`
+   (a categoria só é fixada para `reclamacao_problema`). Atenção: as categorias dos
+   cenários são as do placeholder (P1); com a taxonomia real (E5.1) é preciso
+   remapeá-las (e-mail, VPN, acesso e impressora hoje não têm categoria).
+3. **Replay no mock** (cérebro + gateway + mock-infodesk): `scripts/start-all.sh`
+   (no Windows, com `agente-ia/venv` acessível) e, para cada turno do cenário:
+
+   ```bash
+   curl -sS -X POST http://localhost:9000/mock/cliente/mensagem      -H 'Content-Type: application/json; charset=utf-8'      -d '{"telefone":"+5531999990100","nome":"Marta","texto":"<fala do cliente>"}'
+   curl -sS "http://localhost:9000/mock/estado?telefone=%2B5531999990100"   # bolhas e tickets
+   ```
+
+   Use um `OPENROUTER_API_KEY` real e `TYPESAFE_API_KEY` (JEV). O `curl` do Git
+   Bash no Windows pode mandar a acentuação fora de UTF-8; prefira um cliente
+   Python/`urllib` com `json.dumps(...).encode("utf-8")`.
+4. **O que depende da chave do OpenRouter**: o LLM do cérebro (todo turno que
+   passa pelo agente) e o fallback LLM da classificação. Sem ela só rodam os
+   cenários de evals (LLM scriptado), o webhook assinado do mock → gateway, o JEV
+   e o caminho de resposta padrão (injeção de prompt). Antes de usar uma chave
+   real, confira se `APP_TITLE` não tem caractere não-ASCII (o header `X-Title`
+   quebra a chamada com `UnicodeEncodeError`).
 
 ## Interpretar o relatório (`relatorio.py`)
 
