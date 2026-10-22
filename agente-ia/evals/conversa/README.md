@@ -80,8 +80,25 @@ scriptado confere o script; a persona só é provada de verdade nas **respostas 
 
 ## Fora daqui
 
-- `pendentes/`: cenários parafraseados do histórico real, aguardando validação humana;
+- `pendentes/`: cenários de origem real que ainda não podem rodar no CI (ver "Casos reais");
   o runner não os carrega.
 - Juiz LLM com rubrica (LLM real): `evals/conversa/juiz/` (E4.4, noturno).
 - Transferência por mídia/áudio, fora do horário, vigia: decididas no gateway Go
   (`backend/internal/engine`); aqui só o que o cérebro faz com o texto que chega.
+
+## Casos reais (`real-*.yaml`)
+
+Os 32 cenários `real-*` vêm de conversas do Infodesk, **parafraseados e anonimizados** (sem
+nome, telefone, e-mail nem número de chamado reais; o número `48213` é do contrato). São o
+insumo das categorias de `config/taxonomia.proposta.yaml` (E5.1, preparação).
+
+- **Na raiz (10, no CI):** os que não dependem de categoria (áudio, foto, vago, fora de escopo,
+  injeção, pedido de atendente, pessoa específica, senha de terceiro, status com e sem número).
+  Valem na taxonomia em uso e na proposta.
+- **Em `pendentes/` (22):** os que usam categoria (ou fluxo que uma decisão ainda muda). Já estão
+  remapeados para a proposta e `tests/test_taxonomia_proposta.py` os executa contra ela com
+  `TAXONOMIA_PATH`. O runner da raiz valida a categoria contra `config/taxonomia.yaml` (placeholder),
+  então só sobem com `git mv` depois que a proposta virar `taxonomia.yaml`. Cada arquivo traz uma
+  linha `# Destrava: Q<n> …` que aponta a pergunta de
+  `docs/plano/decisoes/taxonomia-proposta.md` que o libera. Cenário que descreve limitação de
+  produto leva `xfail` com o motivo e não é corrigido aqui.

@@ -1,0 +1,158 @@
+# PROPOSTA DE TAXONOMIA — À ESPERA DE DECISÃO DO DONO DO PRODUTO (E5.1, preparação).
+# NÃO é o arquivo em uso: `config/taxonomia.yaml` continua o placeholder (P1) e este arquivo
+# só vira `taxonomia.yaml` depois que as decisões de docs/plano/decisoes/taxonomia-proposta.md
+# forem respondidas. Mesmo formato (docs/plano/02-classificacao.md); carrega em
+# src.classificacao.taxonomia.carregar_taxonomia; conferido contra os nomes e ids reais do
+# Infodesk por tests/test_taxonomia_proposta.py (fixture tests/fixtures/infodesk_referencia.json).
+#
+# O que já está DECIDIDO (dono do produto, 2026-10-22): a Sofia abre TODO chamado na mesa
+# "Abertura de Ticket" (entrada única, triagem humana); a classificação define prioridade e
+# item/área, não a mesa. Por isso toda categoria tem a mesma `mesa`.
+#
+# Fatos do Infodesk em que a proposta se apoia (inventário de 2026-10-21):
+# - A mesa "Abertura de Ticket" só tem as prioridades "Alta" e "Baixa" (NÃO tem "Media" nem
+#   "Crítica"). Daí o bloco `prioridades` no fim: `media` e `urgente` não têm nome exato na mesa.
+# - Seu catálogo é o mestre (399 itens, visão do técnico, 17 áreas). Nenhum item é inequívoco para
+#   uma categoria abaixo (cada categoria agrupa vários itens), então `catalogo` fica omitido
+#   (`requireTicketFields` está desligado: o item é opcional). Áreas/itens candidatos por
+#   categoria: docs/plano/decisoes/taxonomia-proposta.md.
+# - Departamentos de chat existentes: "Técnicos", "Administrativo / Financeiro", "Comercial".
+#
+# Tudo que não sai dos dados está marcado "DECISÃO PENDENTE" com a pergunta (Q<n>) que o destrava.
+# As categorias vêm do que o cliente escreve no WhatsApp (32 casos reais parafraseados em
+# evals/conversa/pendentes/), não do catálogo do técnico; os exemplos são desses casos.
+placeholder: true          # PROPOSTA: não remover até o dono decidir (Q1–Q5) e a proposta virar taxonomia.yaml
+versao: 2026-10-22-proposta
+mesa_triagem: "Abertura de Ticket"          # decidido em 2026-10-22 (mesa única); destino de 'indefinida'
+departamento_humano_padrao: "Técnicos"      # DECISÃO PENDENTE (P11/D1): "Técnicos" é a proposta de docs/infodesk/10 §8 (5) e a de maior volume nos casos reais — Q2
+
+categorias:
+  internet_rede:
+    descricao: "Internet ou rede da empresa com problema: sem acesso, lenta ou caindo e voltando; link fora; uma ou todas as estações sem conexão"
+    exemplos:
+      - "aqui no escritório a internet caiu e ninguém consegue trabalhar"
+      - "a internet tá muito lenta hoje, as páginas demoram demais pra abrir"
+      - "nossa net fica caindo e voltando o dia todo, derruba a videochamada"
+      - "nossos dois links de internet estão fora do ar, a empresa parou"
+      - "estou sem internet desde as 8h"
+    nao_e:
+      - "a VPN não conecta de casa mas o resto da internet funciona"
+      - "só a pasta compartilhada ou o servidor está lento"
+      - "só o e-mail não envia"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): problema técnico → equipe técnica; os casos reais de rede vão todos para suporte
+    # Catálogo (área): Redes — candidatos "Sem internet", "Internet lenta", "Rede lenta"; vários itens → omitido (Q4)
+    # Prioridade: sem piso proposto; "tudo parado" é o caso típico de Alta (Q3)
+
+  vpn:
+    descricao: "VPN ou acesso remoto à rede da empresa não conecta, dá erro ou fica girando"
+    exemplos:
+      - "a VPN não conecta de casa, fico girando e dá erro"
+      - "só na VPN dá erro, o resto da internet de casa funciona normal"
+    nao_e:
+      - "a internet inteira está fora ou lenta"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): é rede/segurança, atendimento técnico
+    # Catálogo (área): Firewall — candidato "VPN não conecta", mas a categoria também cobre "VPN lenta"/"usuário bloqueado" → omitido (Q4)
+
+  computador:
+    descricao: "Computador ou notebook com problema: lento, travando, demora para ligar ou não liga"
+    exemplos:
+      - "meu computador tá travando toda hora e demora uns cinco minutos pra ligar"
+      - "o notebook da recepção não liga mais"
+    nao_e:
+      - "a internet ou a rede está lenta para todo mundo"
+      - "impressora que não imprime"
+      - "o servidor da empresa"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte a estação de trabalho
+    # Catálogo (área): Computadores — "Computador lento", "Computador não liga", "Tela azul"...; vários itens → omitido (Q4)
+
+  impressora:
+    descricao: "Impressora ou scanner que não imprime, não digitaliza ou mostra erro"
+    exemplos:
+      - "a impressora do setor parou de imprimir e aparece uma mensagem de erro no visor"
+    nao_e:
+      - "computador lento ou travando"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte a periférico
+    # Catálogo (área): Impressoras — "Não imprime", "Impressora offline"...; vários itens → omitido (Q4)
+
+  email:
+    descricao: "E-mail que não envia, não recebe ou não abre (caixa de saída parada, erro no Outlook ou no webmail)"
+    exemplos:
+      - "não estou conseguindo enviar e-mail"
+      - "fica na caixa de saída e não sai nada"
+    nao_e:
+      - "a internet está fora"
+      - "senha esquecida ou acesso bloqueado do computador ou do usuário"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): suporte a e-mail corporativo
+    # Catálogo (áreas): Microsoft 365 ("Não envia e-mails"...) e Google Workspace ("Gmail não envia"...) — o cliente não diz qual → omitido (Q4)
+
+  servidor_arquivos:
+    descricao: "Servidor da empresa ou pastas compartilhadas com problema: servidor desligando ou reiniciando sozinho, sem acesso, pasta de rede lenta ou inacessível"
+    exemplos:
+      - "o servidor da empresa fica reiniciando sozinho o tempo todo, preciso de alguém olhando"
+      - "o acesso à pasta compartilhada está muito lento"
+    nao_e:
+      - "a internet da empresa está fora ou lenta"
+      - "computador de uma pessoa lento ou que não liga"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): infraestrutura, atendimento técnico
+    # Catálogo (área): Servidores — "Servidor indisponível", "Compartilhamento inacessível"...; vários itens → omitido (Q4)
+    # Prioridade: servidor parado é caso típico de Alta, sem piso proposto (Q3)
+
+  acesso_senha:
+    descricao: "Acesso bloqueado, senha esquecida ou usuário que não consegue entrar (computador, e-mail ou sistema)"
+    exemplos:
+      - "o acesso da minha colega está bloqueado, ela não consegue entrar"
+      - "no computador, pede uma senha que ela não lembra"
+    nao_e:
+      - "pedir para a Sofia informar a senha de outra pessoa ou de uma máquina de terceiros"
+      - "e-mail que não envia ou não recebe"
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): reset/desbloqueio é feito pela equipe técnica
+    # Catálogo: sem área inequívoca (a conta pode ser do computador/AD, do Microsoft 365 ou do Google) → omitido (Q4)
+
+  financeiro:
+    descricao: "Assunto financeiro: cobrança duplicada ou errada na fatura, boleto, 2ª via, pagamento"
+    exemplos:
+      - "veio cobrança duas vezes na fatura desse mês, preciso que corrijam"
+      - "preciso do boleto desse mês, pode me mandar?"
+    nao_e:
+      - "orçamento ou preço de serviço novo"
+      - "problema técnico em serviço contratado"
+    mesa: "Abertura de Ticket"
+    departamento: "Administrativo / Financeiro"   # DECISÃO PENDENTE (P11/D1): o nome do departamento é financeiro; 'Técnicos' não trata cobrança
+    # Catálogo: o catálogo da mesa não tem nenhum item financeiro → omitido
+
+  comercial:
+    descricao: "Assunto comercial: orçamento, proposta, preço ou contratação de serviço ou projeto novo"
+    exemplos:
+      - "queria saber quanto fica pra montar a rede de uma loja nova com 12 pontos"
+    nao_e:
+      - "cobrança ou boleto"
+      - "problema em serviço que já funciona"
+    mesa: "Abertura de Ticket"
+    departamento: "Comercial"   # DECISÃO PENDENTE (P11/D1): o único departamento de vendas/propostas
+    # Catálogo (áreas): Projetos e Consultoria têm itens parecidos, nenhum inequívoco → omitido (Q4)
+
+  indefinida:
+    descricao: "Não foi possível determinar: mensagem vaga, só saudação, áudio ou imagem sem texto, ou assunto que não cabe nas categorias acima"
+    exemplos:
+      - "oi, preciso de ajuda"
+      - "[áudio]"
+      - "[imagem] olha o erro que apareceu"
+    nao_e: []
+    mesa: "Abertura de Ticket"
+    departamento: "Técnicos"   # DECISÃO PENDENTE (P11/D1): igual ao departamento_humano_padrao proposto (Q2)
+
+# Nome canônico da Sofia → NOME da prioridade na mesa "Abertura de Ticket" (que só tem Alta e Baixa).
+# `null` = não enviar `priorityId` (decisão explícita do arquivo: o ticket nasce com a prioridade
+# padrão da mesa e a triagem humana escolhe).
+prioridades:
+  baixa: "Baixa"
+  media: null              # DECISÃO PENDENTE (P4/Q3): a mesa não tem "Media"; proposta: omitir e a triagem decide
+  alta: "Alta"
+  urgente: "Alta"          # DECISÃO PENDENTE (P4/Q3): a mesa não tem "Crítica"; proposta: urgente cai em "Alta", a maior que existe

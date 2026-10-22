@@ -1,20 +1,20 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Contexto: empresa cliente sem internet no escritório; padrão frequente no histórico.
-# Taxonomia: sem_conexao é do placeholder (P1); no rascunho real é rede_e_internet_incidente (E5.1).
+# Destrava: Q1 — aprovar as categorias de config/taxonomia.proposta.yaml e promovê-la a taxonomia.yaml; depois `git mv` para evals/conversa/.
 id: conversa-100
-descricao: 'empresa sem internet: prepara, confirma e abre; prioridade sobe pelo piso da categoria'
+descricao: 'empresa sem internet: prepara, confirma e abre'
 sessao:
   telefone: '+5531999990100'
   nome_contato: Marta
   contato: telefone
 jev:
 - intencao: [reclamacao_problema, 0.93]
-  categoria: [sem_conexao, 0.88]
+  categoria: [internet_rede, 0.88]
   prioridade: [2, 0.75]
   frustracao: [1, 0.8]
   malicioso: 0.02
   fora_de_escopo: 0.02
 - intencao: [confirmacao, 0.95]
-  categoria: [sem_conexao, 0.9]
+  categoria: [internet_rede, 0.9]
   prioridade: [2, 0.7]
   frustracao: [0, 0.8]
   malicioso: 0.01
@@ -34,7 +34,7 @@ turnos:
     transfere: false
     contem: [Posso abrir]
     classificacao:
-      categoria: sem_conexao
+      categoria: internet_rede
       origem: jev
 - cliente: sim
   llm:

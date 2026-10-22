@@ -1,25 +1,26 @@
 # ==============================================================================
-# Override de PRODUÇÃO — ativado pelo COMPOSE_FILE do .env (escrito pelo
-# deploy). Muda três coisas em relação à base:
+# Override de PRODUÇÃO — ativado pelo COMPOSE_FILE do .env:
 #
-#   1. Sem build e sem portas publicadas: as imagens chegam prontas via
-#      docker load (deploy/deploy-remote.sh) e NINGUÉM fala com o bot pela
-#      internet — só o Chatwoot, por dentro da rede docker. O Postgres
-#      (pgvector) também não publica porta: só brain e gateway o alcançam.
-#   2. O gateway entra na rede da stack omni-route (omniroute_default), onde
-#      vivem o Chatwoot e o Traefik do servidor, com o alias `azapfy-bot`:
-#      - webhook do Chatwoot →  http://azapfy-bot:8080/webhook?token=…
-#      - gateway → API do Chatwoot em http://chatwoot-rails:3000
-#   3. restart + teto de logs (a VPS é pequena).
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
 #
-# DNS/Traefik (quando ativar): o Traefik da stack omni-route já termina TLS
-# nesse servidor. Para expor o gateway num host público, crie o registro no
-# Terraform (infra/terraform, var bot_hosts) e descomente os labels abaixo.
-# Requer compose >= 2.24.4 (tags !reset).
+# Muda três coisas em relação à base:
+#
+#   1. Postgres e cérebro deixam de publicar porta: só o gateway as alcança, pela
+#      rede interna do compose. O gateway publica 8080 só em 127.0.0.1 (herdado
+#      da base) — o proxy reverso que termina o HTTPS e entrega /webhook ao
+#      gateway é da infra da Infominas (P10, ver deploy/README.md). Se o proxy
+#      rodar como container, ponha-o na rede deste compose e fale com
+#      `gateway:8080`; o `ports` do gateway pode então ser removido.
+#   2. restart automático.
+#   3. teto de logs (json-file), para o disco não encher.
+#
+# Imagens: por padrão são construídas no próprio host (`docker compose up -d
+# --build`) com a tag de IMAGE_TAG. Quando existir registry, publique as
+# imagens, preencha IMAGE_REPO/IMAGE_TAG e suba sem --build.
+# Requer docker compose >= 2.24.4 (tag !reset).
 # ==============================================================================
 services:
   pgvector:
-    # Só a rede interna da stack (brain + gateway); nada publicado no host.
     ports: !reset []
     restart: unless-stopped
     logging: &log
@@ -29,16 +30,10 @@ services:
         max-file: '3'
 
   brain:
-    build: !reset null
     ports: !reset []
     restart: unless-stopped
     logging: *log
 
   gateway:
-    build: !reset null
-    ports: !reset []
     restart: unless-stopped
     logging: *log
-    # O webhook do Infodesk chega pela internet: a exposição pública
-    # (reverse proxy/TLS da infra da Infominas) é definida no runbook novo
-    # (docs/plano/00-visao-geral.md, "Deploy") — TODO(E4.x).
