@@ -1,4 +1,5 @@
 # Comportamento: timeout na abertura é incerto: não repete o POST, mesmo que o LLM tente de novo.
+# NOTA: o texto evita 'se o chamado foi registrado' de propósito (ver conversa-061, bug do guardrail).
 # Negativo: o segundo abrir_chamado do LLM é recusado (proposta já consumida); só 1 chamada ao gateway.
 id: conversa-044
 descricao: timeout no POST de abertura não é repetido
@@ -26,3 +27,5 @@ turnos:
       proposta_no_estado: false
       nao_contem: ["Pronto", "chamado é o"]
       gateway_vezes: {/tools/infodesk/ticket/abrir: 1}
+      tool_viu_contem: ["NÃO tente abrir outro"]
+      tool_viu_nao_contem: ["ReadTimeout", "timeout simulado"]

@@ -4,7 +4,7 @@
 # mas viola 'nunca retry em POST /tickets' na camada Python). Chamadas em sequência (uma por mensagem) já são seguras: ver conversa-044.
 id: conversa-062
 descricao: tool calls paralelas de abertura não duplicam o POST
-xfail: "make_tools_node aplica a política de todas as tool calls do lote sobre o estado anterior ao lote; abrir_chamado paralelo faz 2 POSTs (src/agent/nodes.py, fora da zona da E3.5)"
+xfail: "make_tools_node aplica a política de todas as tool calls do lote sobre o estado anterior ao lote; abrir_chamado paralelo faz 2 POSTs com a MESMA chave de idempotência, que o gateway deduplica (ADR 0005): risco real baixo, mas viola 'nunca retry em POST /tickets' na camada Python (src/agent/nodes.py, fora da zona da E3.5)"
 sessao: {telefone: "+5531999990062", nome_contato: "Elaine", contato: telefone}
 jev:
   - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}

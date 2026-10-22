@@ -1,5 +1,6 @@
 # Comportamento: Infodesk indisponível na abertura => a Sofia não afirma que abriu; um atendente assume.
 # Negativo: sem número de chamado inventado; uma única chamada ao gateway (nunca retry em POST /tickets).
+# NOTA: o texto evita 'foi registrado' de propósito (ver conversa-061, bug do guardrail) — não 'limpe' a redação.
 id: conversa-043
 descricao: falha na abertura não vira sucesso nem retry
 sessao: {telefone: "+5531999990043", nome_contato: "Abel", contato: telefone}

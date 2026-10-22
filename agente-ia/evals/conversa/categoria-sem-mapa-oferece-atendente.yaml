@@ -1,7 +1,8 @@
-# Comportamento: categoria sem mesa configurada => não abre; oferece atendente sem citar o motivo técnico.
+# Comportamento: categoria sem mesa configurada => o preparo falha, nenhuma proposta fica no estado e a abertura é impossível.
+# O texto ao cliente é scriptado; a prova é de estado (sem proposta) e de ausência de abertura.
 # Negativo: sem proposta no estado, sem abertura.
 id: conversa-042
-descricao: preparo recusado por categoria sem mapa não vaza o motivo e oferece atendente
+descricao: preparo recusado por categoria sem mapa não deixa proposta no estado
 sessao: {telefone: "+5531999990042", nome_contato: "Zilda", contato: telefone}
 jev:
   - {intencao: [reclamacao_problema, 0.93], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [1, 0.8], malicioso: 0.02, fora_de_escopo: 0.01}
@@ -17,4 +18,5 @@ turnos:
       nao_chama: [abrir_chamado]
       proposta_no_estado: false
       contem: ["atendente"]
-      nao_contem: ["categoria_sem_mapa", "mesa"]
+      nao_contem: ["categoria_sem_mapa"]
+      gateway_nao_recebeu: [/tools/infodesk/ticket/abrir]

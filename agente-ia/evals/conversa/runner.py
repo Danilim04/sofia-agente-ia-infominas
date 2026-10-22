@@ -107,6 +107,7 @@ class _Turno:
     bloqueado: bool = False
     prompt_sistema: str = ""
     llm_chamadas: int = 0
+    tool_textos: str = ""
 
 
 def arquivos_de_cenario(diretorio: Path = DIRETORIO) -> list[Path]:
@@ -233,14 +234,17 @@ def _ambiente(gateway: _GatewayFalso, relogio: _Relogio) -> Iterator[None]:
             return relogio.agora.astimezone(tz) if tz else relogio.agora
 
     get_settings.cache_clear()
-    with (
-        patch.dict(os.environ, chave),
-        patch.object(infodesk_tools.httpx, "post", gateway.post),
-        patch.object(infodesk_tools, "get_settings", lambda: cfg),
-        patch.object(proposta, "relogio", lambda: relogio.agora.astimezone(UTC)),
-        patch.object(nodes, "datetime", _DatetimeCongelado),
-    ):
-        yield
+    try:
+        with (
+            patch.dict(os.environ, chave),
+            patch.object(infodesk_tools.httpx, "post", gateway.post),
+            patch.object(infodesk_tools, "get_settings", lambda: cfg),
+            patch.object(proposta, "relogio", lambda: relogio.agora.astimezone(UTC)),
+            patch.object(nodes, "datetime", _DatetimeCongelado),
+        ):
+            yield
+    finally:
+        get_settings.cache_clear()  # não deixa o Settings com a chave falsa para outros testes
 
 
 def _resposta_jev(r: Any) -> Any:
@@ -294,6 +298,7 @@ def _colher_turno(saida: Mapping[str, Any]) -> _Turno:
     t = _Turno(estado=dict(saida), acoes=list(saida.get("acoes") or []))
     for m in mensagens[inicio:]:
         if isinstance(m, ToolMessage):
+            t.tool_textos += str(m.content) + "\n"
             recusada = False
             try:
                 corpo = json.loads(str(m.content))
@@ -315,8 +320,9 @@ def _colher_turno(saida: Mapping[str, Any]) -> _Turno:
 _EMOJI = re.compile("[\U0001f300-\U0001faff\u2600-\u27bf\u2b50\u2b55]")
 #: Promessas que a Sofia nunca faz (prazo, retorno): `docs/plano/00` D7 e system prompt.
 _PROMESSAS = re.compile(
-    r"\bem at[eé] \d|\bdentro de \d|\bprazo (?:de|é|e) |\bpr[oó]ximas? \d+ (?:horas|dias)\b|"
-    r"\bainda hoje\b|\bem breve te (?:retorn|ligamos)",
+    r"\bem at[eé] \d|\bdentro d[eo] (?:\d|prazo)|\bprazo (?:de|é|e) |"
+    r"\bpr[oó]ximas? \d+ (?:horas|dias)\b|\bem \d+ ?(?:min|h\b|hora|dia)|\bamanh[ãa]\b|"
+    r"\bainda hoje\b|\bem instantes\b|\blogo (?:te|retorn)|\bem breve\b",
     re.IGNORECASE,
 )
 _CORPORATIVO = re.compile(
@@ -393,6 +399,7 @@ def _verificar(espera: Mapping[str, Any], t: _Turno, rotulo: str) -> list[str]:
             espera,
             Observado(
                 prompt_sistema=t.prompt_sistema,
+                tool_textos=t.tool_textos,
                 llm_chamadas=t.llm_chamadas,
                 chamadas_gateway=t.chamadas_gateway,
                 estado=t.estado,
@@ -444,7 +451,8 @@ def executar(cenario: CenarioConversa) -> ResultadoCenario:
             retriever.chunks = extras.rag
             gateway.sobrescritas = extras.gateway
             jev._padrao = _resposta_jev(cenario.jev[i - 1])
-            llm.invoke.side_effect = _script_llm(turno, i, extras)
+            script = _script_llm(turno, i, extras)
+            llm.invoke.side_effect = script
             entrada: dict[str, Any] = {"messages": [HumanMessage(content=turno.cliente)]}
             if i == 1:
                 entrada.update(
@@ -468,6 +476,11 @@ def executar(cenario: CenarioConversa) -> ResultadoCenario:
             colhido.chamadas_gateway = gateway.chamadas[antes:]
             chamadas_llm = llm.invoke.call_args_list[llm_antes:]
             colhido.llm_chamadas = len(chamadas_llm)
+            if not colhido.bloqueado and len(chamadas_llm) < len(script):
+                falhas.append(
+                    f"{rotulo}: o script do LLM tem {len(script)} passo(s) mas o grafo o chamou "
+                    f"{len(chamadas_llm)}x — passos sobrando passam em silêncio"
+                )
             colhido.prompt_sistema = "\n".join(
                 dict.fromkeys(_texto_de(c.args[0][0].content) for c in chamadas_llm)
             )

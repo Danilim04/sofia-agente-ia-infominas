@@ -110,6 +110,43 @@ def test_persona_aceita_respostas_boas(texto: str) -> None:
     assert runner.verificar_persona(texto, "t") == []
 
 
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Resolvemos em 24 horas.",
+        "Um técnico passa em 10 minutos.",
+        "Amanhã alguém te liga.",
+        "Logo te retorno por aqui.",
+        "Em instantes você tem a resposta.",
+        "Fica pronto dentro do prazo combinado.",
+        "Em breve uma pessoa fala com você.",
+    ],
+)
+def test_persona_recusa_promessas_de_prazo(texto: str) -> None:
+    assert any("promete prazo" in f for f in runner.verificar_persona(texto, "t")), texto
+
+
+def test_tool_viu_confere_o_que_o_llm_recebeu_da_tool(tmp_path: Path) -> None:
+    c = _cenario(
+        tmp_path,
+        espera='{nao_chama: [abrir_chamado], tool_viu_contem: ["algo que nenhuma tool devolveu"]}',
+    )
+    assert any("tool_viu_contem" in f for f in runner.executar(c).falhas)
+
+
+def test_script_do_llm_com_passos_sobrando_reprova(tmp_path: Path) -> None:
+    arquivo = tmp_path / "c.yaml"
+    arquivo.write_text(
+        _yaml(texto="Oi", espera="{nao_chama: [abrir_chamado]}").replace(
+            '      - texto: "Oi"\n',
+            '      - texto: "Oi"\n      - texto: "passo que o grafo nunca consome"\n',
+        ),
+        encoding="utf-8",
+    )
+    falhas = runner.executar(carregar_cenario_eval(arquivo)).falhas
+    assert any("passos sobrando" in f for f in falhas), falhas
+
+
 def test_persona_confere_bolha_a_bolha() -> None:
     assert runner.verificar_persona("Oi 😊\n---\nTudo bem 🙏", "t") == []  # 1 emoji por bolha
     assert runner.verificar_persona("Oi 😊🙏", "t")  # 2 na mesma bolha

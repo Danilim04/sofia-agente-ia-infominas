@@ -57,7 +57,7 @@ COMPORTAMENTOS_DO_PLANO = (
     "status-com-numero",
     "status-de-chamado-de-outra-pessoa-sem-posse",
     "pedido-de-atendente-transfere-por-codigo",
-    "audio-pede-texto-e-nao-abre-chamado",
+    "audio-rotulo-nao-vira-chamado",
     "cliente-irritado-transfere-sem-prometer-prazo",
     "baixa-confianca-esclarece-depois-categoria",
     "categoria-pegajosa-so-troca-com-confianca-alta",

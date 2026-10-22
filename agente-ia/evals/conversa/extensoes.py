@@ -60,6 +60,8 @@ CHAVES_EXTRA_ESPERA: Final[frozenset[str]] = frozenset(
     {
         "prompt_contem",
         "prompt_nao_contem",
+        "tool_viu_contem",
+        "tool_viu_nao_contem",
         "llm_chamadas",
         "gateway_json",
         "gateway_nao_recebeu",
@@ -98,6 +100,7 @@ class Observado:
     """O que o runner observou no turno (insumo das esperas estendidas)."""
 
     prompt_sistema: str = ""
+    tool_textos: str = ""
     llm_chamadas: int = 0
     chamadas_gateway: list[dict[str, Any]] = field(default_factory=list)
     estado: dict[str, Any] = field(default_factory=dict)
@@ -172,7 +175,14 @@ def _validar_gateway(valor: object, campo: str) -> dict[str, str]:
 
 def _validar_espera_extra(bruto: Mapping[str, Any], campo: str) -> dict[str, Any]:
     e: dict[str, Any] = {}
-    for chave in ("prompt_contem", "prompt_nao_contem", "estado_nao_contem", "gateway_nao_recebeu"):
+    for chave in (
+        "prompt_contem",
+        "prompt_nao_contem",
+        "tool_viu_contem",
+        "tool_viu_nao_contem",
+        "estado_nao_contem",
+        "gateway_nao_recebeu",
+    ):
         if chave in bruto:
             e[chave] = _lista_de_texto(bruto[chave], f"{campo}.{chave}")
     if "llm_chamadas" in bruto:
@@ -342,6 +352,13 @@ def verificar_extras(espera: Mapping[str, Any], obs: Observado, rotulo: str) -> 
     for trecho in espera.get("prompt_nao_contem", ()):
         if trecho in prompt:
             falhas.append(f"{rotulo}: prompt_nao_contem {trecho!r} — apareceu no system prompt")
+    vistos_tool = obs.tool_textos
+    for trecho in espera.get("tool_viu_contem", ()):
+        if trecho not in vistos_tool:
+            falhas.append(f"{rotulo}: tool_viu_contem {trecho!r} — o LLM não viu isso da tool")
+    for trecho in espera.get("tool_viu_nao_contem", ()):
+        if trecho in vistos_tool:
+            falhas.append(f"{rotulo}: tool_viu_nao_contem {trecho!r} — chegou ao LLM")
     if "llm_chamadas" in espera and obs.llm_chamadas != espera["llm_chamadas"]:
         falhas.append(
             f"{rotulo}: llm_chamadas={espera['llm_chamadas']} mas foram {obs.llm_chamadas}"
@@ -362,20 +379,14 @@ def verificar_extras(espera: Mapping[str, Any], obs: Observado, rotulo: str) -> 
             falhas.append(
                 f"{rotulo}: gateway_json {g['endpoint']} — nenhuma chamada (recebeu {vistos})"
             )
-        else:
-            motivos: list[str] = []
-            for c in candidatas:
-                erros = [
-                    f"{k}={_caminho_pontilhado(c['json'], k)!r}, esperado {v!r}"
-                    for k, v in g["campos"].items()
-                    if _caminho_pontilhado(c["json"], k) != v
-                ]
-                if not erros:
-                    motivos = []
-                    break
-                motivos = erros
-            if motivos:
-                falhas.append(f"{rotulo}: gateway_json {g['endpoint']} — " + "; ".join(motivos))
+        for c in candidatas:  # TODAS as chamadas ao endpoint: uma errada entre as certas reprova
+            erros = [
+                f"{k}={_caminho_pontilhado(c['json'], k)!r}, esperado {v!r}"
+                for k, v in g["campos"].items()
+                if _caminho_pontilhado(c["json"], k) != v
+            ]
+            if erros:
+                falhas.append(f"{rotulo}: gateway_json {g['endpoint']} — " + "; ".join(erros))
     if "estado" in espera:
         sub: list[str] = []
         _subconjunto(espera["estado"], obs.estado, "", sub)
