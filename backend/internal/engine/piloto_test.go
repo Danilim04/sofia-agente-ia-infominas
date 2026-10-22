@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"bot-infominas/internal/alerta"
 	"bot-infominas/internal/config"
@@ -178,5 +179,49 @@ func TestPilotoLogComTelefoneMascarado(t *testing.T) {
 	}
 	if !strings.Contains(log, `"msg":"transferencia"`) || !strings.Contains(log, `"origem":"fora_do_piloto"`) {
 		t.Fatalf("evento transferencia com a origem: %s", log)
+	}
+}
+
+// Qualquer caminho que transfira quem está fora da lista (o vigia N1, por
+// exemplo) vira silencioso: sem mensagem ao cliente, sem ocorrência de falha.
+func TestPilotoTransferenciaDeOutraOrigemParaForaDaListaNaoFalaComOCliente(t *testing.T) {
+	e, st, tr, _ := engineComPiloto(t, "+5511999990060")
+	ctx := context.Background()
+	_, _ = st.AtualizarConversa(ctx, "c-p9", func(c *store.Conversa, _ bool) bool {
+		c.Telefone, c.Estado, c.HandledBy = "+5531988887777", store.EstadoBot, infodesk.ConduzidaPorBotExterno
+		return true
+	})
+	e.TransferirParaHumano(ctx, "c-p9", Transferencia{Origem: OrigemVigia, Espera: 5 * time.Minute, Causa: "a Sofia não respondeu o cliente"})
+	if len(tr.mensagens("c-p9")) != 0 || len(tr.transferida("c-p9")) != 1 {
+		t.Fatalf("msgs=%v handoffs=%v", tr.mensagens("c-p9"), tr.transferida("c-p9"))
+	}
+	if n := tr.notas("c-p9"); len(n) != 1 || !strings.Contains(n[0], "fora do grupo de teste da Sofia") {
+		t.Fatalf("nota: %v", n)
+	}
+	if f, _ := st.UltimaFalha(ctx, "c-p9"); f != nil {
+		t.Fatalf("sem ocorrência de falha: %+v", f)
+	}
+
+	// Testador continua com o aviso normal.
+	_, _ = st.AtualizarConversa(ctx, "c-p10", func(c *store.Conversa, _ bool) bool {
+		c.Telefone, c.Estado, c.HandledBy = "+5511999990060", store.EstadoBot, infodesk.ConduzidaPorBotExterno
+		return true
+	})
+	e.TransferirParaHumano(ctx, "c-p10", Transferencia{Origem: OrigemCliente})
+	if len(tr.mensagens("c-p10")) != 1 {
+		t.Fatalf("o testador recebe o aviso: %v", tr.mensagens("c-p10"))
+	}
+}
+
+// Handoff que falha fora do piloto alerta (um por conversa) e o texto não manda
+// procurar um log que não existe.
+func TestPilotoHandoffQueFalhaAlerta(t *testing.T) {
+	e, _, tr, _ := engineComPiloto(t, "+5511999990060")
+	alertas := comNotificadorFalso(e)
+	tr.handoffErr = errors.New("fora")
+	e.processarLote(context.Background(), []Inbound{msgDe("c-p11", "+5531988887777", "oi")})
+	al := alertas.doTipo(alerta.TipoHandoffFalhou)
+	if len(al) != 1 || strings.Contains(al[0].Texto, "log sofia_falha.") {
+		t.Fatalf("alerta: %+v", al)
 	}
 }

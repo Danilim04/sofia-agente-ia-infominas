@@ -147,6 +147,16 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 			"conversation_id", convID, "origem", t.Origem)
 		return ""
 	}
+	// Lista de testadores (E3.9): quem está fora dela nunca recebe mensagem do
+	// bot, seja qual for o caminho que o transfere (o vigia N1, por exemplo, pode
+	// chegar aqui para uma conversa que o filtro do lote não viu).
+	if t.Origem != OrigemForaDoPiloto && e.cfg.TestadoresAtivo() {
+		if c, err := e.st.ObterConversa(ctx, convID); err == nil && c != nil && foraDoPiloto(e.cfg, c.Telefone) {
+			e.log.Info("fora_do_piloto: transferência de origem "+t.Origem+" vira silenciosa para número fora da lista",
+				"conversation_id", convID, "telefone", mascararTelefone(c.Telefone))
+			t = Transferencia{Origem: OrigemForaDoPiloto, Causa: "número fora da lista de testadores (TESTADORES_TELEFONES)", SemAviso: true}
+		}
+	}
 	agora := e.agora()
 	id := strings.TrimSpace(t.ID)
 	if id == "" {
@@ -208,9 +218,9 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 	if err := e.handoffComRetry(ctx, convID, dept, nota); err != nil {
 		e.log.Error("transferir: handoff falhou; conversa fica muda localmente e o vigia do reconciliador repete",
 			"id_ocorrencia", id, "conversation_id", convID, "departamento", dept, "err", err)
-		texto := "Ocorrência " + id + " (origem " + t.Origem + "): o Infodesk não aceitou o handoff. A Sofia parou de responder nessa conversa; o cliente pode estar sem ninguém. O reconciliador vai repetir o handoff. Veja o log do gateway (sofia_falha, ou transferencia/handoff pendente para a origem fora_do_piloto)."
+		texto := "Ocorrência " + id + " (origem " + t.Origem + "): o Infodesk não aceitou o handoff. A Sofia parou de responder nessa conversa; o cliente pode estar sem ninguém. O reconciliador vai repetir o handoff. Veja o log do gateway (a ocorrência está nos logs sofia_falha ou transferencia)."
 		if !e.marcarHandoffPendente(ctx, convID, t.Origem, id, dept, nota) {
-			texto = "Ocorrência " + id + " (origem " + t.Origem + "): o Infodesk não aceitou o handoff e a marca para repeti-lo não foi gravada. A Sofia parou de responder nessa conversa e NINGUÉM vai repetir o handoff sozinho: transfira à mão. Veja o log sofia_falha."
+			texto = "Ocorrência " + id + " (origem " + t.Origem + "): o Infodesk não aceitou o handoff e a marca para repeti-lo não foi gravada. A Sofia parou de responder nessa conversa e NINGUÉM vai repetir o handoff sozinho: transfira à mão. Veja o log do gateway."
 		}
 		e.vigia.Aviso(alerta.TipoHandoffFalhou, "Handoff para o atendente falhou", texto, convID)
 	}

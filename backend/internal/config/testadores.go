@@ -35,8 +35,22 @@ func ChaveTelefone(s string) (string, bool) {
 			return "", false
 		}
 	}
-	if mais && !strings.HasPrefix(digitos, "55") {
-		return "+" + digitos, true
+	// Com `+`, o país manda: +55 pede o número completo (55 + DDD + 8 ou 9
+	// dígitos = 12 ou 13); um número truncado viraria o de outra pessoa (DDD 55 é
+	// o de Santa Maria/RS). Outro país compara pelo E.164 inteiro.
+	if mais {
+		if !strings.HasPrefix(digitos, "55") {
+			if digitos[0] == '0' {
+				return "", false
+			}
+			return "+" + digitos, true
+		}
+		if len(digitos) != 12 && len(digitos) != 13 {
+			return "", false
+		}
+	}
+	if digitos[0] == '0' { // zero de tronco (031…) nunca casaria com nada
+		return "", false
 	}
 	nacional := digitos
 	if strings.HasPrefix(digitos, "55") && (len(digitos) == 12 || len(digitos) == 13) {
@@ -46,7 +60,10 @@ func ChaveTelefone(s string) (string, bool) {
 	case 10:
 		return "br:" + nacional, true
 	case 11:
-		if nacional[2] == '9' { // DDD + 9 + 8 dígitos: o 9º dígito do celular some da chave
+		// DDD + 9 + 8 dígitos: o 9º dígito do celular some da chave. Só quando o
+		// dígito seguinte é 6–9 (faixa dos celulares), para um fixo (2–5) nunca
+		// colidir com um celular.
+		if nacional[2] == '9' && nacional[3] >= '6' {
 			return "br:" + nacional[:2] + nacional[3:], true
 		}
 		return "br:" + nacional, true

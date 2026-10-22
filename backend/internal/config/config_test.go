@@ -348,7 +348,8 @@ func TestChaveTelefoneVariantesBR(t *testing.T) {
 }
 
 func TestChaveTelefoneRecusaLixo(t *testing.T) {
-	for _, s := range []string{"", "abc", "+55 31 9900", "12345678901234567", "31990000000x", "++5531990000000", "5531-9900-00a0"} {
+	for _, s := range []string{"", "abc", "+55 31 9900", "12345678901234567", "31990000000x", "++5531990000000", "5531-9900-00a0",
+		"+5531990000", "+55311234567", "+55991234567", "031990000000", "+031990000000"} {
 		if k, ok := ChaveTelefone(s); ok {
 			t.Errorf("%q devia ser recusado, veio %q", s, k)
 		}
@@ -414,5 +415,21 @@ func TestTestadoresInvalidosFalhamNoBoot(t *testing.T) {
 				t.Fatalf("o erro não pode repetir o valor: %v", err)
 			}
 		})
+	}
+}
+
+// Número truncado com +55 não pode virar o de outra pessoa (DDD 55 existe), e
+// DDD 55 completo continua válido, com e sem +55.
+func TestChaveTelefoneDDD55EFixoNaoColideComCelular(t *testing.T) {
+	a, ok1 := ChaveTelefone("+5555991234567")
+	b, ok2 := ChaveTelefone("55991234567")
+	c, ok3 := ChaveTelefone("5591234567")
+	if !ok1 || !ok2 || !ok3 || a != b || a != c {
+		t.Fatalf("DDD 55 completo: %q %q %q", a, b, c)
+	}
+	cel, _ := ChaveTelefone("31 9 3333-4444")
+	fixo, _ := ChaveTelefone("31 3333-4444")
+	if cel == fixo {
+		t.Fatalf("celular 931… e fixo 31… não podem colidir: %q", cel)
 	}
 }
