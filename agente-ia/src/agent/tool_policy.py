@@ -22,7 +22,7 @@ Este módulo é a fonte única de verdade sobre o que o agente pode fazer:
 Uma tool ausente deste mapa não recebe nem valida nada da sessão (tools puras
 de conteúdo). Auditoria de segurança das tools começa e termina neste arquivo.
 
-Matriz de políticas das 6 tools do Infodesk (E2.3,
+Matriz de políticas das 8 tools do Infodesk (E2.3 e E5.3,
 `docs/plano/01-ferramentas.md`, seção D) no fim do módulo, em ``POLITICAS``.
 O carimbo da proposta mora em ``src/tools/proposta.py`` (a camada ``tools`` não
 pode importar a política) e é re-exportado aqui.
@@ -30,6 +30,7 @@ pode importar a política) e é re-exportado aqui.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from collections.abc import Callable, Mapping
@@ -37,10 +38,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from src.classificacao.config import ConfigClassificacao
 from src.classificacao.tipos import CATEGORIA_INDEFINIDA
+from src.identity.cadastro import email_valido, empresa_valida, nome_valido
 from src.identity.config import ident_exigir_cpf
 from src.identity.contrato import contrato_valido
 from src.identity.cpf import cpf_valido
@@ -336,6 +338,105 @@ _exigir_proposta_confirmada = exigir_proposta_confirmada  # nome usado pelos fak
 
 
 # ---------------------------------------------------------------------------
+# Cadastro de solicitante em duas fases (E5.3, ADR 0009)
+#
+# A proposta de cadastro NÃO é guardada em campo do estado: é o resultado do
+# último `preparar_cadastro_solicitante` que EXECUTOU com sucesso, lido do
+# histórico (`ToolMessage` — só o `tools_node` as cria, nem o cliente nem o modelo
+# conseguem forjar uma). O turno da proposta é o número de mensagens do cliente
+# até aquele `ToolMessage`. A validade (15 min) e a identidade da proposta
+# (conversa, telefone, `clientId`) são conferidas no GATEWAY, que só executa o que
+# ele mesmo gravou no `preparar`.
+# ---------------------------------------------------------------------------
+
+_TOOL_PREPARAR_CADASTRO = "preparar_cadastro_solicitante"
+_TOOL_CADASTRAR = "cadastrar_solicitante"
+
+
+def _json_do_tool_message(mensagem: ToolMessage) -> Mapping[str, Any] | None:
+    conteudo = mensagem.content
+    if isinstance(conteudo, list):
+        conteudo = "".join(b.get("text", "") for b in conteudo if isinstance(b, dict))
+    try:
+        dado = json.loads(conteudo) if isinstance(conteudo, str) else None
+    except ValueError:
+        return None
+    return dado if isinstance(dado, Mapping) else None
+
+
+def _cadastro_preparado(state: Mapping[str, Any]) -> tuple[dict[str, Any], int] | None:
+    """`(proposta, turno)` do cadastro preparado e ainda não consumido, ou `None`.
+
+    Percorre o histórico em ordem: um `preparar` com `status: true` e `proposta.chave`
+    arma a proposta (no turno corrente); um `preparar` que o gateway recusou a desarma
+    (o estado reflete o ÚLTIMO preparo); qualquer `cadastrar` que o gateway executou
+    (com sucesso ou não) a consome. Recusa da política e exceção mascarada não são
+    execuções (não trazem `status` booleano) e não mudam nada.
+    """
+    turno = 0
+    preparado: tuple[dict[str, Any], int] | None = None
+    for mensagem in state.get("messages") or []:
+        if isinstance(mensagem, HumanMessage):
+            turno += 1
+            continue
+        if not isinstance(mensagem, ToolMessage):
+            continue
+        nome = getattr(mensagem, "name", None)
+        if nome not in (_TOOL_PREPARAR_CADASTRO, _TOOL_CADASTRAR):
+            continue
+        dado = _json_do_tool_message(mensagem)
+        if dado is None or dado.get("recusado_pela_politica") or not isinstance(
+            dado.get("status"), bool
+        ):
+            continue
+        if nome == _TOOL_CADASTRAR:
+            preparado = None
+            continue
+        proposta = dado.get("proposta")
+        if dado["status"] and isinstance(proposta, Mapping) and proposta.get("chave"):
+            preparado = (dict(proposta), turno)
+        else:
+            preparado = None
+    return preparado
+
+
+def _proposta_cadastro_da_sessao(state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Proposta de cadastro validada pelo dry-run do gateway (arg injetado)."""
+    preparado = _cadastro_preparado(state)
+    return preparado[0] if preparado else None
+
+
+def exigir_cadastro_confirmado(state: Mapping[str, Any]) -> str | None:
+    """Cadastrar exige proposta preparada e confirmada na mensagem SEGUINTE a ela."""
+    preparado = _cadastro_preparado(state)
+    if preparado is None:
+        return (
+            "não há cadastro preparado — chame preparar_cadastro_solicitante, apresente o "
+            "resumo ao cliente e só cadastre após a confirmação dele"
+        )
+    atual = _turno_atual(state)
+    if atual == preparado[1]:
+        return (
+            "o cadastro foi preparado NESTE turno e o cliente ainda não viu o resumo — "
+            "apresente-o e espere a confirmação na PRÓXIMA mensagem; não cadastre agora"
+        )
+    if atual != preparado[1] + 1:
+        return (
+            "a confirmação precisa ser a mensagem SEGUINTE ao resumo e a conversa seguiu "
+            "sem ela — se o cliente ainda quiser o cadastro, prepare de novo com "
+            "preparar_cadastro_solicitante e peça a confirmação outra vez"
+        )
+    if not eh_confirmacao_explicita(_ultima_mensagem_do_cliente(state)):
+        return (
+            "a última mensagem do cliente NÃO é uma confirmação explícita do cadastro "
+            "(só valem respostas como 'sim', 'ok', 'pode', sem outro conteúdo) — 'esse', "
+            "uma pergunta ou um pedido de mudança não confirmam; não cadastre: responda ao "
+            "que ele disse e, se for mudança, prepare de novo e peça a confirmação"
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Precondições de sessão do `preparar_abertura_chamado`
 # ---------------------------------------------------------------------------
 
@@ -356,8 +457,9 @@ _PROTOCOLO_CITADO = re.compile(
 def exigir_identificado(state: Mapping[str, Any]) -> str | None:
     """Cliente identificado: por lookup do telefone OU por CPF/contrato validado.
 
-    ``contato.forma == "telefone"`` (lookup do Infodesk, ADR 0004 revisado) basta
-    quando ``IDENT_EXIGIR_CPF=false`` (default; TODO(N3): decisão da Infominas);
+    ``contato.forma == "telefone"`` (lookup do Infodesk, ADR 0004 revisado) ou
+    ``identificacao.forma == "cadastro"`` (solicitante cadastrado nesta conversa,
+    ADR 0009) bastam quando ``IDENT_EXIGIR_CPF=false`` (default; TODO(N3): decisão da Infominas);
     com ``true`` só CPF/contrato contam. A forma vem do gateway/da tool de
     identificação — nunca de texto do modelo.
     """
@@ -365,12 +467,24 @@ def exigir_identificado(state: Mapping[str, Any]) -> str | None:
         forma = dado.get("forma") if isinstance(dado, Mapping) else None
         if forma in ("cpf", "contrato"):
             return None
-        if forma == "telefone" and not ident_exigir_cpf():
+        # "cadastro" (E5.3, ADR 0009) vale como o lookup: o telefone passou a existir no
+        # Infodesk; se isso basta sem CPF é `IDENT_EXIGIR_CPF` (TODO(N3)).
+        if forma in ("telefone", "cadastro") and not ident_exigir_cpf():
             return None
     return (
         "o cliente ainda não se identificou — peça o CPF ou o número do contrato e "
         "registre com informar_identificacao antes de preparar o chamado"
     )
+
+
+def exigir_cliente_nao_identificado(state: Mapping[str, Any]) -> str | None:
+    """Só se cadastra quem ainda não está identificado (lookup, cadastro, CPF ou contrato)."""
+    if identificacao_da_sessao(state):
+        return (
+            "o cliente já está identificado — não cadastre de novo; siga o atendimento "
+            "(entender o problema e abrir o chamado)"
+        )
+    return None
 
 
 def _acao_indefinida() -> str:
@@ -445,6 +559,26 @@ def validar_contrato(valor: Any, state: Mapping[str, Any]) -> str | None:
     return "número de contrato inválido; peça para o cliente conferir e mandar de novo"
 
 
+def validar_nome_cadastro(valor: Any, state: Mapping[str, Any]) -> str | None:
+    """Nome completo: duas palavras ou mais, só letras (ADR 0009)."""
+    if nome_valido(valor):
+        return None
+    return "nome inválido; peça o nome completo (nome e sobrenome) do cliente"
+
+
+def validar_empresa_cadastro(valor: Any, state: Mapping[str, Any]) -> str | None:
+    if empresa_valida(valor):
+        return None
+    return "empresa obrigatória (até 120 caracteres); peça o nome da empresa do cliente"
+
+
+def validar_email_cadastro(valor: Any, state: Mapping[str, Any]) -> str | None:
+    """E-mail é opcional; se vier, tem de ser um endereço válido."""
+    if email_valido(valor):
+        return None
+    return "e-mail inválido; peça para o cliente conferir ou siga sem e-mail"
+
+
 def validar_numero(valor: Any, state: Mapping[str, Any]) -> str | None:
     """Número do chamado: só dígitos, 1 a 10."""
     if normalizar_numero_chamado(valor) is not None:
@@ -479,7 +613,7 @@ def validar_descricao(valor: Any, state: Mapping[str, Any]) -> str | None:
 _SESSAO = {"telefone": _telefone_da_sessao, "conversation_id": _conversation_id_da_sessao}
 
 #: Matriz tool × política (`docs/plano/01-ferramentas.md`, seção D). Uma linha por
-#: tool exposta ao agente; `get_default_tools()` e este mapa têm as mesmas 6 chaves
+#: tool exposta ao agente; `get_default_tools()` e este mapa têm as mesmas 8 chaves
 #: (`tests/test_tool_policy.py`).
 POLITICAS: dict[str, PoliticaTool] = {
     "informar_identificacao": PoliticaTool(
@@ -507,6 +641,19 @@ POLITICAS: dict[str, PoliticaTool] = {
     "transferir_para_atendente": PoliticaTool(
         injetar={**_SESSAO, "classificacao": classificacao_da_sessao},
         validar={"motivo": validar_motivo},
+    ),
+    "preparar_cadastro_solicitante": PoliticaTool(
+        injetar=dict(_SESSAO),
+        validar={
+            "nome": validar_nome_cadastro,
+            "empresa": validar_empresa_cadastro,
+            "email": validar_email_cadastro,
+        },
+        exigir=exigir_cliente_nao_identificado,
+    ),
+    "cadastrar_solicitante": PoliticaTool(
+        injetar={**_SESSAO, "proposta": _proposta_cadastro_da_sessao},
+        exigir=exigir_cadastro_confirmado,
     ),
 }
 

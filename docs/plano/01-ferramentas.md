@@ -166,7 +166,7 @@ Cadastro de quem o `lookup` não achou (ADR 0009; skill `.claude/skills/cadastro
 | Retorno | `{status: true, proposta: {nome, email, empresa: {nome}, telefone_mascarado, chave}}` — nunca `clientId` nem telefone completo |
 | Erros | `campo_invalido`, `ja_cadastrado` (o telefone já existe no Infodesk: siga com CPF/contrato), `empresa_nao_encontrada`, `empresa_ambigua` (`candidatos: [{nome}]`), `cadastro_transferido` (tentativas esgotadas e `CADASTRO_SEM_CLIENTE=transferir`: o gateway já avisou o cliente e passou a conversa), `escopo_insuficiente`, `infodesk_indisponivel` |
 | Idempotência | I-nenhuma no Infodesk (só leitura); o upsert de `cadastros` é por `chave` |
-| Efeito no estado | `tools_node` guarda a proposta carimbada (`criada_em`, `turno`) em `identificacao.cadastro_pendente` (validade 15 min) |
+| Efeito no estado | nenhum: a proposta fica no `ToolMessage` do histórico e a política a lê de lá (não há campo novo em `AgentState`; `state.py`/`nodes.py` ficam como estão) |
 | Dependências | `CADASTRO_SEM_CLIENTE` (default `transferir`, `TODO(decisão do produto)`), `CADASTRO_MAX_TENTATIVAS` (default 2) |
 
 #### A8b. `cadastrar_solicitante`
@@ -175,9 +175,9 @@ Cadastro de quem o `lookup` não achou (ADR 0009; skill `.claude/skills/cadastro
 |---|---|
 | Propósito | Cadastra EXATAMENTE a proposta preparada e confirmada |
 | Args do LLM | **nenhum** |
-| Injetados | `proposta` (de `identificacao.cadastro_pendente`), `telefone`, `conversation_id` |
-| Precondição | `exigir_cadastro_confirmado`: proposta existe, ≤ 15 min, turno = turno da proposta + 1, última mensagem do cliente é confirmação explícita (`CONFIRMACOES_EXPLICITAS`; "esse", pergunta ou mudança não confirmam) |
-| Gateway | `POST /tools/infodesk/cadastro/cadastrar` `{telefone, conversation_id, proposta}` → recalcula a `chave` e **só executa uma proposta que ele mesmo gravou** (`status = proposta`, mesma conversa e telefone, ≤ 15 min; senão `sem_proposta`); linha já `feito` devolve o resultado sem novo POST; `POST /requesters {name, clientId, phone (da sessão), email?, conversationId}` UMA vez; grava `contatos` (`origem = cadastro`, `forma = telefone`, `requester_id`, `cliente_id`) e marca `cadastros.status = feito` |
+| Injetados | `proposta` (a do último `preparar_cadastro_solicitante` que o gateway aceitou, lida do histórico por `tool_policy._cadastro_preparado`), `telefone`, `conversation_id` |
+| Precondição | `exigir_cadastro_confirmado`: proposta existe e não foi consumida, turno = turno da proposta + 1, última mensagem do cliente é confirmação explícita (`CONFIRMACOES_EXPLICITAS`; "esse", pergunta ou mudança não confirmam). A validade de 15 min é conferida pelo **gateway** (a mensagem do histórico não tem relógio) |
+| Gateway | `POST /tools/infodesk/cadastro/cadastrar` `{telefone, conversation_id, proposta{nome, email, empresa, telefone_mascarado, chave}}` → recalcula a `chave` e **só executa uma proposta que ele mesmo gravou** (`status = proposta`, mesma conversa e telefone, ≤ 15 min; senão `sem_proposta`); linha já `feito` devolve o resultado sem novo POST; `POST /requesters {name, clientId, phone (da sessão), email?, conversationId}` UMA vez; grava `contatos` (`origem = cadastro`, `forma = telefone`, `requester_id`, `cliente_id`) e marca `cadastros.status = feito` |
 | Infodesk | `POST /requesters` (escopo `contacts:write`; idempotente por telefone/e-mail no mesmo cliente, `created: false`, `docs/infodesk/10` §6). O cadastro já vincula a conversa; o ticket herda `requesterId`/`clientId` (T11) |
 | Retorno | `{status: true, cadastrado: true, criado: bool, solicitante: {nome}, empresa: {nome}, requester_id}` |
 | Erros | `sem_proposta`, `escopo_insuficiente` (403 → alerta de configuração), `infodesk_indisponivel` (rede/5xx/400: a linha fica `proposta`; repetir é seguro porque o Infodesk é idempotente) |

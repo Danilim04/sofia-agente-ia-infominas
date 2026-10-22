@@ -1,9 +1,9 @@
 # Notas — `cadastro/cadastrar`
 
-- Sem argumentos do LLM. `proposta` é a que o `preparar` devolveu, carimbada no estado
-  Python com `criada_em` (o `turno` é de controle e não vai no contrato). O gateway recalcula a
-  `chave`, exige uma linha `proposta` da **mesma conversa e telefone**, com até 15 min, e só
-  então faz `POST /requesters {name, clientId, phone, email?, conversationId}` UMA vez.
+- Sem argumentos do LLM. `proposta` é a que o `preparar` devolveu, lida pela política do
+  histórico (`ToolMessage` do último `preparar` que o gateway aceitou; não há campo novo no
+  estado). O gateway recalcula a `chave`, exige uma linha `proposta` da **mesma conversa e
+  telefone**, com até 15 min, e só então faz `POST /requesters {name, clientId, phone, email?, conversationId}` UMA vez.
 - `requester_id` e `solicitante.nome` (abreviado, "Maria S.") alimentam o estado
   `identificacao = {forma: "cadastro", valor_mascarado, requester_id}`.
 - `criado: false` quando o Infodesk já tinha o solicitante (idempotente por telefone/e-mail

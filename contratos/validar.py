@@ -149,7 +149,6 @@ ANINHADO: dict[str, dict[str, set[str]]] = {
             "empresa",
             "telefone_mascarado",
             "chave",
-            "criada_em",
         },
         "ok.solicitante": {"nome"},
         "ok.empresa": {"nome"},
