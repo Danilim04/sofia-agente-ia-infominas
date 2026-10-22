@@ -32,7 +32,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import (
@@ -42,7 +42,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.tools import BaseTool
 
 from src.agent.pii import (
@@ -51,6 +51,7 @@ from src.agent.pii import (
     mascarar_estrutura_de_texto,
     proteger_mensagem,
     reidratar,
+    tirar_nomes_conhecidos,
 )
 from src.agent.prompts import (
     RESPOSTA_ACAO_SEM_FERRAMENTA,
@@ -68,6 +69,7 @@ from src.classificacao.tipos import (
     INTENCAO_RECLAMACAO,
 )
 from src.config import get_settings
+from src.observability.pii import registrar_nomes
 from src.security.input_guardrails import avaliar_entrada
 from src.security.output_guardrails import (
     TIPO_ABERTURA,
@@ -251,11 +253,63 @@ def _mensagens_para_classificacao(messages: Iterable[BaseMessage] | None) -> lis
     return saida
 
 
+#: Dados do contato que NÃO ficam no estado persistido (E4.5b, I1): o gateway os reenvia
+#: a cada turno e `processar_chat` os passa por `config["configurable"]`.
+#: As chaves começam com "__" de propósito: o LangChain NÃO copia para o `metadata` do
+#: run (e, daí, para o metadata do checkpoint e para o trace) as chaves "__*" do configurable.
+PREFIXO_SESSAO_NO_CONFIG = "__sessao_"
+_TOOL_PREPARAR_CADASTRO = "preparar_cadastro_solicitante"
+
+
+def _com_sessao(state: AgentState, config: RunnableConfig | None) -> AgentState:
+    """Estado + dados efêmeros do contato vindos de `config["configurable"]`.
+
+    `telefone` e `nome_contato` entram no estado da cópia; `nome_cadastro` volta ao
+    `contato`. Sem eles no config (testes, chamadas diretas) vale o que o estado tem.
+    Quem chama NÃO devolve esta cópia ao grafo — ela vive só no nó.
+    """
+    cfg = (config or {}).get("configurable") or {}
+
+    def _da_sessao(campo: str) -> Any:
+        return cfg.get(PREFIXO_SESSAO_NO_CONFIG + campo)
+
+    extra: dict[str, Any] = {
+        c: _da_sessao(c) for c in ("telefone", "nome_contato") if _da_sessao(c)
+    }
+    contato = state.get("contato")
+    if _da_sessao("nome_cadastro") and isinstance(contato, Mapping):
+        extra["contato"] = {**contato, "nome_cadastro": _da_sessao("nome_cadastro")}
+    return cast(AgentState, {**state, **extra}) if extra else state
+
+
+def _nomes_do_cadastro_no_turno(messages: Iterable[BaseMessage] | None) -> list[str]:
+    """Nomes que o cliente deu ao cadastro (args de `preparar_cadastro_solicitante`).
+
+    Lê as mensagens com o valor em claro do cofre (só existe durante o turno); depois
+    elas guardam o placeholder, que é ignorado aqui.
+    """
+    nomes: list[str] = []
+    for m in reidratar(messages or []):
+        if not isinstance(m, AIMessage):
+            continue
+        for tc in m.tool_calls or []:
+            if tc.get("name") == _TOOL_PREPARAR_CADASTRO:
+                nome = (tc.get("args") or {}).get("nome")
+                if isinstance(nome, str) and nome.strip() and not nome.startswith("<"):
+                    nomes.append(nome.strip())
+    return nomes
+
+
 def _nomes_conhecidos(state: AgentState) -> list[str]:
-    """Nomes do contato para mascarar na transcrição enviada ao JEV (PII)."""
+    """Nomes do contato para mascarar na transcrição enviada ao JEV (PII).
+
+    Nome do WhatsApp, nome do cadastro no Infodesk e o nome completo que o cliente
+    digitou ao se cadastrar (args do `preparar_cadastro_solicitante`).
+    """
     contato = state.get("contato") or {}
     candidatos = [state.get("nome_contato"), contato.get("nome_cadastro")]
-    return [str(n) for n in candidatos if isinstance(n, str) and n.strip()]
+    nomes = [str(n) for n in candidatos if isinstance(n, str) and n.strip()]
+    return nomes + _nomes_do_cadastro_no_turno(state.get("messages"))
 
 
 def _seguranca_pelo_jev(
@@ -371,9 +425,9 @@ def make_classificar_node(servico: ServicoClassificacao) -> RunnableLambda:
             nomes=_nomes_conhecidos(state),
         )
 
-    def classificar_sync(state: AgentState) -> dict:
+    def classificar_sync(state: AgentState, config: RunnableConfig | None = None) -> dict:
         try:
-            c = _executar_sync(_classificar(state))
+            c = _executar_sync(_classificar(_com_sessao(state, config)))
             if c is None:
                 return {}
             return _delta(state, c, _seguranca(state, c))
@@ -383,9 +437,9 @@ def make_classificar_node(servico: ServicoClassificacao) -> RunnableLambda:
             )
             return {}
 
-    async def classificar_async(state: AgentState) -> dict:
+    async def classificar_async(state: AgentState, config: RunnableConfig | None = None) -> dict:
         try:
-            c = await _classificar(state)
+            c = await _classificar(_com_sessao(state, config))
             if c is None:
                 return {}
             seguranca = await asyncio.to_thread(_seguranca, state, c)
@@ -780,8 +834,8 @@ def make_agent_node(llm: Any, tools: list[BaseTool]) -> Callable[[AgentState], d
     bound = llm.bind_tools(tools) if tools else llm
     usa_cache_control = _modelo_suporta_cache_control(get_settings().openrouter_model)
 
-    def agent_node(state: AgentState) -> dict:
-        system_msg = _build_system_message(state)
+    def agent_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
+        system_msg = _build_system_message(_com_sessao(state, config))
         # O estado guarda CPF/contrato mascarados; o modelo do turno precisa LER
         # o que o cliente acabou de digitar para repassá-lo à tool (E3.7). A
         # cópia em claro vive só nesta chamada — nunca volta ao estado.
@@ -839,7 +893,8 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
     """
     tools_by_name = {t.name: t for t in tools}
 
-    def tools_node(state: AgentState) -> dict:
+    def tools_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
+        sessao = _com_sessao(state, config)  # telefone/nome só em memória (E4.5b)
         messages = state.get("messages") or []
         if not messages:
             return {}
@@ -852,6 +907,7 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
             return {}
 
         tool_messages: list[ToolMessage] = []
+        nomes_do_cadastro: list[str] = []
         tentou_rag = state.get("tentou_rag", False)
         fontes_usadas = list(state.get("fontes_usadas") or [])
         # Deltas de estado dos efeitos pós-tool, acumulados no turno. Um efeito
@@ -875,13 +931,17 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
             # Em INFO só os NOMES dos args propostos: o conteúdo pode ser PII
             # (CPF/contrato em `informar_identificacao`) — valores só em DEBUG.
             args_llm = tc.get("args") or {}
+            if nome == _TOOL_PREPARAR_CADASTRO:
+                nome_dado = args_llm.get("nome")
+                if isinstance(nome_dado, str) and nome_dado.strip():
+                    nomes_do_cadastro.append(nome_dado.strip())
             logger.info("tool_exec nome=%s args=%s", nome, sorted(args_llm))
             logger.debug("tool_exec_args nome=%s args=%s", nome, mascarar_args(args_llm))
             # A política de cada chamada do lote lê o estado JÁ atualizado pelos
             # efeitos das anteriores: duas `abrir_chamado` na mesma mensagem do
             # modelo fazem UM POST (a 1ª consome a proposta; a 2ª é recusada).
             args, recusa = aplicar_politica(
-                nome, tc.get("args") or {}, {**state, **efeitos_do_turno}
+                nome, tc.get("args") or {}, {**sessao, **efeitos_do_turno}
             )
             if recusa:
                 logger.warning("tool_politica_recusa nome=%s motivo=%s", nome, recusa)
@@ -936,9 +996,21 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
 
             tool_messages.append(ToolMessage(content=content, tool_call_id=tool_call_id, name=nome))
 
+        # O nome que o cliente digitou no cadastro é conhecido a partir daqui: sai das
+        # mensagens dele já gravadas (não há regra para achar nome em texto livre) e
+        # entra na máscara de log/trace da conversa (E4.5b, I1/I3).
+        reescritas: list[BaseMessage] = []
+        if nomes_do_cadastro:
+            registrar_nomes(str(sessao.get("conversation_id") or ""), nomes_do_cadastro)
+            for m in messages:
+                if isinstance(m, HumanMessage):
+                    texto = _texto_de(m.content)
+                    limpo = tirar_nomes_conhecidos(texto, nomes_do_cadastro)
+                    if limpo != texto:
+                        reescritas.append(m.model_copy(update={"content": limpo}))
         return {
             **efeitos_do_turno,
-            "messages": tool_messages,
+            "messages": [*tool_messages, *reescritas],
             "tentou_rag": tentou_rag,
             "fontes_usadas": fontes_usadas,
         }

@@ -61,6 +61,7 @@ from src.agent.falhas import (
 )
 from src.agent.graph import build_graph
 from src.agent.llm import get_classifier_llm
+from src.agent.nodes import PREFIXO_SESSAO_NO_CONFIG
 from src.classificacao import Mensagem, ServicoClassificacao, criar_servico_padrao
 from src.config import get_settings
 from src.observability import eventos
@@ -281,16 +282,28 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
         config["callbacks"] = [handler]
         config["run_name"] = "chat"
 
-    inputs: dict[str, Any] = {
+    # PII do contato FORA do estado persistido (E4.5b, I1): telefone, nome do WhatsApp e
+    # nome do cadastro vão por `config` (o gateway os reenvia a cada turno); o estado
+    # recebe `None` nos dois primeiros, o que também limpa checkpoints antigos.
+    contato_no_estado = (
+        {k: v for k, v in req.contato.items() if k != "nome_cadastro"} if req.contato else None
+    )
+    nome_cadastro = (req.contato or {}).get("nome_cadastro")
+    sessao = {
+        "telefone": req.telefone,
         "nome_contato": req.nome_contato,
-        "contato": req.contato,
+        "nome_cadastro": nome_cadastro if isinstance(nome_cadastro, str) else None,
+    }
+    config["configurable"].update({PREFIXO_SESSAO_NO_CONFIG + k: v for k, v in sessao.items() if v})
+    inputs: dict[str, Any] = {
+        "nome_contato": None,
+        "telefone": None,
+        "contato": contato_no_estado,
         # Vai ao estado para as tools repassarem ao gateway (correlação do log
         # do gateway com a conversa) — nunca é argumento do modelo.
         "conversation_id": req.conversation_id,
         "messages": [HumanMessage(content=req.mensagem)],
     }
-    if req.telefone:
-        inputs["telefone"] = req.telefone
 
     try:
         with TracoDoTurno(

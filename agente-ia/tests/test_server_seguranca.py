@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -23,11 +25,11 @@ def cliente(monkeypatch):
 
         async def aget_state(self, config):
             class _E:
-                values: dict = {}
+                values: ClassVar[dict] = {}
 
             return _E()
 
-    monkeypatch.setattr(server, "_get_graph", lambda: _GrafoQuieto())
+    monkeypatch.setattr(server, "_get_graph", _GrafoQuieto)
     yield TestClient(server.app)
     get_settings.cache_clear()
 

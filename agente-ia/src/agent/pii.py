@@ -41,6 +41,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from src.classificacao.jev import mascarar_pii
 from src.identity.contrato import mascarar_contrato
 from src.identity.cpf import mascarar_cpf, somente_digitos
 
@@ -66,7 +67,19 @@ def mascarar_cpfs_no_texto(texto: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: Chaves de args cujo VALOR é PII do cadastro de solicitante (E4.5b): o placeholder
+#: vai ao checkpoint; o valor real vive no cofre até a tool executar.
+CHAVES_CADASTRO = {
+    "nome": "<NOME>",
+    "nome_completo": "<NOME>",
+    "email": "<EMAIL>",
+    "empresa": "<EMPRESA>",
+}
+
+
 def _mascarar_valor(chave: str | None, valor: Any) -> Any:
+    if chave in CHAVES_CADASTRO and isinstance(valor, str):
+        return CHAVES_CADASTRO[chave] if valor.strip() else valor
     if (
         chave in ("cpf", "contrato")
         and isinstance(valor, int | float)
@@ -128,19 +141,34 @@ def _mascarar_kwargs(kwargs: Mapping[str, Any]) -> dict[str, Any]:
     return saida
 
 
-def _mascarar_conteudo(conteudo: Any) -> Any:
-    """Texto da mensagem (str ou lista de blocos) sem CPF."""
+def mascarar_contatos_no_texto(texto: str) -> str:
+    """CPF, e-mail, telefone, números longos e "meu nome é X" mascarados (texto do cliente).
+
+    Reaproveita a máscara do JEV (`classificacao.jev.mascarar_pii`) depois da do CPF.
+    Nome SEM apresentação não tem regra confiável: o que o sistema conhece (nome do
+    contato, nome dado ao cadastro) é tirado por `tirar_nomes_conhecidos`.
+    """
+    return mascarar_pii(mascarar_cpfs_no_texto(texto), (), apresentacao=True)
+
+
+def tirar_nomes_conhecidos(texto: str, nomes: Iterable[str]) -> str:
+    return mascarar_pii(texto, tuple(n for n in nomes if n and n.strip()), apresentacao=False)
+
+
+def _mascarar_conteudo(conteudo: Any, *, contatos: bool = False) -> Any:
+    """Texto da mensagem (str ou lista de blocos) sem CPF (e, com `contatos`, sem e-mail/telefone)."""
+    mascarar = mascarar_contatos_no_texto if contatos else mascarar_cpfs_no_texto
     if isinstance(conteudo, str):
-        return mascarar_cpfs_no_texto(conteudo)
+        return mascarar(conteudo)
     if isinstance(conteudo, list):
         blocos: list[Any] = []
         for bloco in conteudo:
             if isinstance(bloco, str):
-                blocos.append(mascarar_cpfs_no_texto(bloco))
+                blocos.append(mascarar(bloco))
             elif isinstance(bloco, Mapping):
                 novo = dict(bloco)
                 if isinstance(novo.get("text"), str):
-                    novo["text"] = mascarar_cpfs_no_texto(novo["text"])
+                    novo["text"] = mascarar(novo["text"])
                 if isinstance(novo.get("input"), Mapping):  # bloco tool_use
                     novo["input"] = mascarar_args(novo["input"])
                 blocos.append(novo)
@@ -234,7 +262,9 @@ def mascarar_mensagem(mensagem: BaseMessage) -> BaseMessage:
     `ToolMessage` (o gateway ou o modelo podem ecoar o dado). Idempotente.
     """
     if isinstance(mensagem, HumanMessage | ToolMessage):
-        mascarado = _mascarar_conteudo(mensagem.content)
+        mascarado = _mascarar_conteudo(
+            mensagem.content, contatos=isinstance(mensagem, HumanMessage)
+        )
         if mascarado == mensagem.content:
             return mensagem
         return mensagem.model_copy(update={"content": mascarado})
@@ -320,17 +350,36 @@ def descartar(mensagens: Iterable[BaseMessage]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _mascarar_estrutura(valor: Any) -> Any:
-    """Mascara mensagens em qualquer estrutura (dict/lista/tupla) a gravar."""
+def _mascarar_estrutura(valor: Any, nomes: tuple[str, ...] = ()) -> Any:
+    """Mascara mensagens em qualquer estrutura (dict/lista/tupla) a gravar.
+
+    `nomes`: nomes do contato conhecidos do turno (WhatsApp, cadastro): saem do texto
+    das mensagens do cliente também.
+    """
     if isinstance(valor, BaseMessage):
-        return mascarar_mensagem(valor)
+        m = mascarar_mensagem(valor)
+        if nomes and isinstance(m, HumanMessage) and isinstance(m.content, str):
+            limpo = tirar_nomes_conhecidos(m.content, nomes)
+            if limpo != m.content:
+                m = m.model_copy(update={"content": limpo})
+        return m
     if isinstance(valor, dict):
-        return {k: _mascarar_estrutura(v) for k, v in valor.items()}
+        return {k: _mascarar_estrutura(v, nomes) for k, v in valor.items()}
     if isinstance(valor, list):
-        return [_mascarar_estrutura(v) for v in valor]
+        return [_mascarar_estrutura(v, nomes) for v in valor]
     if isinstance(valor, tuple) and not hasattr(valor, "_fields"):
-        return tuple(_mascarar_estrutura(v) for v in valor)
+        return tuple(_mascarar_estrutura(v, nomes) for v in valor)
     return valor
+
+
+def _nomes_da_sessao(config: Any) -> tuple[str, ...]:
+    """Nomes do contato que `processar_chat` passou por `config` (`__sessao_*`)."""
+    cfg = (config or {}).get("configurable") or {}
+    return tuple(
+        v
+        for k in ("__sessao_nome_contato", "__sessao_nome_cadastro")
+        if isinstance(v := cfg.get(k), str) and v.strip()
+    )
 
 
 class CheckpointerMascarando(BaseCheckpointSaver):
@@ -371,35 +420,49 @@ class CheckpointerMascarando(BaseCheckpointSaver):
 
     # --- escrita: mascara antes de gravar -----------------------------------
     @staticmethod
-    def _checkpoint(checkpoint: Any) -> Any:
+    def _checkpoint(checkpoint: Any, nomes: tuple[str, ...] = ()) -> Any:
         valores = checkpoint.get("channel_values")
         if not valores:
             return checkpoint
-        return {**checkpoint, "channel_values": _mascarar_estrutura(valores)}
+        return {**checkpoint, "channel_values": _mascarar_estrutura(valores, nomes)}
 
     @staticmethod
-    def _writes(writes: Sequence[tuple[str, Any]]) -> Sequence[tuple[str, Any]]:
-        return [(canal, _mascarar_estrutura(valor)) for canal, valor in writes]
+    def _writes(
+        writes: Sequence[tuple[str, Any]], nomes: tuple[str, ...] = ()
+    ) -> Sequence[tuple[str, Any]]:
+        return [(canal, _mascarar_estrutura(valor, nomes)) for canal, valor in writes]
 
     def put(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
+        nomes = _nomes_da_sessao(config)
         return self.interno.put(
-            config, self._checkpoint(checkpoint), _mascarar_estrutura(metadata), new_versions
+            config,
+            self._checkpoint(checkpoint, nomes),
+            _mascarar_estrutura(metadata, nomes),
+            new_versions,
         )
 
     async def aput(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
+        nomes = _nomes_da_sessao(config)
         return await self.interno.aput(
-            config, self._checkpoint(checkpoint), _mascarar_estrutura(metadata), new_versions
+            config,
+            self._checkpoint(checkpoint, nomes),
+            _mascarar_estrutura(metadata, nomes),
+            new_versions,
         )
 
     def put_writes(
         self, config: Any, writes: Sequence[tuple[str, Any]], task_id: str, task_path: str = ""
     ) -> None:
-        self.interno.put_writes(config, self._writes(writes), task_id, task_path)
+        self.interno.put_writes(
+            config, self._writes(writes, _nomes_da_sessao(config)), task_id, task_path
+        )
 
     async def aput_writes(
         self, config: Any, writes: Sequence[tuple[str, Any]], task_id: str, task_path: str = ""
     ) -> None:
-        await self.interno.aput_writes(config, self._writes(writes), task_id, task_path)
+        await self.interno.aput_writes(
+            config, self._writes(writes, _nomes_da_sessao(config)), task_id, task_path
+        )
 
     def __getattr__(self, nome: str) -> Any:
         # Só chamado quando o atributo NÃO existe aqui: tudo o mais é do interno.
