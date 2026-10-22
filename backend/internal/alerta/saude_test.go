@@ -216,7 +216,7 @@ func TestSaudeHandler(t *testing.T) {
 	h := s.Handler()
 
 	rec := httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	h(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil))
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") {
 		t.Fatalf("GET: %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
@@ -226,13 +226,13 @@ func TestSaudeHandler(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodHead, "/health", nil))
+	h(rec, httptest.NewRequestWithContext(context.Background(), http.MethodHead, "/health", nil))
 	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
 		t.Fatalf("HEAD: %d corpo=%q", rec.Code, rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodPost, "/health", nil))
+	h(rec, httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/health", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST: %d", rec.Code)
 	}
