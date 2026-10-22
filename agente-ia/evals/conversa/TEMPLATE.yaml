@@ -12,7 +12,8 @@ descricao: >-                         # uma frase: qual comportamento este cená
 sessao:
   telefone: "+5531999990000"
   nome_contato: "Cliente Exemplo"
-  contato: null                       # id do contato no Infodesk quando já identificado
+  contato: telefone                   # já identificado pelo gateway: `telefone` | `cpf` | `contrato` (atalhos do runner)
+                                      # ou null = desconhecido (a Sofia pede CPF/contrato antes de preparar o chamado)
 
 # Respostas do FakeJEV, UMA POR TURNO (mesmo tamanho de `turnos`).
 # Choice = [opcao, confianca]; Score = [nivel, confianca]; Noul = probabilidade.

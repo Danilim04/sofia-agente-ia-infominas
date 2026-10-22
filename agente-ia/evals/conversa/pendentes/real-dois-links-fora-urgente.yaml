@@ -1,0 +1,52 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Empresa com dois links de banda fora: prioridade alta/urgente vence o padrão.
+id: conversa-103
+descricao: 'dois links fora: chamado preparado com prioridade alta e aberto após o sim'
+sessao:
+  telefone: '+5531999990103'
+  nome_contato: Silvio
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [sem_conexao, 0.88]
+  prioridade: [3, 0.9]
+  frustracao: [2, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [confirmacao, 0.95]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: Nossos dois links de internet estão fora do ar, a empresa parou
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Dois links de internet fora do ar
+      descricao: Cliente relata que os dois links de internet da empresa estão fora e a operação está parada.
+  - texto: 'Entendi a urgência. Vou registrar assim: dois links de internet fora do ar. Posso abrir o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: sem_conexao
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2

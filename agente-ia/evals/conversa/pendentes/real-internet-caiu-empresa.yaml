@@ -1,0 +1,54 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Contexto: empresa cliente sem internet no escritório; padrão frequente no histórico.
+# Taxonomia: sem_conexao é do placeholder (P1); no rascunho real é rede_e_internet_incidente (E5.1).
+id: conversa-100
+descricao: 'empresa sem internet: prepara, confirma e abre; prioridade sobe pelo piso da categoria'
+sessao:
+  telefone: '+5531999990100'
+  nome_contato: Marta
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [sem_conexao, 0.88]
+  prioridade: [2, 0.75]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [confirmacao, 0.95]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: Bom dia! Aqui no escritório a internet caiu agora cedo e ninguém consegue trabalhar
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Escritório sem internet desde a manhã
+      descricao: Cliente relata que o escritório está sem internet desde cedo e a equipe não consegue trabalhar.
+  - texto: 'Poxa, que transtorno! Vou registrar assim: escritório sem internet desde a manhã. Posso abrir o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: sem_conexao
+      origem: jev
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2

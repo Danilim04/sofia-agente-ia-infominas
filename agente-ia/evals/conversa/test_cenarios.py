@@ -1,7 +1,9 @@
 """Cenários de conversa como testes pytest (`pytest -m evals_pr evals/`).
 
-Dois níveis: (1) todo YAML carrega e valida — teste de verdade, verde hoje;
-(2) cada cenário executa no grafo — `xfail` até E3.5 (ver runner.PENDENCIA).
+Dois níveis: (1) todo YAML carrega e valida; (2) cada cenário executa no grafo
+real (LLM scriptado + `FakeJEV` + gateway falso). Um cenário com `xfail: "motivo"`
+descreve o comportamento correto que a Sofia ainda não tem: roda como xfail
+ESTRITO — se passar, o teste falha e o marcador deve sair.
 """
 
 from __future__ import annotations
@@ -23,6 +25,13 @@ except (ErroFormato, ValueError) as _e:
     _CENARIOS = []
 
 
+def _param(cenario: CenarioConversa) -> object:
+    marcas = []
+    if cenario.xfail:
+        marcas.append(pytest.mark.xfail(reason=cenario.xfail, strict=True))
+    return pytest.param(cenario, id=cenario.id, marks=marcas)
+
+
 def test_todos_os_yamls_sao_validos() -> None:
     assert _ERRO_CARGA is None, _ERRO_CARGA
     assert _CENARIOS, "nenhum cenário em evals/conversa/"
@@ -40,8 +49,8 @@ def test_todo_cenario_tem_negativo() -> None:
         assert tem_negativo, f"{c.id} não tem assert negativo (nao_chama/nao_contem/bloqueado)"
 
 
-@pytest.mark.parametrize("cenario", _CENARIOS, ids=lambda c: c.id)
+@pytest.mark.parametrize("cenario", [_param(c) for c in _CENARIOS])
 def test_cenario_executa(cenario: CenarioConversa) -> None:
-    resultado = runner.executar(cenario)  # xfail até E3.5
+    resultado = runner.executar(cenario)
     assert resultado.passou, "\n".join(resultado.falhas)
     assert resultado.turnos_executados == len(cenario.turnos)

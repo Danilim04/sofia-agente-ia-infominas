@@ -1,0 +1,22 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Foto do erro com legenda curta: o conteúdo da imagem não chega; a Sofia pede o texto do erro.
+id: conversa-151
+descricao: foto sem descrição suficiente não gera chamado; a Sofia pede o texto do erro
+sessao:
+  telefone: '+5531999990151'
+  nome_contato: Léo
+  contato: telefone
+jev:
+- intencao: [outro, 0.6]
+  categoria: [indefinida, 0.25]
+  prioridade: [1, 0.5]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.05
+turnos:
+- cliente: '[imagem] olha o erro que apareceu'
+  llm:
+  - texto: Recebi a imagem, mas não consigo abri-la por aqui. Pode me contar o que o erro diz?
+  espera:
+    nao_chama: [abrir_chamado, preparar_abertura_chamado]
+    contem: [erro]
+    transfere: false

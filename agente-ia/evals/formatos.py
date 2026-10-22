@@ -347,9 +347,15 @@ class CenarioConversa:
     jev: tuple[RespostaJEV, ...]
     turnos: tuple[Turno, ...]
     arquivo: Path | None = None
+    #: Motivo de um xfail estrito: o cenário descreve o comportamento CORRETO e a
+    #: Sofia ainda não o tem (limitação real). Quando passar, o teste falha e o
+    #: marcador deve sair.
+    xfail: str | None = None
 
 
-_CHAVES_CENARIO: Final[frozenset[str]] = frozenset({"id", "descricao", "sessao", "jev", "turnos"})
+_CHAVES_CENARIO: Final[frozenset[str]] = frozenset(
+    {"id", "descricao", "sessao", "jev", "turnos", "xfail"}
+)
 _CHAVES_SESSAO: Final[frozenset[str]] = frozenset({"telefone", "nome_contato", "contato"})
 _CHAVES_PASSO: Final[frozenset[str]] = frozenset({"tool", "args", "pular", "texto"})
 _CHAVES_TURNO: Final[frozenset[str]] = frozenset({"cliente", "llm", "espera"})
@@ -501,6 +507,9 @@ def validar_cenario(
             f"{campo}.jev",
             f"{len(jev)} resposta(s) do JEV para {len(turnos)} turno(s): deve ser uma por turno",
         )
+    xfail = d.get("xfail")
+    if xfail is not None:
+        xfail = _exigir_texto(xfail, f"{campo}.xfail")
     return CenarioConversa(
         id=id_,
         descricao=descricao,
@@ -508,6 +517,7 @@ def validar_cenario(
         jev=tuple(jev),
         turnos=tuple(turnos),
         arquivo=arquivo,
+        xfail=xfail,
     )
 
 

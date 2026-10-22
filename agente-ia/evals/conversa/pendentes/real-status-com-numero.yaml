@@ -1,0 +1,28 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Dúvida sobre chamado existente, com o número.
+id: conversa-140
+descricao: pergunta sobre chamado com número consulta o status e não abre outro
+sessao:
+  telefone: '+5531999990140'
+  nome_contato: Kelly
+  contato: telefone
+jev:
+- intencao: [status_chamado, 0.92]
+  categoria: [indefinida, 0.3]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: boa tarde, tem alguma novidade do chamado 48213?
+  llm:
+  - tool: consultar_status_chamado
+    args:
+      numero: '48213'
+  - texto: 'Consultei aqui: o chamado 48213 (internet sem conexão desde ontem à noite) segue registrado com a equipe.
+      Se quiser, posso passar você para um atendente.'
+  espera:
+    chama: [consultar_status_chamado]
+    nao_chama: [preparar_abertura_chamado, abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/consultar
+    nao_contem: [prazo, em até]

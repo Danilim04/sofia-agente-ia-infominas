@@ -1,0 +1,29 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Pedido de 2ª via de boleto: não há tool de boleto; o certo é o Financeiro assumir.
+id: conversa-156
+descricao: pedido de boleto é transferido com a categoria de 2ª via (departamento Financeiro pela taxonomia)
+xfail: 'Limitação real: a categoria só é fixada quando a intenção é reclamacao_problema (INTENCOES_COM_CATEGORIA
+  em src/classificacao/tipos.py). Dúvida/pedido comercial ou financeiro chega à transferência com categoria ''indefinida'',
+  então o gateway não escolhe o departamento Comercial/Financeiro pela taxonomia (cai no departamento padrão, P11).'
+sessao:
+  telefone: '+5531999990156'
+  nome_contato: Olga
+  contato: telefone
+jev:
+- intencao: [outro, 0.85]
+  categoria: [segunda_via, 0.9]
+  prioridade: [0, 0.7]
+  frustracao: [0, 0.9]
+  malicioso: 0.01
+  fora_de_escopo: 0.02
+turnos:
+- cliente: preciso do boleto desse mês, pode me mandar?
+  llm:
+  - tool: transferir_para_atendente
+    args:
+      motivo: fora_do_escopo
+  - texto: Boletos são com a nossa equipe financeira. Já estou passando você para um atendente.
+  espera:
+    chama: [transferir_para_atendente]
+    nao_chama: [abrir_chamado, preparar_abertura_chamado]
+    classificacao:
+      categoria: segunda_via

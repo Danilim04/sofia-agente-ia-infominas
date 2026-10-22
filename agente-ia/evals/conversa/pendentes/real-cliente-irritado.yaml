@@ -1,0 +1,24 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Cliente muito irritado: empatia curta e transferência por código (frustração ≥ 3).
+id: conversa-132
+descricao: frustração alta dispara transferência e a Sofia não promete prazo
+sessao:
+  telefone: '+5531999990132'
+  nome_contato: Cacá
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.9]
+  categoria: [sem_conexao, 0.85]
+  prioridade: [3, 0.8]
+  frustracao: [3, 0.9]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+turnos:
+- cliente: isso é um absurdo, já é a terceira vez que a internet cai essa semana e ninguém resolve!!
+  llm:
+  - texto: Sinto muito pelo transtorno, a situação está bem chata mesmo. Vou te passar para um atendente agora.
+  espera:
+    transfere: true
+    nao_chama: [abrir_chamado]
+    nao_contem: [prazo, encaminhei, repassei]
+    classificacao:
+      categoria: sem_conexao

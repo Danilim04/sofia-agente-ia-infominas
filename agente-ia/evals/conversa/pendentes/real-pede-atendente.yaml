@@ -1,0 +1,23 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Pedido explícito de falar com uma pessoa.
+id: conversa-130
+descricao: pedido de atendente transfere sem insistir no atendimento automático
+sessao:
+  telefone: '+5531999990130'
+  nome_contato: Vera2
+  contato: telefone
+jev:
+- intencao: [pedir_atendente, 0.92]
+  categoria: [indefinida, 0.3]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: prefiro falar com uma pessoa, pode ser?
+  llm:
+  - texto: Claro! Vou te passar para um atendente.
+  espera:
+    transfere: true
+    nao_chama: [preparar_abertura_chamado, abrir_chamado]
+    contem: [atendente]
+    nao_contem: [encaminhei, prazo]

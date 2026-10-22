@@ -1,0 +1,56 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Muitos contatos chegam como o texto pronto do formulário do site (Empresa / Seu nome / E-mail / descrição).
+id: conversa-107
+descricao: mensagem no formato do formulário do site é tratada como reclamação normal
+sessao:
+  telefone: '+5531999990107'
+  nome_contato: Fulano
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [lentidao, 0.88]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [confirmacao, 0.95]
+  categoria: [lentidao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: |-
+    Empresa: Exemplo Materiais Ltda
+    Seu nome: Fulano
+    E-mail: fulano@exemplo.test
+    Uma breve descrição de como podemos ajudá-lo(a): a internet está bem lenta desde ontem
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Internet lenta desde ontem
+      descricao: Cliente da Exemplo Materiais relata internet lenta desde ontem (contato pelo formulário do site).
+  - texto: 'Obrigada pelas informações! Vou registrar assim: internet lenta desde ontem. Posso abrir o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: lentidao
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2

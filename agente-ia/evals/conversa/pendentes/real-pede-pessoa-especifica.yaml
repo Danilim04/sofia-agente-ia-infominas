@@ -1,0 +1,22 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). No histórico é comum pedir 'falar com o fulano' (um técnico). A Sofia não conhece pessoas: passa para a equipe.
+id: conversa-131
+descricao: pedido de falar com uma pessoa específica vira transferência para a equipe
+sessao:
+  telefone: '+5531999990131'
+  nome_contato: Zeca
+  contato: telefone
+jev:
+- intencao: [pedir_atendente, 0.88]
+  categoria: [indefinida, 0.3]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: bom dia, queria falar com o técnico que atendeu a gente semana passada
+  llm:
+  - texto: Bom dia! Vou te passar para um atendente da equipe, que consegue te ajudar com isso.
+  espera:
+    transfere: true
+    nao_chama: [abrir_chamado]
+    nao_contem: [prazo]

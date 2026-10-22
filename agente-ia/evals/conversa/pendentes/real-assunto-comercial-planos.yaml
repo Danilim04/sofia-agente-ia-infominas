@@ -1,0 +1,32 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Contato comercial (plano/preço): vai para a equipe comercial por código; a Sofia não inventa preço.
+id: conversa-153
+descricao: pergunta comercial é encaminhada à equipe e a Sofia não informa valores
+sessao:
+  telefone: '+5531999990153'
+  nome_contato: Heitor
+  contato: telefone
+jev:
+- intencao: [duvida_informacao, 0.85]
+  categoria: [duvida_planos, 0.9]
+  prioridade: [0, 0.7]
+  frustracao: [0, 0.9]
+  malicioso: 0.01
+  fora_de_escopo: 0.02
+turnos:
+- cliente: queria saber quanto fica pra montar a rede de uma loja nova com 12 pontos
+  llm:
+  - tool: transferir_para_atendente
+    args:
+      motivo: fora_do_escopo
+  - texto: Para valores e propostas quem te ajuda é a nossa equipe comercial. Já estou passando você para um atendente.
+  espera:
+    chama: [transferir_para_atendente]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/conversa/transferir
+    nao_chama: [abrir_chamado, preparar_abertura_chamado]
+    nao_contem: [R$]
+    classificacao:
+      categoria: duvida_planos
+xfail: 'Limitação real: a categoria só é fixada quando a intenção é reclamacao_problema (INTENCOES_COM_CATEGORIA
+  em src/classificacao/tipos.py). Dúvida/pedido comercial ou financeiro chega à transferência com categoria ''indefinida'',
+  então o gateway não escolhe o departamento Comercial/Financeiro pela taxonomia (cai no departamento padrão, P11).'

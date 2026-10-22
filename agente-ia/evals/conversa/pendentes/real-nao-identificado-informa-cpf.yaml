@@ -1,0 +1,72 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Contato novo (telefone sem cadastro): a Sofia pede CPF/contrato antes de preparar o chamado.
+id: conversa-110
+descricao: cliente não identificado informa o CPF, e só então o chamado é preparado e aberto
+sessao:
+  telefone: '+5531999990110'
+  nome_contato: Tiago
+  contato: null
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [sem_conexao, 0.88]
+  prioridade: [2, 0.75]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [outro, 0.8]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+- intencao: [confirmacao, 0.95]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: minha internet caiu e já reiniciei o roteador
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Sem conexão após reiniciar
+      descricao: Cliente relata queda total.
+    pular: true
+  - texto: Poxa, que chato! Para registrar o chamado, me passa seu CPF ou o número do contrato?
+  espera:
+    nao_chama: [abrir_chamado, preparar_abertura_chamado]
+    contem: [CPF]
+    proposta_no_estado: false
+- cliente: 123.456.789-09
+  llm:
+  - tool: informar_identificacao
+    args:
+      cpf: 123.456.789-09
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Sem conexão após reiniciar o roteador
+      descricao: Cliente relata queda total da internet mesmo após reiniciar o roteador.
+  - texto: 'Obrigada! Vou registrar assim: sem conexão mesmo após reiniciar o roteador. Posso abrir o chamado?'
+  espera:
+    chama: [informar_identificacao, preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    gateway_recebeu:
+      endpoint: /tools/infodesk/contato/identificar
+    nao_contem: [123.456.789-09, '123456789']
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2

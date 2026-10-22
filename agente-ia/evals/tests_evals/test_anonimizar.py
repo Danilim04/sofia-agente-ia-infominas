@@ -289,3 +289,31 @@ def test_cli_erros(tmp_path: Path):
         == 2
     )
     assert "coluna 'texto'" in msgs[-1]
+
+
+@pytest.mark.parametrize(
+    ("texto", "esperado"),
+    [
+        (
+            "o arquivo está em https://x.sharepoint.com/s/abc?d=1 certo",
+            "o arquivo está em <URL> certo",
+        ),
+        ("veja www.empresa.com.br/painel agora", "veja <URL> agora"),
+        ("meu anydesk é 123456789", "meu anydesk é <NUM>"),
+        ("id 1234567890.", "id <NUM>."),
+        ("boleto *12345678901234567890*", "boleto *<NUM>*"),
+    ],
+)
+def test_url_e_numero_longo(anon: Anonimizador, texto: str, esperado: str):
+    assert anon.texto(texto) == esperado
+
+
+def test_nome_da_lista_casa_sem_acento():
+    anon = Anonimizador(nomes=["João", "Conceição"])
+    assert anon.texto("falei com joao e com Conceicao") == "falei com <NOME> e com <NOME>"
+    assert anon.texto("falei com JOÃO") == "falei com <NOME>"
+
+
+def test_nome_da_lista_sem_acento_casa_texto_acentuado():
+    anon = Anonimizador(nomes=["Marcio"])
+    assert anon.texto("o Márcio ligou") == "o <NOME> ligou"

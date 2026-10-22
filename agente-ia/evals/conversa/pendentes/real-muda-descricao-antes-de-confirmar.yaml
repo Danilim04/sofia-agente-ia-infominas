@@ -1,0 +1,71 @@
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). O cliente corrige o resumo em vez de confirmar: a Sofia prepara de novo e só abre no 'sim' seguinte.
+id: conversa-112
+descricao: mudança de ideia antes do sim gera nova proposta e nenhuma abertura
+sessao:
+  telefone: '+5531999990112'
+  nome_contato: Nando
+  contato: telefone
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [lentidao, 0.86]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [outro, 0.78]
+  categoria: [lentidao, 0.88]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+- intencao: [confirmacao, 0.95]
+  categoria: [lentidao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: o acesso à pasta compartilhada está muito lento
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Lentidão no acesso à pasta compartilhada
+      descricao: Cliente relata lentidão ao acessar a pasta compartilhada.
+  - texto: 'Entendi. Vou registrar assim: lentidão no acesso à pasta compartilhada. Posso abrir o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    transfere: false
+    contem: [Posso abrir]
+    classificacao:
+      categoria: lentidao
+- cliente: na verdade só acontece no computador do financeiro
+  llm:
+  - tool: preparar_abertura_chamado
+    args:
+      titulo: Lentidão na pasta compartilhada no computador do financeiro
+      descricao: Lentidão ao acessar a pasta compartilhada, só no computador do financeiro.
+  - texto: 'Certo, ajustei o resumo: lentidão na pasta compartilhada só no computador do financeiro. Posso abrir
+      o chamado?'
+  espera:
+    chama: [preparar_abertura_chamado]
+    nao_chama: [abrir_chamado]
+    proposta_no_estado: true
+    contem: [Posso abrir]
+- cliente: sim
+  llm:
+  - tool: abrir_chamado
+    args: {}
+  - texto: |-
+      Pronto! Seu chamado é o 48213.
+      ---
+      A equipe de Suporte assume daqui. 😊
+  espera:
+    chama: [abrir_chamado]
+    gateway_recebeu:
+      endpoint: /tools/infodesk/ticket/abrir
+      chave_idempotencia: '*'
+    contem: ['48213']
+    nao_contem: [em até, prazo, horas]
+    bolhas: 2

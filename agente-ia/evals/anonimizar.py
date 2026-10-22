@@ -12,8 +12,10 @@ Substituições (regra do projeto: PII vira token, nunca texto real no git):
 | CPF (com/sem pontuação) | `<CPF>` | 11 dígitos, separados por `.`, `-` ou espaço ou colados; bare 11 dígitos com DV **inválido** e cara de celular (DDD + 9) vira `<TEL>` |
 | telefone BR | `<TEL>` | `+55`, DDD com/sem parênteses, 8/9 dígitos, com/sem máscara; 8 dígitos só com separador (`3333-4444`) |
 | e-mail | `<EMAIL>` | |
+| URL | `<URL>` | `http(s)://` ou `www.` (link de arquivo, SharePoint do cliente, mapa) |
 | CEP | `<CEP>` | `00000-000`, `00.000-000` e 8 dígitos bare (sobre-mascarar é seguro: protocolo de 8 dígitos também vira `<CEP>`) |
 | placa | `<PLACA>` | antiga `AAA-0000`/`AAA0000` (e `AAA 0000` só em maiúsculas: `tem 1000` não é placa) e Mercosul `AAA0A00`/`AAA-0A00`/`AAA 0A00`, qualquer caixa |
+| número longo | `<NUM>` | 9–10 ou 13+ dígitos que sobraram (ID de acesso remoto, linha digitável, conta) |
 | nome próprio | `<NOME>` | só os da lista `--nomes` (um por linha, `#` comenta), palavra inteira, sem distinção de caixa — não liste nomes que são palavras comuns (Luz, Rosa, Sol) sozinhos |
 | endereço | — | **não** tem regex: fica para a revisão manual (`--amostra`) |
 
@@ -43,9 +45,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-TOKENS: tuple[str, ...] = ("<EMAIL>", "<CNPJ>", "<CPF>", "<TEL>", "<CEP>", "<PLACA>", "<NOME>")
+TOKENS: tuple[str, ...] = (
+    "<EMAIL>",
+    "<URL>",
+    "<CNPJ>",
+    "<CPF>",
+    "<TEL>",
+    "<CEP>",
+    "<PLACA>",
+    "<NUM>",
+    "<NOME>",
+)
 
 _RE_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", re.UNICODE)
+_RE_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"')]+", re.IGNORECASE)
+_RE_NUM_LONGO = re.compile(r"(?<!\d)(?:\d{9,10}|\d{13,})(?!\d)")
 _RE_CNPJ = re.compile(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)")
 _RE_CPF = re.compile(r"(?<!\d)\d{3}[.\s]?\d{3}[.\s]?\d{3}[-.\s]?\d{2}(?!\d)")
 _RE_TEL = re.compile(
@@ -62,6 +76,15 @@ _RE_PLACA = re.compile(
     r"(?<![A-Za-z0-9])(?:[A-Za-z]{3}-?\d{4}|[A-Z]{3}\s\d{4}|[A-Za-z]{3}[-\s]?\d[A-Za-z]\d{2})(?![A-Za-z0-9])"
 )
 _RE_DDD_CELULAR = re.compile(r"^[1-9]\d9\d{8}$")
+
+
+_COM_ACENTO = "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑ"
+_SEM_ACENTO = str.maketrans(_COM_ACENTO, "aaaaaeeeeiiiiooooouuuucnAAAAAEEEEIIIIOOOOOUUUUCN")
+
+
+def _sem_acento(texto: str) -> str:
+    """Tira o acento letra a letra: o comprimento não muda, então as posições valem no original."""
+    return texto.translate(_SEM_ACENTO)
 
 
 def cpf_valido(digitos: str) -> bool:
@@ -100,7 +123,11 @@ class Anonimizador:
     _re_nomes: re.Pattern[str] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        limpos = sorted({n.strip() for n in self.nomes if n.strip()}, key=len, reverse=True)
+        # Nomes casam sem acento nos dois lados: no WhatsApp quase ninguém acentua ("Joao")
+        # e a lista pode vir sem acento ("Marcio") para quem escreve "Márcio".
+        limpos = sorted(
+            {_sem_acento(n.strip()) for n in self.nomes if n.strip()}, key=len, reverse=True
+        )
         if limpos:
             alternativas = "|".join(re.escape(n) for n in limpos)
             self._re_nomes = re.compile(
@@ -121,16 +148,29 @@ class Anonimizador:
 
         return padrao.sub(_sub, texto)
 
+    def _aplicar_nomes(self, texto: str, padrao: re.Pattern[str]) -> str:
+        """Casa na versão sem acento e troca nas mesmas posições do texto original."""
+        partes: list[str] = []
+        fim = 0
+        for m in padrao.finditer(_sem_acento(texto)):
+            partes.extend((texto[fim : m.start()], "<NOME>"))
+            fim = m.end()
+            self.contagem["<NOME>"] += 1
+        partes.append(texto[fim:])
+        return "".join(partes)
+
     def texto(self, texto: str) -> str:
         """Anonimiza uma string. Ordem importa: e-mail → CNPJ → CPF → telefone → CEP → placa → nomes."""
         t = self._aplicar(texto, _RE_EMAIL, "<EMAIL>")
+        t = self._aplicar(t, _RE_URL, "<URL>")
         t = self._aplicar(t, _RE_CNPJ, "<CNPJ>")
         t = self._aplicar(t, _RE_CPF, "<CPF>", _trocar_cpf)
         t = self._aplicar(t, _RE_TEL, "<TEL>")
         t = self._aplicar(t, _RE_CEP, "<CEP>")
         t = self._aplicar(t, _RE_PLACA, "<PLACA>")
+        t = self._aplicar(t, _RE_NUM_LONGO, "<NUM>")  # id de acesso remoto, protocolo longo, conta
         if self._re_nomes is not None:
-            t = self._aplicar(t, self._re_nomes, "<NOME>")
+            t = self._aplicar_nomes(t, self._re_nomes)
         return t
 
     def valor(self, valor: Any) -> Any:
