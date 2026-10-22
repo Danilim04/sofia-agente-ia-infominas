@@ -117,6 +117,9 @@ type Saude struct {
 	Feed       *Sonda
 	// Taxonomia devolve a foto da taxonomia; nil = não informado.
 	Taxonomia func() StatusTaxonomia
+	// Testadores é o tamanho da lista de testadores (TESTADORES_TELEFONES, E3.9;
+	// únicos, após normalizar); 0 = lista desligada. Os números nunca saem daqui.
+	Testadores int
 	// ReconciliaAtivo é RECONCILIA_ATIVO.
 	ReconciliaAtivo bool
 	// Seq lê o último seq processado do feed (cursor do reconciliador) e o do
@@ -140,6 +143,13 @@ type respostaTaxonomia struct {
 	// Inferida: "carregada" foi deduzida da leitura da referência após um boot
 	// sem carga; "valida" fica false porque ninguém conferiu as divergências.
 	Inferida bool `json:"inferida"`
+}
+
+// respostaPiloto diz se só os testadores falam com a Sofia (E3.9) e quantos são.
+// Nunca lista os números. Não degrada o status: é uma escolha, não uma falha.
+type respostaPiloto struct {
+	Ativo   bool `json:"ativo"`
+	Numeros int  `json:"numeros"`
 }
 
 type respostaFeed struct {
@@ -168,6 +178,7 @@ type RespostaSaude struct {
 	Referencia    respostaReferencia    `json:"referencia"`
 	Taxonomia     respostaTaxonomia     `json:"taxonomia"`
 	Reconciliador respostaReconciliador `json:"reconciliador"`
+	Piloto        respostaPiloto        `json:"piloto"`
 }
 
 func instante(t time.Time) *string {
@@ -225,6 +236,8 @@ func (s *Saude) Relatorio(ctx context.Context) RespostaSaude {
 			degradar(MotivoTaxonomiaNaoVerificada)
 		}
 	}
+
+	r.Piloto = respostaPiloto{Ativo: s.Testadores > 0, Numeros: s.Testadores}
 
 	feed := s.Feed.foto()
 	estado := feed.estado
