@@ -1,7 +1,7 @@
 {
   "versao": 1,
   "atualizado_em": null,
-  "justificativa": "baseline vazio: ainda não há classificador real (E2.2); o classificador nulo não é referência",
+  "justificativa": "baseline vazio: ainda não há medição real do JEV (P8, sem TYPESAFE_API_KEY); o classificador nulo e o modo offline (fakes) não são referência",
   "tolerancia_pontos": 2.0,
   "metricas": {}
 }

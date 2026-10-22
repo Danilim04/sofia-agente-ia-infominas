@@ -18,8 +18,14 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _sem_chaves_reais(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Evals determinísticos nunca veem chave real: falha cedo se algo tentar usar."""
+def _sem_chaves_reais(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Evals determinísticos nunca veem chave real: falha cedo se algo tentar usar.
+
+    Exceção: testes marcados `jev`/`llm_real` existem justamente para usar a chave
+    real (e já ficam fora da rodada por default, `addopts` do pyproject).
+    """
+    if request.node.get_closest_marker("jev") or request.node.get_closest_marker("llm_real"):
+        return
     for var in ("TYPESAFE_API_KEY", "OPENROUTER_API_KEY"):
         if os.environ.get(var):
             monkeypatch.setenv(var, "chave-falsa-evals")
