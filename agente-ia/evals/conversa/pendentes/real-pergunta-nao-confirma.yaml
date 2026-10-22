@@ -1,5 +1,5 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Resposta que não é 'sim' (pergunta) não confirma: a política de abertura é código.
-# Destrava: Q1 — aprovar as categorias de config/taxonomia.proposta.yaml e promovê-la a taxonomia.yaml; depois `git mv` para evals/conversa/.
+# Destrava: promoção da proposta a `taxonomia.yaml` (Q2–Q4: confirmar as recomendações do documento de decisões); depois `git mv` para evals/conversa/.
 id: conversa-113
 descricao: '''esse mesmo?'' não confirma; mesmo que o LLM tente abrir, a política recusa'
 sessao:
@@ -8,13 +8,13 @@ sessao:
   contato: telefone
 jev:
 - intencao: [reclamacao_problema, 0.93]
-  categoria: [computador, 0.84]
+  categoria: [computadores, 0.84]
   prioridade: [1, 0.7]
   frustracao: [0, 0.85]
   malicioso: 0.02
   fora_de_escopo: 0.02
 - intencao: [duvida_informacao, 0.8]
-  categoria: [computador, 0.84]
+  categoria: [computadores, 0.84]
   prioridade: [1, 0.7]
   frustracao: [0, 0.8]
   malicioso: 0.01
@@ -34,7 +34,7 @@ turnos:
     transfere: false
     contem: [Posso abrir]
     classificacao:
-      categoria: computador
+      categoria: computadores
 - cliente: esse é o chamado do notebook mesmo?
   llm:
   - tool: abrir_chamado

@@ -1,5 +1,5 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). VPN para trabalho remoto: o placeholder não tem categoria de VPN, então o JEV devolve 'indefinida'.
-# Destrava: Q1 (categoria vpn). Hoje descreve o comportamento SEM categoria; com ela o esperado muda (abre chamado), então reescrever o cenário depois da aprovação, não só mover.
+# Destrava: Q2–Q4 e reescrita. Hoje descreve o comportamento SEM categoria; com a área `firewall` ("VPN não conecta") o esperado muda (abre chamado), então reescrever o cenário na promoção, não só mover.
 id: conversa-121
 descricao: 'VPN que não conecta: esclarece uma vez e transfere'
 sessao:

@@ -1,5 +1,4 @@
-# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Pedidos de acesso/senha de usuário.
-# Destrava: Q1 (categoria acesso_senha). Hoje descreve o comportamento SEM categoria; com ela o esperado muda (abre chamado), então reescrever o cenário depois da aprovação, não só mover.
+# Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Pedidos de acesso/senha de usuário: a conta pode ser do Microsoft 365, do Google ou do AD, sem área inequívoca no catálogo do Infodesk, então a categoria é 'indefinida'.
 id: conversa-122
 descricao: 'acesso bloqueado de usuário sem categoria na taxonomia: esclarece e transfere'
 sessao:

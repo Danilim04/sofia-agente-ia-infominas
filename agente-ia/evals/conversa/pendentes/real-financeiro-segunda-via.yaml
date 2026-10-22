@@ -1,5 +1,5 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Pedido de 2ª via de boleto: não há tool de boleto; o certo é o Financeiro assumir.
-# Destrava: Q1 (categoria financeiro) e Q2 (departamento por categoria). Limitação de produto corrigida na E3.10 (a categoria também é fixada em `outro`/`duvida_informacao`): o `xfail` saiu; o cenário só espera a aprovação da taxonomia (E5.1) para subir para a raiz.
+# Destrava: Q6. O catálogo do Infodesk não tem área financeira: a categoria `financeiro` deste cenário não existe na proposta e o caso cai em `indefinida` (transfere ao departamento padrão). Só vale se o dono criar a categoria; senão reescrever o esperado.
 id: conversa-156
 descricao: pedido de boleto é transferido com a categoria de 2ª via (departamento Financeiro pela taxonomia)
 sessao:

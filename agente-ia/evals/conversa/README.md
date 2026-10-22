@@ -90,15 +90,15 @@ scriptado confere o script; a persona só é provada de verdade nas **respostas 
 
 Os 32 cenários `real-*` vêm de conversas do Infodesk, **parafraseados e anonimizados** (sem
 nome, telefone, e-mail nem número de chamado reais; o número `48213` é do contrato). São o
-insumo das categorias de `config/taxonomia.proposta.yaml` (E5.1, preparação).
+insumo de `config/taxonomia.proposta.yaml` (E5.1, preparação), cujas categorias são as áreas do catálogo do Infodesk.
 
-- **Na raiz (10, no CI):** os que não dependem de categoria (áudio, foto, vago, fora de escopo,
-  injeção, pedido de atendente, pessoa específica, senha de terceiro, status com e sem número).
+- **Na raiz (11, no CI):** os que não dependem de categoria (áudio, foto, vago, fora de escopo,
+  injeção, pedido de atendente, pessoa específica, senha de terceiro, acesso/senha de usuário, status com e sem número).
   Valem na taxonomia em uso e na proposta.
-- **Em `pendentes/` (22):** os que usam categoria (ou fluxo que uma decisão ainda muda). Já estão
+- **Em `pendentes/` (21):** os que usam categoria (ou fluxo que uma decisão ainda muda). Já estão
   remapeados para a proposta e `tests/test_taxonomia_proposta.py` os executa contra ela com
   `TAXONOMIA_PATH`. O runner da raiz valida a categoria contra `config/taxonomia.yaml` (placeholder),
   então só sobem com `git mv` depois que a proposta virar `taxonomia.yaml`. Cada arquivo traz uma
-  linha `# Destrava: Q<n> …` que aponta a pergunta de
-  `docs/plano/decisoes/taxonomia-proposta.md` que o libera. Cenário que descreve limitação de
+  linha `# Destrava: … Q<n> …` que aponta a pergunta de
+  `docs/plano/decisoes/taxonomia-proposta.md` que o libera (os dois de financeiro, Q6, não rodam contra a proposta: o catálogo não tem área financeira). Cenário que descreve limitação de
   produto leva `xfail` com o motivo e não é corrigido aqui.

@@ -1,5 +1,5 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Frustração moderada (2): tom cuidadoso, mas segue o atendimento sem transferir.
-# Destrava: Q1 — aprovar as categorias de config/taxonomia.proposta.yaml e promovê-la a taxonomia.yaml; depois `git mv` para evals/conversa/.
+# Destrava: promoção da proposta a `taxonomia.yaml` (Q2–Q4: confirmar as recomendações do documento de decisões); depois `git mv` para evals/conversa/.
 id: conversa-133
 descricao: impaciência moderada não transfere; segue com a proposta de chamado
 sessao:
@@ -8,13 +8,13 @@ sessao:
   contato: telefone
 jev:
 - intencao: [reclamacao_problema, 0.93]
-  categoria: [internet_rede, 0.85]
+  categoria: [redes, 0.85]
   prioridade: [1, 0.7]
   frustracao: [2, 0.8]
   malicioso: 0.02
   fora_de_escopo: 0.02
 - intencao: [confirmacao, 0.95]
-  categoria: [internet_rede, 0.9]
+  categoria: [redes, 0.9]
   prioridade: [2, 0.7]
   frustracao: [0, 0.8]
   malicioso: 0.01
@@ -35,7 +35,7 @@ turnos:
     transfere: false
     contem: [Posso abrir]
     classificacao:
-      categoria: internet_rede
+      categoria: redes
 - cliente: sim
   llm:
   - tool: abrir_chamado

@@ -1,5 +1,5 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Contato comercial (plano/preço): vai para a equipe comercial por código; a Sofia não inventa preço.
-# Destrava: Q1 (categoria comercial) e Q2 (departamento por categoria). Limitação de produto corrigida na E3.10 (a categoria também é fixada em `outro`/`duvida_informacao`): o `xfail` saiu; o cenário só espera a aprovação da taxonomia (E5.1) para subir para a raiz.
+# Destrava: promoção da proposta a `taxonomia.yaml` (Q2–Q4: confirmar as recomendações do documento de decisões); depois `git mv` para evals/conversa/.
 id: conversa-153
 descricao: pergunta comercial é encaminhada à equipe e a Sofia não informa valores
 sessao:
@@ -8,7 +8,7 @@ sessao:
   contato: telefone
 jev:
 - intencao: [duvida_informacao, 0.85]
-  categoria: [comercial, 0.9]
+  categoria: [projetos, 0.9]
   prioridade: [0, 0.7]
   frustracao: [0, 0.9]
   malicioso: 0.01
@@ -27,4 +27,4 @@ turnos:
     nao_chama: [abrir_chamado, preparar_abertura_chamado]
     nao_contem: [R$]
     classificacao:
-      categoria: comercial
+      categoria: projetos

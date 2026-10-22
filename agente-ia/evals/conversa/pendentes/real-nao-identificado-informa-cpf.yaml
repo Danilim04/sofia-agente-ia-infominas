@@ -1,5 +1,5 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Contato novo (telefone sem cadastro): a Sofia pede CPF/contrato antes de preparar o chamado.
-# Destrava: Q1 (categoria internet_rede) e Q5, política de identificação de telefone desconhecido (E5.3: cadastro via POST /requesters muda o fluxo que este cenário assume — hoje pede CPF); reavaliar depois de E5.3.
+# Destrava: Q5, política de identificação de telefone desconhecido (E5.3: cadastro via POST /requesters muda o fluxo que este cenário assume — hoje pede CPF); reavaliar depois de E5.3, junto da promoção da proposta (Q2–Q4).
 id: conversa-110
 descricao: cliente não identificado informa o CPF, e só então o chamado é preparado e aberto
 sessao:
@@ -8,19 +8,19 @@ sessao:
   contato: null
 jev:
 - intencao: [reclamacao_problema, 0.93]
-  categoria: [internet_rede, 0.88]
+  categoria: [redes, 0.88]
   prioridade: [2, 0.75]
   frustracao: [1, 0.8]
   malicioso: 0.02
   fora_de_escopo: 0.02
 - intencao: [outro, 0.8]
-  categoria: [internet_rede, 0.9]
+  categoria: [redes, 0.9]
   prioridade: [2, 0.7]
   frustracao: [1, 0.8]
   malicioso: 0.01
   fora_de_escopo: 0.01
 - intencao: [confirmacao, 0.95]
-  categoria: [internet_rede, 0.9]
+  categoria: [redes, 0.9]
   prioridade: [2, 0.7]
   frustracao: [0, 0.8]
   malicioso: 0.01

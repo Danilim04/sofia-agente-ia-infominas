@@ -129,6 +129,52 @@ def test_exemplos_sem_dado_pessoal(tax: Taxonomia) -> None:
             )
 
 
+# ------------------------------------------------------------ categorias = áreas do catálogo
+
+#: Decisão do dono do produto (2026-10-22): as categorias são as ÁREAS do catálogo do Infodesk,
+#: sem juntar, separar nem inventar. Categoria da proposta -> nome EXATO da área em "Abertura de Ticket".
+AREA_DO_CATALOGO: dict[str, str] = {
+    "microsoft_365": "Microsoft 365",
+    "google_workspace": "Google Workspace",
+    "firewall": "Firewall",
+    "redes": "Redes",
+    "servidores": "Servidores",
+    "backup": "Backup",
+    "seguranca": "Segurança",
+    "computadores": "Computadores",
+    "impressoras": "Impressoras",
+    "telefonia": "Telefonia",
+    "softwares": "Softwares",
+    "monitoramento": "Monitoramento",
+    "cloud": "Cloud",
+    "banco_de_dados": "Banco de Dados",
+    "certificados_digitais": "Certificados Digitais",
+    "projetos": "Projetos",
+    "consultoria": "Consultoria",
+}
+
+
+def test_categorias_sao_exatamente_as_areas_do_catalogo(
+    tax: Taxonomia, ref: dict[str, Any]
+) -> None:
+    areas = {i["area"] for i in _mesa(ref, MESA_UNICA)["itens_catalogo"]}
+    assert len(areas) == 17
+    assert set(AREA_DO_CATALOGO.values()) == areas, "área do Infodesk sem categoria (ou inventada)"
+    assert set(tax.categorias) == set(AREA_DO_CATALOGO) | {"indefinida"}
+
+
+def test_comentario_de_area_de_cada_categoria_confere() -> None:
+    """O YAML diz, em cada categoria, de qual área ela é; tem de bater com o mapeamento."""
+    atual = None
+    vistas: dict[str, str] = {}
+    for linha in PROPOSTA.read_text(encoding="utf-8").splitlines():
+        if m := re.match(r"^  ([a-z0-9_]+):\s*$", linha):
+            atual = m.group(1)
+        elif atual and (m := re.match(r"\s+# Área do catálogo: ([^(]+?)\s*(\(|$)", linha)):
+            vistas[atual] = m.group(1)
+    assert vistas == AREA_DO_CATALOGO
+
+
 # --------------------------------------------------------------- mesa, prioridade, catálogo
 
 
@@ -205,22 +251,19 @@ def test_decisoes_pendentes_estao_marcadas_no_arquivo() -> None:
 # ------------------------------------------------------------- o sintético de classificação
 
 #: Categoria do `evals/classificacao/sintetico.jsonl` (escrito para o placeholder de provedor de
-#: internet) -> categoria da proposta. Destino `indefinida` = sem caso real nos dados da Infominas
-#: (pergunta Q1 do documento de decisões); nunca vira categoria inventada.
+#: internet) -> categoria da proposta (área do catálogo). `indefinida` = o catálogo do Infodesk não
+#: tem área para o assunto (financeiro, comercial, serviços de provedor); nunca vira categoria inventada.
 DESTINO_SINTETICO: dict[str, tuple[str, str]] = {
-    "sem_conexao": ("internet_rede", "internet da empresa fora"),
-    "lentidao": ("internet_rede", "o cliente não separa lenta de fora"),
-    "instabilidade": ("internet_rede", "queda e volta é a mesma queixa"),
-    "equipamento": (
-        "internet_rede",
-        "o sintético fala de modem/roteador/cabo: equipamento de rede",
-    ),
-    "cobranca": ("financeiro", "cobrança duplicada ou errada"),
-    "segunda_via": ("financeiro", "boleto e 2ª via"),
-    "duvida_planos": ("comercial", "preço e contratação"),
-    "cancelamento": ("indefinida", "sem caso real nos 32; legado de provedor (Q1)"),
-    "mudanca_endereco": ("indefinida", "sem caso real nos 32; legado de provedor (Q1)"),
-    "visita_tecnica": ("indefinida", "sem caso real nos 32; legado de provedor (Q1)"),
+    "sem_conexao": ("redes", "área Redes: Sem internet"),
+    "lentidao": ("redes", "área Redes: Internet lenta"),
+    "instabilidade": ("redes", "área Redes: Perda de pacotes, Link secundário"),
+    "equipamento": ("redes", "o sintético fala de modem/roteador/cabo: equipamento de rede"),
+    "cobranca": ("indefinida", "sem área financeira no catálogo do Infodesk (Q6)"),
+    "segunda_via": ("indefinida", "sem área financeira no catálogo do Infodesk (Q6)"),
+    "duvida_planos": ("indefinida", "sem área comercial de planos no catálogo do Infodesk (Q6)"),
+    "cancelamento": ("indefinida", "sem área no catálogo; legado de provedor (Q6)"),
+    "mudanca_endereco": ("indefinida", "sem área no catálogo; legado de provedor (Q6)"),
+    "visita_tecnica": ("indefinida", "sem área no catálogo; legado de provedor (Q6)"),
     "indefinida": ("indefinida", "continua indefinida"),
 }
 
@@ -247,7 +290,7 @@ def test_documento_de_decisoes_cobre_cada_categoria_e_pergunta(tax: Taxonomia) -
     texto = DOC_DECISOES.read_text(encoding="utf-8")
     for nome in tax.categorias:
         assert f"`{nome}`" in texto, f"documento de decisões não cita a categoria {nome}"
-    for q in ("Q1", "Q2", "Q3", "Q4", "Q5"):
+    for q in ("Q1", "Q2", "Q3", "Q4", "Q5", "Q6"):
         assert re.search(rf"^#+ {q}\b", texto, re.M), f"falta a seção da pergunta {q}"
 
 
@@ -265,9 +308,18 @@ def com_a_proposta(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         get_config_classificacao.cache_clear()
 
 
+#: Cenários cuja categoria o catálogo do Infodesk não tem (Q6): não rodam contra a proposta; ficam
+#: em `pendentes/` com a pergunta, sem perder nenhum assert.
+SEM_AREA_NO_CATALOGO = frozenset({"real-cobranca-financeiro", "real-financeiro-segunda-via"})
+
+
+def _arquivos_reais() -> list[Path]:
+    return sorted(CONVERSA.glob("real-*.yaml")) + sorted(PENDENTES.glob("real-*.yaml"))
+
+
 def _cenarios_de_origem_real() -> list[Any]:
     categorias = carregar_taxonomia_evals(PROPOSTA).categorias
-    arquivos = sorted(CONVERSA.glob("real-*.yaml")) + sorted(PENDENTES.glob("real-*.yaml"))
+    arquivos = [p for p in _arquivos_reais() if p.stem not in SEM_AREA_NO_CATALOGO]
     cenarios = [carregar_cenario_eval(p, categorias) for p in arquivos]
     assert len({c.id for c in cenarios}) == len(cenarios)
     return cenarios
@@ -277,7 +329,17 @@ _CENARIOS = _cenarios_de_origem_real()
 
 
 def test_ha_32_cenarios_de_origem_real() -> None:
-    assert len(_CENARIOS) == 32  # nenhum se perde na promoção (git mv) nem na remapeação
+    assert len(_arquivos_reais()) == 32  # nenhum se perde na promoção (git mv) nem na remapeação
+    assert len(_CENARIOS) == 30
+
+
+def test_cenarios_sem_area_usam_categoria_que_a_proposta_nao_tem(tax: Taxonomia) -> None:
+    for nome in SEM_AREA_NO_CATALOGO:
+        texto = (PENDENTES / f"{nome}.yaml").read_text(encoding="utf-8")
+        usadas = set(re.findall(r"categoria: \[?(\w+)", texto))
+        assert usadas - {"indefinida"}, nome
+        assert not any(tax.existe(c) for c in usadas - {"indefinida"}), (nome, usadas)
+        assert re.search(r"^# Destrava: Q6\b", texto, re.M), nome
 
 
 def _param(cenario: Any) -> Any:
@@ -296,8 +358,8 @@ def test_todo_pendente_diz_qual_decisao_o_destrava() -> None:
     assert arquivos
     for arquivo in arquivos:
         texto = arquivo.read_text(encoding="utf-8")
-        assert re.search(r"^# Destrava: .*\bQ[1-5]\b", texto, re.M), (
-            f"{arquivo.name}: sem a linha '# Destrava: Q<n> …'"
+        assert re.search(r"^# Destrava: .*\bQ[2-6]\b", texto, re.M), (
+            f"{arquivo.name}: sem a linha '# Destrava: … Q<n> …'"
         )
 
 

@@ -2,13 +2,14 @@
 
 Boleto e preço (intenções `outro`/`duvida_informacao`) passam a chegar à
 transferência com a categoria fixada (financeiro/comercial na taxonomia
-proposta), não `indefinida`. Abrir chamado continua dependendo da política das
+de teste), não `indefinida`. Abrir chamado continua dependendo da política das
 tools; a pergunta de esclarecimento continua só em reclamação. Sem rede.
 """
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -20,10 +21,11 @@ from src.classificacao.taxonomia import carregar_taxonomia
 from src.classificacao.tipos import INTENCOES_COM_CATEGORIA, Classificacao, Mensagem
 from tests.fakes import FakeFallbackLLM, FakeJEV, config_de_teste, resp_jev
 
-PROPOSTA = ConfigClassificacao(_env_file=None).taxonomia_path.with_name(  # type: ignore[call-arg]
-    "taxonomia.proposta.yaml"
-)
-TAX = carregar_taxonomia(PROPOSTA)
+# Fixture congelada com `financeiro`/`comercial` (a proposta de negócio segue as áreas do catálogo do
+# Infodesk e não tem essas categorias: docs/plano/decisoes/taxonomia-proposta.md, Q6). Aqui se testa o
+# CÓDIGO de roteamento, não a taxonomia do produto.
+TAXONOMIA_ROTEAMENTO = Path(__file__).parent / "fixtures" / "taxonomia_roteamento_informacao.yaml"
+TAX = carregar_taxonomia(TAXONOMIA_ROTEAMENTO)
 
 
 def _rodar(
