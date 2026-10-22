@@ -132,6 +132,10 @@ func run() int {
 	saude := novaSaude(st, sondaReferencia, sondaFeed, fotoTax, cfg.ReconciliaAtivo)
 	saude.Iniciado = time.Now()
 	saude.Testadores = len(cfg.Testadores()) // E3.9: só a contagem, nunca os números
+	if cfg.Horario != nil {                  // E5.5: o /health diz se agora é horário de atendimento humano
+		saude.Horario = cfg.Horario.Dentro
+		saude.ForaDoHorarioModo = cfg.ForaDoHorarioModo
+	}
 	mux.HandleFunc("/health", saude.Handler())
 
 	// API interna de tools que o cérebro Python chama durante o loop do
