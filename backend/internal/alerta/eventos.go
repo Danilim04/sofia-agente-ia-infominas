@@ -22,7 +22,8 @@ const (
 	// Campos: numero, conversation_id, categoria, mesa, reconciliado. Nível INFO.
 	EventoTicketAberto = "ticket_aberto"
 	// EventoTransferencia: a conversa foi passada ao atendimento humano.
-	// Campos: id_ocorrencia, conversation_id, origem, departamento. Nível INFO.
+	// Campos: id_ocorrencia, conversation_id, origem, departamento, fora_do_horario
+	// (a transferência aconteceu fora do horário humano; E5.5). Nível INFO.
 	EventoTransferencia = "transferencia"
 	// EventoMetrica: um contador em memória subiu. Campos: metrica, total. Nível WARN.
 	EventoMetrica = "sofia_metrica"
@@ -33,7 +34,7 @@ const (
 var CamposDoEvento = map[string][]string{
 	EventoSofiaAlerta:   {"tipo", "titulo", "texto", "id_ocorrencia", "conversation_id", "link"},
 	EventoTicketAberto:  {"numero", "conversation_id", "categoria", "mesa", "reconciliado"},
-	EventoTransferencia: {"id_ocorrencia", "conversation_id", "origem", "departamento"},
+	EventoTransferencia: {"id_ocorrencia", "conversation_id", "origem", "departamento", "fora_do_horario"},
 	EventoMetrica:       {"metrica", "total"},
 }
 
@@ -61,6 +62,7 @@ type Transferencia struct {
 	ConversationID string
 	Origem         string
 	Departamento   string
+	ForaDoHorario  bool // fora do horário humano (HORARIO_HUMANO); E5.5
 }
 
 // LogTransferencia escreve o evento `transferencia` com os campos do contrato.
@@ -69,7 +71,7 @@ func LogTransferencia(l *slog.Logger, t Transferencia) {
 		l = slog.Default()
 	}
 	l.Info(EventoTransferencia, "id_ocorrencia", t.IDOcorrencia, "conversation_id", t.ConversationID,
-		"origem", t.Origem, "departamento", t.Departamento)
+		"origem", t.Origem, "departamento", t.Departamento, "fora_do_horario", t.ForaDoHorario)
 }
 
 // ---------------------------------------------------------------------------

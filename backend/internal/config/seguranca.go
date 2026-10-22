@@ -98,6 +98,9 @@ func (c *Config) avisosDeSeguranca() []string {
 	} else if !c.TestadoresAtivo() {
 		out = append(out, "PRODUÇÃO ABERTA (SOFIA_PRODUCAO_ABERTA=true, TESTADORES_TELEFONES vazia): TODO cliente que escrever fala com a Sofia")
 	}
+	if c.Horario == nil && !c.ModoDev() {
+		out = append(out, "HORARIO_HUMANO vazio: sem horário de atendimento humano o aviso de fora do horário nunca é usado (se a equipe não atende à noite, o cliente só recebe o aviso normal)")
+	}
 	return out
 }
 

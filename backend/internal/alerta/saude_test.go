@@ -191,14 +191,15 @@ func TestSaudeJSONTemSoAsChavesDocumentadas(t *testing.T) {
 	if err := json.Unmarshal(corpo, &m); err != nil {
 		t.Fatal(err)
 	}
-	if got, quer := chaves(m), "motivos piloto quando reconciliador referencia status taxonomia uptime_s"; got != quer {
+	if got, quer := chaves(m), "horario_humano motivos piloto quando reconciliador referencia status taxonomia uptime_s"; got != quer {
 		t.Fatalf("chaves de topo = %q, quer %q", got, quer)
 	}
 	quer := map[string]string{
-		"referencia":    "carregada ultima_leitura_ok ultimo_erro ultimo_erro_em",
-		"taxonomia":     "carregada habilitada inferida placeholder problemas valida",
-		"reconciliador": "ativo feed ultimo_seq ultimo_seq_webhook",
-		"piloto":        "ativo modo numeros",
+		"referencia":     "carregada ultima_leitura_ok ultimo_erro ultimo_erro_em",
+		"taxonomia":      "carregada habilitada inferida placeholder problemas valida",
+		"reconciliador":  "ativo feed ultimo_seq ultimo_seq_webhook",
+		"piloto":         "ativo modo numeros",
+		"horario_humano": "configurado dentro",
 	}
 	for k, v := range quer {
 		if got := chaves(m[k].(map[string]any)); got != v {
@@ -260,5 +261,30 @@ func TestSaudePilotoLigadoEDesligado(t *testing.T) {
 	r = s.Relatorio(context.Background())
 	if !r.Piloto.Ativo || r.Piloto.Numeros != 3 || r.Piloto.Modo != ModoPiloto || r.Status != "ok" {
 		t.Fatalf("ligado com 3: %+v status=%s", r.Piloto, r.Status)
+	}
+}
+
+// E5.5: o /health informa se o horário humano está configurado e se agora é
+// horário de atendimento; fora do horário não degrada o status.
+func TestSaudeHorarioHumano(t *testing.T) {
+	s, _, _ := saudeSaudavel()
+	r := s.Relatorio(context.Background())
+	if r.HorarioHumano.Configurado || !r.HorarioHumano.Dentro {
+		t.Fatalf("sem horário configurado: sempre dentro: %+v", r.HorarioHumano)
+	}
+	dentro := false
+	s.Horario = func(time.Time) bool { return dentro }
+	s.ForaDoHorarioModo = "avisar"
+	r = s.Relatorio(context.Background())
+	if !r.HorarioHumano.Configurado || r.HorarioHumano.Dentro || r.HorarioHumano.Modo != "avisar" || r.Status != "ok" {
+		t.Fatalf("fora do horário: %+v status=%s", r.HorarioHumano, r.Status)
+	}
+	dentro = true
+	if r = s.Relatorio(context.Background()); !r.HorarioHumano.Dentro {
+		t.Fatalf("dentro: %+v", r.HorarioHumano)
+	}
+	corpo, _ := json.Marshal(r)
+	if !strings.Contains(string(corpo), `"horario_humano":{"configurado":true,"dentro":true,"fora_do_horario_modo":"avisar"}`) {
+		t.Fatalf("JSON: %s", corpo)
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"bot-infominas/internal/alerta"
 	"bot-infominas/internal/brain"
+	"bot-infominas/internal/config"
 	"bot-infominas/internal/infodesk"
 	"bot-infominas/internal/store"
 )
@@ -49,6 +50,12 @@ type Transferencia struct {
 	// Espera: há quanto tempo o cliente esperava (origem `vigia`; entra na nota
 	// como "sem resposta em N min"). Zero = a nota não cita o tempo.
 	Espera time.Duration
+
+	// foraDoHorario é preenchido por TransferirParaHumano (nunca por quem chama):
+	// a transferência aconteceu fora do horário humano (HORARIO_HUMANO). Vai na
+	// nota interna e no log `transferencia`; com FORA_DO_HORARIO_MODO=avisar troca
+	// a mensagem ao cliente.
+	foraDoHorario bool
 }
 
 // transferenciaPorErroDoCerebro monta a transferência a partir do erro da
@@ -158,6 +165,10 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 		}
 	}
 	agora := e.agora()
+	// Fora do horário humano (E5.5): a transferência acontece do mesmo jeito (a
+	// conversa precisa cair na fila para a equipe ver no próximo expediente); muda
+	// a mensagem ao cliente, a nota e o log.
+	t.foraDoHorario = !e.cfg.Horario.Dentro(agora)
 	id := strings.TrimSpace(t.ID)
 	if id == "" {
 		id = NovoIDOcorrencia(agora)
@@ -188,10 +199,18 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 		})
 	}
 
-	if !t.SemAviso {
+	// Fora do horário humano o cliente precisa saber, mesmo quando a resposta do
+	// cérebro neste turno já anunciou a transferência (SemAviso): ela não diz que a
+	// equipe só atende no horário configurado. O aviso de fora do horário não repete
+	// "vou te encaminhar". Quem está fora do piloto segue sem mensagem nenhuma.
+	avisarForaDoHorario := t.foraDoHorario && e.cfg.ForaDoHorarioModo != config.ForaDoHorarioIgnorar
+	if !t.SemAviso || (avisarForaDoHorario && t.Origem != OrigemForaDoPiloto) {
 		msg := t.Mensagem
 		if msg == "" {
 			msg = MsgTransferencia
+		}
+		if avisarForaDoHorario {
+			msg = e.msgForaDoHorario(ctx, convID, t)
 		}
 		if !e.send(ctx, convID, msg) {
 			// O handoff segue (o atendente recebe a nota), mas o cliente ficou sem o aviso
@@ -230,7 +249,7 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 		e.vigia.Aviso(alerta.TipoHandoffFalhou, "Handoff para o atendente falhou", texto, convID)
 	}
 	alerta.LogTransferencia(e.log, alerta.Transferencia{
-		IDOcorrencia: id, ConversationID: convID, Origem: t.Origem, Departamento: dept,
+		IDOcorrencia: id, ConversationID: convID, Origem: t.Origem, Departamento: dept, ForaDoHorario: t.foraDoHorario,
 	})
 	return id
 }
@@ -349,6 +368,9 @@ func (e *Engine) montarNota(ctx context.Context, convID string, t Transferencia,
 		ticket = conv.TicketNumber
 	}
 	partes := []string{nomeAssistente + " → humano", "motivo: " + motivoDaNota(t, ticket)}
+	if t.foraDoHorario {
+		partes = append(partes, notaForaDoHorario)
+	}
 	if idOcorrencia != "" && (t.Origem == OrigemCerebro || t.Origem == OrigemDisjuntor) {
 		partes = append(partes, "ocorrência: "+idOcorrencia)
 	}

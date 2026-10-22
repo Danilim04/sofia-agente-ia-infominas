@@ -149,7 +149,14 @@ type Config struct {
 	// ProducaoAberta (SOFIA_PRODUCAO_ABERTA, default false): opt-in explícito para
 	// atender todo cliente (TESTADORES_TELEFONES vazia). Ver seguranca.go.
 	WebhookSemAutenticacao bool
-	ProducaoAberta         bool
+
+	// Horário humano (E5.5, P7). Horario nil = sempre dentro do horário. HorarioDescricao
+	// é o texto do horário para a mensagem ao cliente. Ver horario.go.
+	Horario           *Horario
+	HorarioDescricao  string
+	HorarioFuso       string
+	ForaDoHorarioModo string // ForaDoHorarioAvisar | ForaDoHorarioIgnorar
+	ProducaoAberta    bool
 }
 
 // Avisos lista o que, na configuração carregada, funciona mas merece atenção
@@ -257,6 +264,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.TurnosPorHoraMax, errLimite = lerInteiroPositivo("TURNOS_POR_HORA_MAX", 60); errLimite != nil {
 		return nil, errLimite
+	}
+	if err := cfg.carregarHorario(); err != nil {
+		return nil, err
 	}
 	testadores, err := parseTestadores(os.Getenv("TESTADORES_TELEFONES"))
 	if err != nil {
