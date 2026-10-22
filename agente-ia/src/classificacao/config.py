@@ -15,8 +15,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from src.classificacao.tipos import INTENCOES, INTENCOES_COM_CATEGORIA
 
 #: Raiz do pacote do cérebro (`agente-ia/`): `src/classificacao/config.py` → 3 níveis.
 RAIZ_AGENTE = Path(__file__).resolve().parents[2]
@@ -93,8 +95,32 @@ class ConfigClassificacao(BaseSettings):
     #: histórico real; `false` recalcula a cada reclamação.
     prioridade_so_sobe: bool = Field(True, alias="JEV_PRIORIDADE_SO_SOBE")
 
+    #: Intenções em que a categoria é decidida (E3.10), separadas por vírgula. A
+    #: categoria fixada fora de reclamação serve ao roteamento do handoff e ao
+    #: contexto do prompt; abrir chamado segue exigindo categoria (política das tools).
+    intencoes_com_categoria_csv: str = Field(
+        ",".join(sorted(INTENCOES_COM_CATEGORIA, key=INTENCOES.index)),
+        alias="JEV_INTENCOES_COM_CATEGORIA",
+    )
+
     # --- Taxonomia ---
     taxonomia_path: Path = Field(RAIZ_AGENTE / "config" / "taxonomia.yaml", alias="TAXONOMIA_PATH")
+
+    @field_validator("intencoes_com_categoria_csv")
+    @classmethod
+    def _intencoes_validas(cls, valor: str) -> str:
+        nomes = [n.strip() for n in valor.split(",") if n.strip()]
+        invalidas = [n for n in nomes if n not in INTENCOES]
+        if invalidas or not nomes:
+            raise ValueError(
+                f"JEV_INTENCOES_COM_CATEGORIA: intenções inválidas {invalidas} "
+                f"(aceitas: {', '.join(INTENCOES)}; ao menos uma)"
+            )
+        return ",".join(nomes)
+
+    @property
+    def intencoes_com_categoria(self) -> frozenset[str]:
+        return frozenset(self.intencoes_com_categoria_csv.split(","))
 
 
 @lru_cache

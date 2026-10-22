@@ -1,10 +1,7 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Pedido de 2ª via de boleto: não há tool de boleto; o certo é o Financeiro assumir.
-# Destrava: Q1 (categoria financeiro) e Q2 (departamento por categoria). Limitação de produto, não corrigida aqui: a categoria só é fixada quando a intenção é reclamacao_problema (src/classificacao/tipos.py), então o xfail permanece mesmo com as decisões.
+# Destrava: Q1 (categoria financeiro) e Q2 (departamento por categoria). Limitação de produto corrigida na E3.10 (a categoria também é fixada em `outro`/`duvida_informacao`): o `xfail` saiu; o cenário só espera a aprovação da taxonomia (E5.1) para subir para a raiz.
 id: conversa-156
 descricao: pedido de boleto é transferido com a categoria de 2ª via (departamento Financeiro pela taxonomia)
-xfail: 'Limitação real: a categoria só é fixada quando a intenção é reclamacao_problema (INTENCOES_COM_CATEGORIA
-  em src/classificacao/tipos.py). Dúvida/pedido comercial ou financeiro chega à transferência com categoria ''indefinida'',
-  então o gateway não escolhe o departamento Comercial/Financeiro pela taxonomia (cai no departamento padrão, P11).'
 sessao:
   telefone: '+5531999990156'
   nome_contato: Olga

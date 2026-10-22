@@ -41,12 +41,17 @@ INTENCOES: Final[tuple[str, ...]] = (
     INTENCAO_OUTRO,
 )
 
-#: Intenções em que a categoria do problema é (re)calculada: SÓ reclamação
-#: (02: "categoria.confidence quando intenção = reclamação"). Nas demais
-#: (dúvida, status, saudação, "sim/ok", pedido de atendente) a categoria já
-#: fixada é herdada: uma dúvida de cobrança não pode virar a fila de uma
-#: reclamação de conexão feita depois, e um "ok" não apaga a classificação.
-INTENCOES_COM_CATEGORIA: Final[frozenset[str]] = frozenset({INTENCAO_RECLAMACAO})
+#: DEFAULT das intenções em que a categoria é (re)calculada (E3.10): reclamação
+#: e os pedidos de informação/serviço (`outro`, `duvida_informacao`), para que um
+#: boleto ou um preço também cheguem à transferência com categoria e sigam ao
+#: departamento da categoria. Configurável em `JEV_INTENCOES_COM_CATEGORIA`
+#: (`ConfigClassificacao.intencoes_com_categoria`). Nas demais (status, saudação,
+#: "sim/ok", pedido de atendente) a categoria já fixada é herdada: um "ok" não
+#: apaga a classificação. A PERGUNTA de esclarecimento por baixa confiança só
+#: existe em reclamação (quem só pediu informação não é indagado sobre categoria).
+INTENCOES_COM_CATEGORIA: Final[frozenset[str]] = frozenset(
+    {INTENCAO_RECLAMACAO, INTENCAO_OUTRO, INTENCAO_DUVIDA}
+)
 
 #: Ordem canônica das prioridades da Sofia (índice = nível do Score do JEV).
 PRIORIDADES: Final[tuple[str, ...]] = ("baixa", "media", "alta", "urgente")
@@ -203,6 +208,12 @@ class Classificacao:
     #: Frustração ≥ nível de cuidado (e abaixo da transferência): tom mais cuidadoso.
     tom_cuidadoso: bool = False
     acoes: tuple[Acao, ...] = ()
+    #: Intenção do turno que FIXOU a categoria vigente (E3.10). Turnos herdados
+    #: ("ok", status, saudação...) a preservam; é ela que `para_estado` grava em
+    #: `intencao`, para o roteador saber se a categoria veio de uma reclamação
+    #: (pegajosa) ou de um pedido de informação (não trava a reclamação seguinte).
+    #: Vazia = a do próprio turno.
+    intencao_categoria: str = ""
 
     @property
     def confianca(self) -> float:
@@ -214,10 +225,11 @@ class Classificacao:
 
         EXATAMENTE as 5 chaves do contrato (`contratos/contrato-a/chat-response.json`);
         a política das tools injeta este dict (`categoria`, `prioridade`,
-        `confianca`, `origem`).
+        `confianca`, `origem`). `intencao` é a que fixou a categoria vigente
+        (ver `intencao_categoria`); a intenção do turno vai nos sinais do turno.
         """
         return {
-            "intencao": self.intencao,
+            "intencao": self.intencao_categoria or self.intencao,
             "categoria": self.categoria,
             "prioridade": self.prioridade,
             "confianca": round(self.confianca, 4),
@@ -240,7 +252,8 @@ class Classificacao:
         except (TypeError, ValueError):
             confianca = 0.0
         return cls(
-            intencao=str(dado.get("intencao") or "outro"),
+            # Sem intenção gravada, assume reclamação: o caso pegajoso (conservador).
+            intencao=str(dado.get("intencao") or "reclamacao_problema"),
             categoria=str(dado["categoria"]),
             prioridade=prioridade,
             confiancas={"categoria": confianca},

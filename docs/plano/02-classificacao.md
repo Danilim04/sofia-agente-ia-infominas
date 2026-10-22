@@ -36,7 +36,7 @@
 | Decisão | Quem | Por quê |
 |---|---|---|
 | Intenção da mensagem (reclamação / dúvida / status / atendente / social / outro) | **JEV** (Choice) | determinística, barata, com confiança; roteia o grafo antes de gastar LLM |
-| Categoria do problema | **JEV** (Choice sobre a taxonomia) → fallback LLM → pergunta de esclarecimento | é o que define mesa/departamento; precisa de confiança explícita para não errar fila |
+| Categoria (do problema **ou do pedido**) | **JEV** (Choice sobre a taxonomia) → fallback LLM → pergunta de esclarecimento (**só em reclamação**) | é o que define mesa/departamento do chamado **e o departamento do handoff**; precisa de confiança explícita para não errar fila. Decidida nas intenções de `JEV_INTENCOES_COM_CATEGORIA` (default: reclamação, `outro`, `duvida_informacao` — E3.10) |
 | Prioridade | **JEV** (Score) + regras de código (ex.: categoria `sem_servico_massivo` força `alta`) | ordinal com critérios claros; regras de negócio fixas vencem o modelo |
 | Frustração do cliente | **JEV** (Score 0–3) | sinal de handoff (D8) |
 | Segurança (malicioso / off-topic) | **regex** (camada 1, mantida) → **JEV** (Noul `malicioso`, Noul `fora_de_escopo`) | substitui o classificador LLM do Zapin: mais rápido, mais barato, calibrado. Fail-open como antes |
@@ -96,7 +96,7 @@ no `.env` com prefixo `JEV_LIMIAR_*` e espelhados em `perguntas.py`:
 | Sinal | Limiar | Acima | Entre | Abaixo |
 |---|---|---|---|---|
 | `intencao.confidence` | alto 0.70 / baixo 0.45 | usa a intenção | usa a intenção, mas o prompt manda confirmar em uma frase | fallback LLM |
-| `categoria.confidence` (quando intenção = reclamação) | alto 0.65 / baixo 0.40 | fixa categoria (`origem: jev`) | fallback LLM; se LLM concorda com a 1ª ou 2ª do JEV → fixa (`origem: llm`); senão pergunta de esclarecimento | pergunta de esclarecimento (máx. 1 por episódio); persistindo → `indefinida` → mesa de triagem (P11) ou transferência |
+| `categoria.confidence` (quando a intenção está em `JEV_INTENCOES_COM_CATEGORIA`; a **pergunta** só em reclamação) | alto 0.65 / baixo 0.40 | fixa categoria (`origem: jev`) | fallback LLM; se LLM concorda com a 1ª ou 2ª do JEV → fixa (`origem: llm`); senão pergunta de esclarecimento | pergunta de esclarecimento (máx. 1 por episódio); persistindo → `indefinida` → mesa de triagem (P11) ou transferência |
 | `prioridade.confidence` | 0.60 | usa o score | — | `media` (default), exceto regras fixas de categoria |
 | `frustracao.score` | ≥ 3 e `confidence` ≥ 0.6 | `acoes: [transferir(frustracao)]` após uma resposta empática | ≥ 2 → tom mais cuidadoso no prompt | nada |
 | `malicioso.noul` | ≥ 0.80 | `safe_response` (bloqueia) | 0.5–0.8 → aviso no prompt | nada |
@@ -108,7 +108,32 @@ Regras adicionais:
 - **Categoria é "pegajosa"** dentro do episódio: uma vez fixada com
   `origem: jev|llm`, só muda se o cliente corrigir explicitamente ou se uma
   nova classificação vier com confiança ≥ 0.85 e categoria diferente (evita
-  trocar de fila a cada turno).
+  trocar de fila a cada turno). Separação (E3.10) entre a **categoria do chamado**
+  (fixada numa reclamação) e a **categoria do pedido** (fixada em `outro`/
+  `duvida_informacao`, só para o handoff): (1) uma categoria de pedido **não trava**
+  a seguinte — a reclamação que vier depois define a fila do chamado (e, se for
+  incerta, cai em esclarecimento/`indefinida`, nunca herda a do pedido), e dois
+  pedidos seguidos se corrigem sozinhos; (2) um pedido de informação **nunca troca**
+  a fila de uma reclamação aberta (nem com confiança ≥ 0.85 ou correção explícita:
+  quem corrige a fila é a própria reclamação) e herda também a prioridade dela — o
+  handoff dessa conversa vai à fila da reclamação (conservador). Para o roteador
+  saber de que turno veio a categoria vigente, `state.classificacao.intencao`
+  guarda a **intenção que fixou a categoria** (turnos herdados — "ok", status,
+  saudação — a preservam); a intenção do turno vai nos sinais do turno. O Contrato A
+  segue com as mesmas 5 chaves.
+- **Categoria fora de reclamação (E3.10).** Antes, só a reclamação fixava
+  categoria; um pedido de boleto ou de preço chegava à transferência como
+  `indefinida` e ia ao `DEPARTAMENTO_HUMANO_PADRAO`, não ao departamento da
+  categoria (financeiro, comercial — `decisoes/taxonomia-proposta.md`, Q2).
+  Agora o JEV (e o fallback LLM) também decidem a categoria nas intenções de
+  `JEV_INTENCOES_COM_CATEGORIA` (default `reclamacao_problema,outro,duvida_informacao`;
+  `status_chamado`, saudação, "sim/ok" e pedido de atendente herdam a do
+  episódio). Mesmos limiares, mesma pegajosidade e mesmo fail-soft. O que **não**
+  muda: a pergunta de esclarecimento por baixa confiança e a transferência
+  `confianca` só existem em reclamação (quem só pediu informação não é
+  indagado sobre categoria — fica `indefinida`), e abrir chamado continua exigindo
+  categoria pela política das tools (`exigir_categoria`). Custo: dúvida/outro com
+  categoria entre 0.40 e 0.65 passam a consultar o fallback LLM.
 - **Fallback LLM** = `get_classifier_llm().with_structured_output(ClassificacaoLLM)`
   com as **mesmas** classes da taxonomia e o mesmo estado; temperatura 0;
   fail-open para `indefinida`. Nunca classifica em texto livre.

@@ -2,7 +2,7 @@
 
 > **Exemplo offline com fakes, não é medição real. Os números medem o encanamento do runner (roteador + JEV/fallback simulados), nunca o desempenho do JEV (P8).**
 
-- **gerado_em**: 2026-10-22T06:48:23+00:00
+- **gerado_em**: 2026-10-22T07:58:34+00:00
 - **dataset**: sintetico.jsonl (237 casos)
 - **modo**: offline
 - **JEV**: JEVSimulado (FakeJEV lexical)
@@ -32,13 +32,13 @@ Negrito = melhor macro-F1 de categoria. Janela maior custa mais tokens (e latên
 | pergunta | n | acurácia | macro-F1 | limiar | cobertura@limiar | acurácia@limiar | ECE |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | categoria | 237 | 67.5% | 67.9% | 0.65 | 66.7% | 74.1% | 0.222 |
-| categoria_final | 111 | 38.7% | 25.1% | 0.65 | 45.0% | 74.0% | 0.128 |
+| categoria_final | 111 | 61.3% | 40.6% | 0.65 | 76.6% | 68.2% | 0.272 |
 | fora_de_escopo | 44 | 97.7% | 93.8% | 0.60 | 100.0% | 97.7% | 0.083 |
 | frustracao | 94 | 93.6% | — | 0.60 | 100.0% | 93.6% | — |
 | intencao | 237 | 68.8% | 69.5% | 0.70 | 72.2% | 67.8% | 0.147 |
 | malicioso | 49 | 100.0% | 100.0% | 0.60 | 100.0% | 100.0% | 0.082 |
 | prioridade | 150 | 50.7% | — | 0.60 | 100.0% | 50.7% | — |
-| prioridade_final | 150 | 58.0% | — | 0.60 | 100.0% | 58.0% | — |
+| prioridade_final | 150 | 80.7% | — | 0.60 | 100.0% | 80.7% | — |
 
 ## Pipeline (o que o roteador fez)
 
@@ -47,7 +47,7 @@ Negrito = melhor macro-F1 de categoria. Janela maior custa mais tokens (e latên
 | media_estado_caracteres | 79.5 |
 | taxa_categoria_indefinida_em_reclamacao | 1.5% |
 | taxa_esclarecimento | 0.4% |
-| taxa_fallback_chamado | 5.5% |
+| taxa_fallback_chamado | 18.6% |
 | taxa_jev_indisponivel | 0.0% |
 | taxa_transferencia | 3.4% |
 
@@ -105,40 +105,45 @@ Negrito = melhor macro-F1 de categoria. Janela maior custa mais tokens (e latên
 | classe | F1 |
 |---|---:|
 | cancelamento | 0.0% |
-| cobranca | 37.0% |
-| equipamento | 40.0% |
-| indefinida | 3.8% |
-| instabilidade | 70.6% |
-| lentidao | 35.7% |
+| cobranca | 66.7% |
+| duvida_planos | 0.0% |
+| equipamento | 58.3% |
+| indefinida | 0.0% |
+| instabilidade | 71.4% |
+| lentidao | 62.9% |
 | mudanca_endereco | 0.0% |
-| segunda_via | 0.0% |
-| sem_conexao | 64.0% |
-| visita_tecnica | 0.0% |
+| segunda_via | 50.0% |
+| sem_conexao | 70.2% |
+| visita_tecnica | 66.7% |
 
 ### Calibração (10 bins)
 
 | bin | n | confiança média | acurácia |
 |---|---:|---:|---:|
-| [0.0, 0.1) | 49 | 0.000 | 2.0% |
-| [0.4, 0.5) | 12 | 0.446 | 41.7% |
+| [0.0, 0.1) | 1 | 0.000 | 0.0% |
+| [0.2, 0.3) | 2 | 0.252 | 0.0% |
+| [0.3, 0.4) | 3 | 0.367 | 0.0% |
+| [0.4, 0.5) | 19 | 0.447 | 52.6% |
+| [0.6, 0.7) | 1 | 0.600 | 0.0% |
 | [0.7, 0.8) | 1 | 0.737 | 100.0% |
 | [0.8, 0.9) | 1 | 0.850 | 0.0% |
-| [0.9, 1.0] | 48 | 0.994 | 75.0% |
+| [0.9, 1.0] | 83 | 0.993 | 68.7% |
 
 ### Matriz de confusão (linha = esperado, coluna = previsto)
 
-| esperado \ previsto | cancelamento | cobranca | equipamento | indefinida | instabilidade | lentidao | mudanca_endereco | segunda_via | sem_conexao | visita_tecnica |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| cancelamento | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
-| cobranca | 0 | 5 | 0 | 14 | 0 | 0 | 0 | 0 | 2 | 1 |
-| equipamento | 0 | 0 | 4 | 5 | 0 | 0 | 1 | 0 | 3 | 0 |
-| indefinida | 0 | 0 | 1 | 1 | 0 | 0 | 1 | 0 | 1 | 0 |
-| instabilidade | 0 | 0 | 1 | 5 | 12 | 0 | 0 | 0 | 2 | 0 |
-| lentidao | 0 | 0 | 1 | 12 | 2 | 5 | 0 | 0 | 2 | 0 |
-| mudanca_endereco | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
-| segunda_via | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
-| sem_conexao | 0 | 0 | 0 | 6 | 0 | 1 | 0 | 0 | 16 | 0 |
-| visita_tecnica | 0 | 0 | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 0 |
+| esperado \ previsto | cancelamento | cobranca | duvida_planos | equipamento | indefinida | instabilidade | lentidao | mudanca_endereco | segunda_via | sem_conexao | visita_tecnica |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| cancelamento | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| cobranca | 0 | 11 | 0 | 1 | 1 | 2 | 0 | 0 | 4 | 2 | 1 |
+| duvida_planos | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| equipamento | 0 | 0 | 0 | 7 | 0 | 2 | 0 | 1 | 0 | 3 | 0 |
+| indefinida | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 1 | 0 | 1 | 0 |
+| instabilidade | 0 | 0 | 0 | 1 | 1 | 15 | 0 | 0 | 0 | 3 | 0 |
+| lentidao | 0 | 0 | 1 | 1 | 2 | 3 | 11 | 0 | 0 | 4 | 0 |
+| mudanca_endereco | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
+| segunda_via | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 |
+| sem_conexao | 0 | 0 | 0 | 0 | 1 | 0 | 2 | 0 | 0 | 20 | 0 |
+| visita_tecnica | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 |
 
 ## fora_de_escopo
 

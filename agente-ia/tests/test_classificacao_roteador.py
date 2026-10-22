@@ -495,16 +495,18 @@ def test_servico_padrao_com_chave_cria_o_cliente_real_com_modelo_pinado():
 
 
 # ===========================================================================
-# Revisão E2.2: categoria só se decide em RECLAMAÇÃO (02) · bordas · flag
+# Revisão E2.2 / E3.10: pegajosidade entre reclamação e informação · bordas · flag
 # ===========================================================================
 
 
-def test_duvida_de_cobranca_nao_fixa_fila_e_a_reclamacao_seguinte_define_a_categoria():
+def test_duvida_de_cobranca_nao_trava_a_fila_da_reclamacao_seguinte():
+    # E3.10: a dúvida fixa a categoria (serve ao handoff), mas NÃO a torna pegajosa
+    # contra a reclamação que vier depois — é ela que define a fila do chamado.
     duvida = FakeJEV(
         padrao=resp_jev(intencao=("duvida_informacao", 0.9), categoria=("cobranca", 0.9))
     )
     c1 = _rodar("como pego a 2ª via do boleto?", jev=duvida)
-    assert c1.categoria == "indefinida" and c1.origem == "indefinida"
+    assert (c1.categoria, c1.origem) == ("cobranca", "jev")
     assert c1.precisa_esclarecer is False and c1.acoes == ()
 
     reclamacao = FakeJEV(padrao=resp_jev(categoria=("sem_conexao", 0.8)))
@@ -512,15 +514,36 @@ def test_duvida_de_cobranca_nao_fixa_fila_e_a_reclamacao_seguinte_define_a_categ
     assert (c2.categoria, c2.origem) == ("sem_conexao", "jev")
 
 
-def test_duvida_com_categoria_incerta_nao_gasta_chamada_de_llm():
+def test_pedido_de_informacao_nao_rouba_a_fila_de_uma_reclamacao_aberta():
+    anterior = _fixa("sem_conexao")  # fixada numa RECLAMAÇÃO (pegajosa)
+    jev = FakeJEV(
+        padrao=resp_jev(intencao=("duvida_informacao", 0.95), categoria=("cobranca", 0.8))
+    )
+    assert _rodar("e quanto custa o boleto?", jev=jev, anterior=anterior).categoria == "sem_conexao"
+
+
+def test_duvida_com_categoria_incerta_segue_os_mesmos_limiares_do_02():
+    # 0.40–0.65: consulta o fallback; < 0.40: nem consulta — e nunca pergunta (só reclamação pergunta)
+    fb = FakeFallbackLLM(padrao=ResultadoFallback("duvida_informacao", "cobranca"))
+    meio = FakeJEV(
+        padrao=resp_jev(
+            intencao=("duvida_informacao", 0.9), categoria=("cobranca", 0.5, "segunda_via")
+        )
+    )
+    c = _rodar("quanto custa o plano?", jev=meio, fallback=fb)
+    assert len(fb.chamadas) == 1 and (c.categoria, c.origem) == ("cobranca", "llm")
+
     fb = FakeFallbackLLM()
-    jev = FakeJEV(padrao=resp_jev(intencao=("duvida_informacao", 0.9), categoria=("cobranca", 0.5)))
-    _rodar("quanto custa o plano?", jev=jev, fallback=fb)
+    baixo = FakeJEV(
+        padrao=resp_jev(intencao=("duvida_informacao", 0.9), categoria=("cobranca", 0.3))
+    )
+    c = _rodar("quanto custa o plano?", jev=baixo, fallback=fb)
     assert fb.chamadas == []
+    assert c.categoria == "indefinida" and c.precisa_esclarecer is False and c.acoes == ()
 
 
-@pytest.mark.parametrize("intencao", ["status_chamado", "outro", "duvida_informacao"])
-def test_so_reclamacao_troca_categoria_ja_fixada(intencao):
+@pytest.mark.parametrize("intencao", ["status_chamado", "saudacao_social", "confirmacao"])
+def test_intencoes_fora_do_conjunto_herdam_a_categoria_do_episodio(intencao):
     anterior = _fixa("sem_conexao")
     jev = FakeJEV(padrao=resp_jev(intencao=(intencao, 0.95), categoria=("cobranca", 0.99)))
     assert _rodar("x", jev=jev, anterior=anterior).categoria == "sem_conexao"
@@ -546,3 +569,13 @@ def test_prioridade_so_sobe_pode_ser_desligada():
     jev = FakeJEV(padrao=resp_jev(categoria=("lentidao", 0.9), prioridade=(0, 0.9)))
     c = _rodar("tá, obrigado", jev=jev, anterior=anterior, JEV_PRIORIDADE_SO_SOBE=False)
     assert c.prioridade == "baixa"
+
+
+@pytest.mark.parametrize("intencao", ["outro", "duvida_informacao"])
+def test_pedido_de_informacao_com_confianca_altissima_nao_troca_a_fila_aberta(intencao):
+    # versão forte (E2.2 → E3.10): o 0.99 e o "outro" do teste original continuam cobertos
+    anterior = _fixa("sem_conexao")
+    jev = FakeJEV(padrao=resp_jev(intencao=(intencao, 0.95), categoria=("cobranca", 0.99)))
+    assert _rodar("x", jev=jev, anterior=anterior).categoria == "sem_conexao"
+    corrigindo = _rodar("na verdade o problema é a cobrança", jev=jev, anterior=anterior)
+    assert corrigindo.categoria == "sem_conexao"

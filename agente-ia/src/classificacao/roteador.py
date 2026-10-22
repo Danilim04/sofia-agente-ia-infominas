@@ -52,7 +52,6 @@ from src.classificacao.tipos import (
     INTENCAO_PEDIR_ATENDENTE,
     INTENCAO_RECLAMACAO,
     INTENCOES,
-    INTENCOES_COM_CATEGORIA,
     PRIORIDADE_PADRAO,
     PRIORIDADES,
     Acao,
@@ -196,7 +195,7 @@ async def classificar(
     origem_int_t: OrigemPergunta = origem_int  # type: ignore[assignment]
 
     # --- 4. categoria --------------------------------------------------------
-    if intencao in INTENCOES_COM_CATEGORIA:
+    if intencao in cfg.intencoes_com_categoria:
         decisao = await _decidir_categoria(
             resposta=resposta,
             fallback_llm=fallback_llm,
@@ -221,7 +220,10 @@ async def classificar(
         cfg=cfg,
         categoria=decisao.categoria,
         anterior=anterior,
-        herdar=intencao not in INTENCOES_COM_CATEGORIA,
+        # Categoria mantida de uma reclamação aberta por um pedido de informação: a
+        # prioridade do chamado também (um "quanto custa?" não rebaixa um urgente).
+        herdar=intencao not in cfg.intencoes_com_categoria
+        or (decisao.origem_pergunta == "herdada" and intencao != INTENCAO_RECLAMACAO),
     )
 
     # --- 6. frustração e segurança ------------------------------------------
@@ -258,8 +260,12 @@ async def classificar(
             "transferir", "confianca", "categoria indefinida após pergunta de esclarecimento"
         )
 
+    # Intenção que fixou a categoria vigente: a do turno quando a decisão é nova;
+    # a do episódio quando foi herdada/mantida (E3.10).
+    herdou_categoria = decisao.origem_pergunta == "herdada" and anterior is not None
     resultado = Classificacao(
         intencao=intencao,
+        intencao_categoria=(anterior.intencao if herdou_categoria and anterior else intencao),
         categoria=decisao.categoria,
         prioridade=prioridade,
         frustracao=frustracao,
@@ -345,13 +351,23 @@ async def _decidir_categoria(
         and anterior.categoria != CATEGORIA_INDEFINIDA
         and anterior.origem in ("jev", "llm")
     )
+    # Pegajosa só contra troca de FILA de reclamação. Uma categoria fixada num turno
+    # de informação (preço, boleto) não trava a seguinte: a reclamação que vier depois
+    # define a fila do chamado, e dois pedidos de informação seguidos se corrigem sozinhos.
+    # `anterior.intencao` é a intenção que FIXOU a categoria (sobrevive a turnos herdados).
+    informativas = cfg.intencoes_com_categoria - {INTENCAO_RECLAMACAO}
+    anterior_trava = (
+        anterior is not None and anterior_fixa and anterior.intencao not in informativas
+    )
 
     if candidata is not None:
         categoria, confianca, origem = candidata
-        if anterior is not None and anterior_fixa and categoria != anterior.categoria:
-            # Pegajosa: só troca com correção explícita ou conf ≥ troca (do JEV).
-            troca = corrigiu_explicitamente(texto_atual) or (
-                origem == "jev" and confianca >= cfg.limiar_categoria_troca
+        if anterior is not None and anterior_trava and categoria != anterior.categoria:
+            # Pegajosa: só uma RECLAMAÇÃO troca a fila de uma reclamação aberta, e só com
+            # correção explícita ou conf ≥ troca (do JEV). Pedido de informação nunca troca.
+            troca = intencao == INTENCAO_RECLAMACAO and (
+                corrigiu_explicitamente(texto_atual)
+                or (origem == "jev" and confianca >= cfg.limiar_categoria_troca)
             )
             if not troca:
                 return _DecisaoCategoria(
@@ -359,7 +375,10 @@ async def _decidir_categoria(
                 )
         return _DecisaoCategoria(categoria, confianca, origem, origem, candidatas)
 
-    if anterior is not None and anterior_fixa:
+    # Sem candidata nova: mantém a anterior — exceto quando ela veio de um pedido de
+    # informação e o turno atual é uma RECLAMAÇÃO (a categoria de um boleto não serve
+    # de fila para uma queda de internet: cai em esclarecimento/indefinida).
+    if anterior is not None and anterior_fixa and (anterior_trava or intencao in informativas):
         return _DecisaoCategoria(
             anterior.categoria, anterior.confianca, anterior.origem, "herdada", candidatas
         )
