@@ -243,8 +243,9 @@ func (h *Handler) sucessoAbrir(ctx context.Context, a *abertura, numero int) map
 			Origem:  engine.OrigemTicketAberto,
 			Causa:   "chamado aberto; atendente assume (TRANSFERIR_APOS_TICKET)",
 			Detalhe: "chamado nº " + strconv.Itoa(numero),
-			// O LLM comunica o número e a passagem na resposta deste turno.
-			SemAviso: true,
+			// O gateway confirma o número ANTES do handoff (a resposta do cérebro neste
+			// turno é descartada depois dele: a conversa já não é da Sofia).
+			Mensagem: engine.MsgChamadoAberto(numero),
 		})
 		transferido = id != ""
 	}

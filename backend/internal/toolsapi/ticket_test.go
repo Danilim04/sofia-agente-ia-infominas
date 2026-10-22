@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"bot-infominas/internal/engine"
 	"bot-infominas/internal/infodesk"
 	"bot-infominas/internal/store"
 )
@@ -253,8 +254,8 @@ func TestAbrir_PostPelaConversaComIdempotenciaEHandoff(t *testing.T) {
 	if conv, _ := a.st.ObterConversa(context.Background(), convTeste); conv == nil || conv.TicketNumber != 48213 {
 		t.Fatalf("a conversa guarda o chamado: %+v", conv)
 	}
-	if got := a.tr.origens(); len(got) != 1 || got[0] != "ticket_aberto" || !a.tr.chamadas[0].SemAviso {
-		t.Fatalf("handoff pós-ticket (TRANSFERIR_APOS_TICKET) sem aviso duplicado: %v", got)
+	if got := a.tr.origens(); len(got) != 1 || got[0] != "ticket_aberto" || a.tr.chamadas[0].SemAviso || a.tr.chamadas[0].Mensagem != engine.MsgChamadoAberto(48213) {
+		t.Fatalf("handoff pós-ticket (TRANSFERIR_APOS_TICKET) confirma o número ao cliente antes de passar a conversa: %v", got)
 	}
 }
 

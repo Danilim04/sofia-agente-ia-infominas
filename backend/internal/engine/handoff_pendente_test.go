@@ -274,3 +274,39 @@ func TestChatbotInternoNaoLimpaAMarca(t *testing.T) {
 		t.Fatal("INTERNAL_BOT não é humano: a marca devia ficar")
 	}
 }
+
+// B1 (E4.5): o gateway confirma o número do chamado ANTES do handoff pós-ticket;
+// a resposta do cérebro que chega depois (conversa já transferida) é descartada,
+// então o cliente recebe UMA confirmação, nunca duas nem contraditórias.
+func TestConfirmacaoDoChamadoAntesDoHandoffERespostaDoCerebroDescartada(t *testing.T) {
+	e, _, tr, _ := engineCompleta(t)
+	comRelogioFalso(e)
+	ctx := context.Background()
+	e.TransferirParaHumano(ctx, "c-b1", Transferencia{
+		Origem: OrigemTicketAberto, Mensagem: MsgChamadoAberto(4521), Causa: "chamado aberto",
+	})
+	e.responder(ctx, "c-b1", "Abri o chamado 4521 para você! Em breve um atendente fala com você.")
+	msgs := tr.mensagens("c-b1")
+	if len(msgs) != 1 || msgs[0] != MsgChamadoAberto(4521) {
+		t.Fatalf("uma confirmação só, a do gateway: %v", msgs)
+	}
+	if len(tr.transferida("c-b1")) != 1 {
+		t.Fatalf("handoff pós-ticket: %v", tr.transferida("c-b1"))
+	}
+}
+
+// Persona: pt-BR, "você", ≤ 1 emoji, o número e nenhuma promessa de prazo.
+func TestMsgChamadoAbertoNaPersona(t *testing.T) {
+	m := MsgChamadoAberto(4521)
+	if !strings.Contains(m, "4521") || !strings.Contains(m, "você") {
+		t.Fatalf("texto: %q", m)
+	}
+	if strings.Count(m, "🙏") > 1 {
+		t.Fatalf("no máximo 1 emoji: %q", m)
+	}
+	for _, proibido := range []string{"minuto", "hora", "prazo", "breve", "logo", "amanhã"} {
+		if strings.Contains(strings.ToLower(m), proibido) {
+			t.Fatalf("a Sofia não promete prazo (%q): %q", proibido, m)
+		}
+	}
+}
