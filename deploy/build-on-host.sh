@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# LEGADO DO ZAPIN — NÃO USAR, remoção pendente (E4.6): git rm deploy/build-on-host.sh. Não faz parte do deploy da Sofia (deploy/README.md).
 # ==============================================================================
 # Build NATIVO das imagens do bot NA PRÓPRIA VM — usado quando a VM não tem a
 # mesma arquitetura do runner (a VM atual é ARM64; o GitHub runner é x86_64;

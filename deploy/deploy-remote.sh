@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# LEGADO DO ZAPIN — NÃO USAR, remoção pendente (E4.6): git rm deploy/deploy-remote.sh. Não faz parte do deploy da Sofia (deploy/README.md).
 # ==============================================================================
 # Deploy remoto — FONTE ÚNICA do deploy (pipeline e break-glass).
 # Roda no RUNNER (ou na máquina de quem depura), nunca no servidor.

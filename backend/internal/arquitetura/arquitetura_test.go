@@ -15,11 +15,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // grafo devolve importPath → imports diretos de todos os pacotes do módulo.
@@ -134,4 +136,49 @@ func legadoPermitido(t *testing.T, prefixo string) bool {
 		}
 	}
 	return false
+}
+
+// TestArquitetura_DeployEInfraSemLegado varre deploy/ e infra/ atrás dos termos
+// do domínio antigo (E4.6). O teste Python (tests/test_arquitetura.py) cobre
+// agente-ia, backend, contratos e mock-infodesk; estas duas pastas são de
+// operação e ficavam de fora. Caminhos em docs/plano/legado-permitido.txt são
+// tolerados (a lista só encolhe). Os termos vão em pedaços pelo mesmo motivo do
+// resto do arquivo: o teste Python varre este fonte.
+func TestArquitetura_DeployEInfraSemLegado(t *testing.T) {
+	termos := []string{"chat" + "woot", "azap" + "fy", "azap" + "docs", "mon" + "go"}
+	// os.Root: a leitura fica presa à raiz do repositório (um symlink em
+	// deploy/ ou infra/ não leva para fora dela).
+	raiz, err := os.OpenRoot(filepath.Join(raizDoModulo(t), ".."))
+	if err != nil {
+		t.Fatalf("abrindo a raiz do repositório: %v", err)
+	}
+	defer raiz.Close()
+	fsRepo := raiz.FS()
+	for _, base := range []string{"deploy", "infra"} {
+		err := fs.WalkDir(fsRepo, base, func(rel string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			if legadoPermitido(t, rel) {
+				return nil
+			}
+			conteudo, err := fs.ReadFile(fsRepo, rel)
+			if err != nil {
+				return err
+			}
+			if len(conteudo) > 1<<20 || bytes.IndexByte(conteudo, 0) >= 0 || !utf8.Valid(conteudo) {
+				return nil // binário ou grande demais: não é texto de operação
+			}
+			minusculo := strings.ToLower(string(conteudo))
+			for _, termo := range termos {
+				if strings.Contains(minusculo, termo) {
+					t.Errorf("%s cita %q (domínio antigo — ADR 0003); limpe o arquivo, não a regra", rel, termo)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("varrendo %s: %v", base, err)
+		}
+	}
 }
