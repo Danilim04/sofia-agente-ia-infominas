@@ -248,8 +248,8 @@ func TestHorarioForaPreservaOQueAMensagemNormalDiz(t *testing.T) {
 	if m := tr.mensagens("c-hp-a"); len(m) != 1 || !strings.Contains(m[0], "não consigo ver áudio, imagem ou arquivo") || !strings.Contains(m[0], "fica registrada") {
 		t.Fatalf("anexo: %v", m)
 	}
-	e.TransferirParaHumano(ctx, "c-hp-p", Transferencia{Origem: OrigemTicketPendente, Mensagem: "x"})
-	if m := tr.mensagens("c-hp-p"); len(m) != 1 || !strings.Contains(m[0], "Não consegui confirmar o seu chamado") {
+	e.TransferirParaHumano(ctx, "c-hp-p", Transferencia{Origem: OrigemTicketPendente, Mensagem: "Não consegui registrar o seu chamado agora. Vou te encaminhar para um de nossos atendentes, que segue com você por aqui. 🙏"})
+	if m := tr.mensagens("c-hp-p"); len(m) != 1 || !strings.Contains(m[0], "Não consegui registrar o seu chamado agora.") && !strings.Contains(m[0], "Vou te encaminhar") {
 		t.Fatalf("pendente: %v", m)
 	}
 }
@@ -286,5 +286,82 @@ func TestHorarioForaASofiaSegueAtendendo(t *testing.T) {
 	e.processarLote(context.Background(), []Inbound{msg("c-hs", "meu wifi caiu")})
 	if br.total() != 1 || len(tr.transferida("c-hs")) != 0 {
 		t.Fatalf("fora do horário o cérebro responde e não transfere: cérebro=%d handoffs=%v", br.total(), tr.transferida("c-hs"))
+	}
+}
+
+// Quando a resposta do cérebro já anunciou a transferência (SemAviso: frustração,
+// baixa confiança, pedido do cliente), fora do horário o cliente ainda recebe o
+// aviso de fora do horário — sem repetir "vou te encaminhar". Dentro do horário
+// segue sem mensagem; fora do piloto, nunca.
+func TestHorarioForaAvisaMesmoQuandoOCerebroJaAnunciouATransferencia(t *testing.T) {
+	e, tr, rel := engineComHorario(t, expediente, config.ForaDoHorarioAvisar)
+	ctx := context.Background()
+	rel.em(t, "2026-10-23", 22, 0)
+	e.TransferirParaHumano(ctx, "c-sa1", Transferencia{Origem: OrigemFrustracao, SemAviso: true})
+	m := tr.mensagens("c-sa1")
+	if len(m) != 1 || !strings.Contains(m[0], "fica registrada") || strings.Contains(m[0], "Vou te encaminhar") {
+		t.Fatalf("aviso de fora do horário, sem repetir a transferência: %v", m)
+	}
+	if len(tr.transferida("c-sa1")) != 1 {
+		t.Fatal("o handoff segue")
+	}
+
+	rel.em(t, "2026-10-23", 10, 0)
+	e.TransferirParaHumano(ctx, "c-sa2", Transferencia{Origem: OrigemFrustracao, SemAviso: true})
+	if len(tr.mensagens("c-sa2")) != 0 {
+		t.Fatalf("dentro do horário o SemAviso segue sem mensagem: %v", tr.mensagens("c-sa2"))
+	}
+
+	eIgn, trIgn, relIgn := engineComHorario(t, expediente, config.ForaDoHorarioIgnorar)
+	relIgn.em(t, "2026-10-23", 22, 0)
+	eIgn.TransferirParaHumano(ctx, "c-sa3", Transferencia{Origem: OrigemFrustracao, SemAviso: true})
+	if len(trIgn.mensagens("c-sa3")) != 0 {
+		t.Fatalf("modo ignorar: SemAviso segue sem mensagem: %v", trIgn.mensagens("c-sa3"))
+	}
+}
+
+// O número do chamado vem da própria mensagem da origem (não do store): segue no
+// aviso mesmo que a gravação do número na conversa tenha falhado.
+func TestHorarioForaNumeroDoChamadoNaoDependeDoStore(t *testing.T) {
+	e, tr, rel := engineComHorario(t, expediente, config.ForaDoHorarioAvisar)
+	rel.em(t, "2026-10-23", 22, 0)
+	e.TransferirParaHumano(context.Background(), "c-nn", Transferencia{Origem: OrigemTicketAberto, Mensagem: MsgChamadoAberto(9001)})
+	if m := tr.mensagens("c-nn"); len(m) != 1 || !strings.Contains(m[0], "chamado nº 9001") || !strings.Contains(m[0], "fica registrada") {
+		t.Fatalf("aviso: %v", m)
+	}
+}
+
+// As mensagens próprias das tools mantêm a primeira frase (o porquê), as genéricas
+// de transferência não deixam prefixo.
+func TestHorarioForaPrefixoDaMensagemDaOrigem(t *testing.T) {
+	e, tr, rel := engineComHorario(t, expediente, config.ForaDoHorarioAvisar)
+	rel.em(t, "2026-10-23", 22, 0)
+	ctx := context.Background()
+	casos := map[string]struct {
+		msg     string
+		prefixo string
+	}{
+		"cadastro": {"Não consegui localizar a sua empresa no nosso cadastro. Vou te passar para um atendente, que segue com você por aqui.", "Não consegui localizar a sua empresa no nosso cadastro."},
+		"tool":     {"Estou te passando para um atendente da equipe de Suporte. Ele continua com você por aqui.", "Estou te passando para um atendente da equipe de Suporte."},
+		"generica": {MsgTransferencia, ""},
+		"pedido":   {MsgPedidoAtendente, ""},
+		"vazia":    {"", ""},
+	}
+	for nome, c := range casos {
+		conv := "c-px-" + nome
+		e.TransferirParaHumano(ctx, conv, Transferencia{Origem: OrigemAcao, Mensagem: c.msg})
+		m := tr.mensagens(conv)
+		if len(m) != 1 || !strings.Contains(m[0], "fica registrada") {
+			t.Fatalf("%s: %v", nome, m)
+		}
+		if c.prefixo != "" && !strings.HasPrefix(m[0], c.prefixo+" Agora a nossa equipe") {
+			t.Errorf("%s: sem o prefixo %q: %q", nome, c.prefixo, m[0])
+		}
+		if c.prefixo == "" && !strings.HasPrefix(m[0], "Agora a nossa equipe") {
+			t.Errorf("%s: não devia ter prefixo: %q", nome, m[0])
+		}
+		if strings.Count(m[0], "🙏") > 1 {
+			t.Errorf("%s: no máximo 1 emoji: %q", nome, m[0])
+		}
 	}
 }

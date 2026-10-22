@@ -43,6 +43,12 @@ func run() int {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)}))
 	slog.SetDefault(log)
 	log.Info("log inicializado", "level", cfg.LogLevel)
+	if cfg.Horario == nil {
+		log.Info("horário humano: não configurado (sempre dentro do horário)")
+	} else {
+		log.Info("horário humano", "horario", cfg.HorarioDescricao, "fuso", cfg.HorarioFuso, "modo", cfg.ForaDoHorarioModo,
+			"dentro_agora", cfg.Horario.Dentro(time.Now()))
+	}
 	for _, aviso := range cfg.Avisos() {
 		log.Warn(aviso)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // Horário humano (E5.5, P7). Fora do horário configurado (HORARIO_HUMANO, fuso
@@ -35,21 +36,37 @@ func msgForaDoHorarioBase(horario string, feriados bool) string {
 	return b.String()
 }
 
-// msgForaDoHorario escolhe o aviso de fora do horário da transferência. Mantém o
-// que a mensagem normal tinha de informação própria para o cliente (o número do
-// chamado aberto; que não dá para ver anexo; que o chamado não foi confirmado) e
-// troca o resto pelo aviso de fora do horário.
+// msgForaDoHorario escolhe o aviso de fora do horário da transferência. Mantém na
+// frente a PRIMEIRA frase da mensagem própria da origem quando ela informa algo ao
+// cliente além de "vou te encaminhar" (o número do chamado aberto, que não dá para
+// ver anexo, que o chamado não foi confirmado, que a empresa não foi localizada) e
+// troca o resto pelo aviso de fora do horário. As mensagens genéricas de
+// transferência (uma frase só) e as vazias não deixam prefixo.
 func (e *Engine) msgForaDoHorario(ctx context.Context, convID string, t Transferencia) string {
 	corpo := msgForaDoHorarioBase(e.cfg.HorarioDescricao, e.cfg.Horario.TemFeriados())
-	switch t.Origem {
-	case OrigemAnexo:
-		return "Por aqui eu ainda não consigo ver áudio, imagem ou arquivo. " + corpo
-	case OrigemTicketPendente:
-		return "Não consegui confirmar o seu chamado agora. " + corpo
-	case OrigemTicketAberto:
+	if p := primeiraFrase(t.Mensagem); p != "" {
+		return p + " " + corpo
+	}
+	if t.Origem == OrigemTicketAberto { // sem mensagem própria: o número vem da conversa
 		if c, err := e.st.ObterConversa(ctx, convID); err == nil && c != nil && c.TicketNumber > 0 {
 			return fmt.Sprintf("Pronto, abri o chamado nº %d para você. %s", c.TicketNumber, corpo)
 		}
 	}
 	return corpo
+}
+
+// primeiraFrase devolve a primeira frase de uma mensagem de duas ou mais frases
+// (até o primeiro ". "); vazio se a mensagem tem uma frase só ou nenhuma.
+func primeiraFrase(msg string) string {
+	msg = strings.TrimSpace(msg)
+	i := strings.Index(msg, ". ")
+	if i < 0 {
+		return ""
+	}
+	for _, r := range msg[i+2:] { // a "segunda frase" precisa ter texto (não só um emoji)
+		if unicode.IsLetter(r) {
+			return msg[:i+1]
+		}
+	}
+	return ""
 }

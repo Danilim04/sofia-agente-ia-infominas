@@ -181,7 +181,7 @@ func TestHorarioDescrever(t *testing.T) {
 		"seg,qua,sex 09:00-10:00":              "segunda, quarta e sexta, das 09:00 às 10:00",
 		"seg-ter 09:00-10:00":                  "segunda e terça, das 09:00 às 10:00",
 		"seg-qui 08:00-18:00; sex 08:00-17:00": "de segunda a quinta, das 08:00 às 18:00; às sextas, das 08:00 às 17:00",
-		"dom 22:00-06:00":                      "aos domingos, das 22:00 às 06:00",
+		"dom 22:00-06:00":                      "aos domingos, das 22:00 às 06:00 do dia seguinte",
 	} {
 		if got := horarioDe(t, texto).Descrever(); got != quer {
 			t.Errorf("%q → %q, queria %q", texto, got, quer)
@@ -294,5 +294,92 @@ func unsetenv(t *testing.T, chave string) {
 	t.Helper()
 	if err := os.Unsetenv(chave); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A descrição que vai ao cliente não engana: faixas repetidas/sobrepostas se
+// fundem, meia-noite e dia todo saem por extenso, e a faixa que vira o dia diz
+// "do dia seguinte".
+func TestHorarioDescreverCasosDeBorda(t *testing.T) {
+	for texto, quer := range map[string]string{
+		"seg-sex 08:00-12:00,10:00-14:00":      "de segunda a sexta, das 08:00 às 14:00",
+		"seg,seg 08:00-12:00":                  "às segundas, das 08:00 às 12:00",
+		"seg 08:00-12:00,08:00-12:00":          "às segundas, das 08:00 às 12:00",
+		"seg 08:00-12:00,12:00-14:00":          "às segundas, das 08:00 às 14:00",
+		"seg 08:00-09:00,10:00-11:00":          "às segundas, das 08:00 às 09:00 e das 10:00 às 11:00",
+		"seg-sex 22:00-06:00":                  "de segunda a sexta, das 22:00 às 06:00 do dia seguinte",
+		"seg-sex 08:00-24:00":                  "de segunda a sexta, das 08:00 até a meia-noite",
+		"sab-dom 00:00-24:00":                  "sábado e domingo, o dia todo",
+		"seg-sex 18:00-08:00":                  "de segunda a sexta, das 18:00 às 08:00 do dia seguinte",
+		"seg 08:00-12:00; seg 11:00-13:00":     "às segundas, das 08:00 às 13:00",
+		"seg-qui 08:00-18:00; sex 08:00-17:00": "de segunda a quinta, das 08:00 às 18:00; às sextas, das 08:00 às 17:00",
+	} {
+		if got := horarioDe(t, texto).Descrever(); got != quer {
+			t.Errorf("%q → %q, queria %q", texto, got, quer)
+		}
+	}
+	// Fundir faixas não muda quando está dentro.
+	h := horarioDe(t, "seg 08:00-12:00,10:00-14:00")
+	if !h.Dentro(em("2026-10-19", 13, 0)) || h.Dentro(em("2026-10-19", 14, 0)) || !h.Dentro(em("2026-10-19", 8, 0)) {
+		t.Error("a fusão preserva o conjunto de horários")
+	}
+}
+
+// O zero value de Horario não entra em pânico (sem fuso usa UTC) e não tem faixa.
+func TestHorarioZeroValueNaoEntraEmPanico(t *testing.T) {
+	var h Horario
+	if h.Dentro(em("2026-10-19", 10, 0)) || h.Descrever() != "" {
+		t.Fatal("o zero value não tem faixa: nunca dentro")
+	}
+}
+
+func TestHorarioMinutosSoComDigitos(t *testing.T) {
+	for _, texto := range []string{"seg-sex +8:00-18:00", "seg-sex 08:+5-18:00", "seg-sex 08:00-18:-1"} {
+		if _, err := ParseHorario(texto, spLoc, nil); err == nil {
+			t.Errorf("%q devia ser recusado", texto)
+		}
+	}
+}
+
+// Em modo dev (Infodesk local) a variável ausente NÃO liga o expediente: a
+// demonstração e o E2E não dependem da hora do dia. Definida, vale.
+func TestLoadHorarioDefaultEmModoDevEhSempreDentro(t *testing.T) {
+	comObrigatorias(t)
+	limparE36(t)
+	t.Setenv("INFODESK_BASE_URL", "http://localhost:9000/api")
+	t.Setenv("INFODESK_WEBHOOK_SECRET", "segredo-mock")
+	t.Setenv("TOOLS_API_TOKEN", "dev-token")
+	t.Setenv("SOFIA_PRODUCAO_ABERTA", "")
+	for _, v := range []string{"HORARIO_HUMANO", "HORARIO_FUSO", "FERIADOS", "FORA_DO_HORARIO_MODO"} {
+		t.Setenv(v, "x")
+		unsetenv(t, v)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Horario != nil || cfg.HorarioFuso != "America/Sao_Paulo" {
+		t.Fatalf("dev sem a variável: sempre dentro: %+v", cfg.Horario)
+	}
+	t.Setenv("HORARIO_HUMANO", "seg-sex 08:00-18:00")
+	if cfg, err = Load(); err != nil || cfg.Horario == nil {
+		t.Fatalf("definido em dev vale: %+v %v", cfg.Horario, err)
+	}
+}
+
+// Produção sem horário (vazio de propósito) avisa no boot; com horário, não.
+func TestAvisoDeHorarioVazioEmProducao(t *testing.T) {
+	prodSegura(t)
+	limparHorario(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(avisosCom(cfg, "HORARIO_HUMANO vazio")) != 1 {
+		t.Fatalf("avisos: %v", cfg.Avisos())
+	}
+	t.Setenv("HORARIO_HUMANO", HorarioPadrao)
+	if cfg, _ = Load(); len(avisosCom(cfg, "HORARIO_HUMANO vazio")) != 0 {
+		t.Fatalf("com horário não há aviso: %v", cfg.Avisos())
 	}
 }

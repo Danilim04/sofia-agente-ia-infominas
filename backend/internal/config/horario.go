@@ -20,7 +20,8 @@ const (
 	ForaDoHorarioIgnorar = "ignorar" // aviso normal, como se estivesse no horário
 )
 
-// HorarioPadrao é o expediente do Desk. TODO(P7): confirmar com a Infominas que
+// HorarioPadrao é o expediente do Desk (default em produção; em modo dev o default é
+// sempre dentro). TODO(P7): confirmar com a Infominas que
 // vale para o atendimento humano do WhatsApp.
 const HorarioPadrao = "seg-sex 08:00-18:00"
 
@@ -33,12 +34,54 @@ type faixa struct{ ini, fim int }
 
 func (f faixa) viraODia() bool { return f.fim <= f.ini }
 
-func (f faixa) texto() string { return hhmm(f.ini) + " às " + hhmm(f.fim) }
+// texto escreve a faixa para o cliente, sem ambiguidade: "o dia todo", "das 08:00
+// até a meia-noite", "das 22:00 às 06:00 do dia seguinte" (faixa que atravessa a
+// meia-noite) ou "das 08:00 às 18:00".
+func (f faixa) texto() string {
+	switch {
+	case f.ini == 0 && f.fim == 24*60:
+		return "o dia todo"
+	case f.fim == 24*60:
+		return "das " + hhmm(f.ini) + " até a meia-noite"
+	case f.viraODia():
+		return "das " + hhmm(f.ini) + " às " + hhmm(f.fim) + " do dia seguinte"
+	}
+	return "das " + hhmm(f.ini) + " às " + hhmm(f.fim)
+}
+
+// normalizarFaixas ordena, remove duplicatas e funde faixas que se sobrepõem ou se
+// encostam (as que atravessam a meia-noite só entram na deduplicação exata). Não
+// muda o que Dentro responde; só evita uma descrição repetida ou confusa.
+func normalizarFaixas(fs []faixa) []faixa {
+	sort.Slice(fs, func(i, j int) bool {
+		if fs[i].ini != fs[j].ini {
+			return fs[i].ini < fs[j].ini
+		}
+		return fs[i].fim < fs[j].fim
+	})
+	var out []faixa
+	for _, f := range fs {
+		if n := len(out); n > 0 {
+			ult := &out[n-1]
+			if *ult == f {
+				continue
+			}
+			if !ult.viraODia() && !f.viraODia() && f.ini <= ult.fim {
+				if f.fim > ult.fim {
+					ult.fim = f.fim
+				}
+				continue
+			}
+		}
+		out = append(out, f)
+	}
+	return out
+}
 
 func hhmm(m int) string { return fmt.Sprintf("%02d:%02d", m/60, m%60) }
 
-// Horario é o horário de atendimento humano. O zero value (e um *Horario nil)
-// é "sempre dentro do horário".
+// Horario é o horário de atendimento humano. Só um *Horario nil é
+// "sempre dentro do horário" (o zero value não tem faixa: nunca dentro).
 type Horario struct {
 	loc      *time.Location
 	dias     [7][]faixa // índice 0 = segunda … 6 = domingo
@@ -102,6 +145,9 @@ func ParseHorario(texto string, loc *time.Location, feriados []string) (*Horario
 		for _, d := range dias {
 			h.dias[d] = append(h.dias[d], faixas...)
 		}
+	}
+	for d := range h.dias {
+		h.dias[d] = normalizarFaixas(h.dias[d])
 	}
 	vazio := true
 	for _, d := range h.dias {
@@ -173,6 +219,9 @@ func parseMinutos(s string, fim bool) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("horário %q: use HH:MM", s)
 	}
+	if !soDigitos(hs) || !soDigitos(ms) {
+		return 0, fmt.Errorf("horário %q: use HH:MM", s)
+	}
 	h, errH := strconv.Atoi(hs)
 	m, errM := strconv.Atoi(ms)
 	if errH != nil || errM != nil || len(ms) != 2 || m < 0 || m > 59 || h < 0 {
@@ -191,7 +240,11 @@ func (h *Horario) Dentro(t time.Time) bool {
 	if h == nil {
 		return true
 	}
-	t = t.In(h.loc)
+	loc := h.loc
+	if loc == nil {
+		loc = time.UTC
+	}
+	t = t.In(loc)
 	minuto := t.Hour()*60 + t.Minute()
 	hoje := indiceDoWeekday(t.Weekday())
 	if !h.feriados[t.Format("2006-01-02")] {
@@ -239,7 +292,7 @@ func (h *Horario) Descrever() string {
 		sort.Slice(fs, func(i, j int) bool { return fs[i].ini < fs[j].ini })
 		partes := make([]string, 0, len(fs))
 		for _, f := range fs {
-			partes = append(partes, "das "+f.texto())
+			partes = append(partes, f.texto())
 		}
 		txt := strings.Join(partes, " e ")
 		achou := false
@@ -307,6 +360,7 @@ func (c *Config) carregarHorario() error {
 	if v, ok := os.LookupEnv("HORARIO_FUSO"); ok && strings.TrimSpace(v) != "" {
 		fuso = strings.TrimSpace(v)
 	}
+	c.HorarioFuso = fuso
 	loc, err := time.LoadLocation(fuso)
 	if err != nil {
 		return fmt.Errorf("HORARIO_FUSO inválido (%q): use um nome IANA, ex.: America/Sao_Paulo", fuso)
@@ -317,7 +371,13 @@ func (c *Config) carregarHorario() error {
 			return err
 		}
 	}
+	// Sem a variável: o expediente do Desk — exceto em modo dev (Infodesk local: o
+	// harness, a demonstração e o E2E), onde o resultado não pode depender da hora do
+	// dia. Quem quer o horário no dev o define explicitamente.
 	texto := HorarioPadrao
+	if c.ModoDev() {
+		texto = ""
+	}
 	if v, ok := os.LookupEnv("HORARIO_HUMANO"); ok {
 		texto = v
 	}
@@ -335,4 +395,16 @@ func (c *Config) carregarHorario() error {
 		return fmt.Errorf("FORA_DO_HORARIO_MODO inválido (%q): use %q ou %q", c.ForaDoHorarioModo, ForaDoHorarioAvisar, ForaDoHorarioIgnorar)
 	}
 	return nil
+}
+
+func soDigitos(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

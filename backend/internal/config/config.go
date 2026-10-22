@@ -154,6 +154,7 @@ type Config struct {
 	// é o texto do horário para a mensagem ao cliente. Ver horario.go.
 	Horario           *Horario
 	HorarioDescricao  string
+	HorarioFuso       string
 	ForaDoHorarioModo string // ForaDoHorarioAvisar | ForaDoHorarioIgnorar
 	ProducaoAberta    bool
 }

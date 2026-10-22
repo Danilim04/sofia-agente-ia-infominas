@@ -199,12 +199,17 @@ func (e *Engine) TransferirParaHumano(ctx context.Context, convID string, t Tran
 		})
 	}
 
-	if !t.SemAviso {
+	// Fora do horário humano o cliente precisa saber, mesmo quando a resposta do
+	// cérebro neste turno já anunciou a transferência (SemAviso): ela não diz que a
+	// equipe só atende no horário configurado. O aviso de fora do horário não repete
+	// "vou te encaminhar". Quem está fora do piloto segue sem mensagem nenhuma.
+	avisarForaDoHorario := t.foraDoHorario && e.cfg.ForaDoHorarioModo != config.ForaDoHorarioIgnorar
+	if !t.SemAviso || (avisarForaDoHorario && t.Origem != OrigemForaDoPiloto) {
 		msg := t.Mensagem
 		if msg == "" {
 			msg = MsgTransferencia
 		}
-		if t.foraDoHorario && e.cfg.ForaDoHorarioModo != config.ForaDoHorarioIgnorar {
+		if avisarForaDoHorario {
 			msg = e.msgForaDoHorario(ctx, convID, t)
 		}
 		if !e.send(ctx, convID, msg) {
