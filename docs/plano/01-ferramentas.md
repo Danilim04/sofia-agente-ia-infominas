@@ -63,7 +63,7 @@ por chave própria), **I-nenhuma** (chamada só de leitura de cache).
 |---|---|
 | Propósito | Dry-run: valida e devolve a proposta canônica do ticket. Não cria nada |
 | Args do LLM | `titulo: str` (1 linha, ≤120), `descricao: str` (≤4000, relato do cliente em 3ª pessoa + fatos coletados: desde quando, já reiniciou, endereço se citado) |
-| Injetados | `telefone`, `conversation_id`, `classificacao` (do estado: `{categoria, prioridade, confianca, origem: jev\|llm\|esclarecimento}`), `identificacao` (`{cpf\|contrato}`) |
+| Injetados | `telefone`, `conversation_id`, `classificacao` (do estado: `{categoria, prioridade, confianca, origem: jev\|llm\|esclarecimento}`), `identificacao` (visão **mascarada** do estado: `{forma, valor_mascarado}` — nunca o CPF/contrato em claro, regra 5; o gateway resolve a identidade real pela tabela `contatos` via `telefone`) |
 | Precondição (`exigir`) | identificação presente no estado — por lookup (`contato.forma == "telefone"`) **ou** por CPF/contrato (senão recusa `"peça o CPF ou o número do contrato antes"`); classificação com `categoria != None` (senão recusa `"faça uma pergunta de esclarecimento antes"`); não há protocolo citado na última mensagem (regra ZB do Zapin) |
 | Gateway | `POST /tools/infodesk/ticket/preparar` `{telefone, conversation_id, titulo, descricao, categoria, prioridade, identificacao}` → sanitiza (controle, tamanho), resolve `categoria → {deskId, catalogItemId?, departmentId, priorityId}` pela tabela (`taxonomia.yaml` carregada no boot e validada contra `/desks`, `/desks/:id` e `/departments`; o `priorityId` é o UUID do **nome** de prioridade **na mesa de destino**, resolvido no boot — `02`), **dedup**: (1) local — `tickets` tem ticket `aberto`/`pendente` da mesma conversa OU do mesmo telefone + mesma categoria nas últimas `TICKET_DEDUP_JANELA` (24 h); (2) no Infodesk — `GET /tickets?phone=<E.164>&status=open` (I-natural; ou `lookup.openTickets` já em cache do episódio) quando `DEDUP_CONSULTA_INFODESK=true` (default **true**; hipótese, `07` T5). Qualquer um → `motivo: "chamado_aberto"` com `chamados_abertos: [{numero, titulo, categoria, aberto_em}]` (os do Infodesk vêm com `categoria: null`) |
 | Infodesk | cache de `/desks`, `/desks/:id`, `/departments`; `GET /tickets?phone=&status=open` (dedup, falha → só dedup local + log, nunca bloqueia) |
@@ -93,7 +93,7 @@ por chave própria), **I-nenhuma** (chamada só de leitura de cache).
 |---|---|
 | Propósito | Responder "como está meu chamado nº X?" |
 | Args do LLM | `numero: str` (dígitos) |
-| Injetados | `telefone`, `conversation_id`, `identificacao` |
+| Injetados | `telefone`, `conversation_id`, `identificacao` (`{forma, valor_mascarado}`, mesma visão mascarada de A2) |
 | Validação | `numero` só dígitos (1–10) |
 | Gateway | `POST /tools/infodesk/ticket/consultar` `{telefone, conversation_id, numero, identificacao}` → `GET /tickets/:number` e então **posse** (por código, nesta ordem): (a) `tickets` local tem `numero` com o mesmo telefone; (b) `ticket.conversationId` pertence a uma conversa deste telefone (`conversas`); (c) `ticket.contactPhone` ou `ticket.requester.phone` igual ao telefone da sessão (ambos normalizados E.164, tolerando o 9º dígito); (d) `ticket.requester.id == identificacao.requester_id` (lookup); (e) senão → `motivo: "posse_nao_verificada"` (o LLM diz que não consegue confirmar por aqui e oferece atendente) e o gateway **não** devolve nenhum campo do ticket |
 | Infodesk | `GET /integration/v1/tickets/:number` (`number` inteiro na rota; `numero` do LLM é texto só-dígitos convertido por código) |
