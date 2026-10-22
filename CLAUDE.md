@@ -1,6 +1,6 @@
 # CLAUDE.md — Sofia (agente de atendimento WhatsApp da Infominas)
 
-Monorepo em **refatoração do Zapin (Azapfy) para a Infominas**. Produto: a
+Monorepo em **refatoração do Zapin para a Infominas**. Produto: a
 **Sofia** recebe a reclamação do cliente no WhatsApp via **Infodesk**,
 classifica com **JEV** (TypeSafe, determinístico + confiança), roteia, abre o
 ticket e transfere para humano quando preciso. **Plano completo em
@@ -11,8 +11,9 @@ Código do produto só se escreve a partir de uma etapa do plano.
 
 - `backend/` — gateway **Go** (`bot-infominas`): webhook do Infodesk (HMAC), fila por conversa, estado bot/humano, cliente Infodesk, `/tools/infodesk/*` para o cérebro, idempotência de tickets, bolhas WhatsApp.
 - `agente-ia/` — cérebro **Python** (LangGraph + LangChain, OpenRouter, JEV, pgvector/Chroma): grafo, classificação, guardrails, tools com política, RAG. `server.py` = Contrato A (`POST /chat`).
-- `contratos/` — JSON de exemplo dos contratos Go ↔ Python (testados dos dois lados). `mock-infodesk/` — Infodesk falso para E2E.
-- `docs/infodesk/` — API do Infodesk (fonte: PDF; lacunas em `07-pontos-ambiguos.md`). `docs/decisoes/` — ADRs. `docs/zapin/` — legado de referência.
+- `contratos/` — JSON de exemplo dos contratos Go ↔ Python (testados dos dois lados). `mock-infodesk/` — Infodesk falso para dev e E2E.
+- `deploy/` + `infra/` — deploy genérico em Docker (P10 em aberto; `deploy/checar-env.py`). `scripts/` — esteira e stack local.
+- `docs/infodesk/` — API do Infodesk (fonte: PDF; lacunas em `07-pontos-ambiguos.md`). `docs/decisoes/` — ADRs (0001–0010). `docs/zapin/` — legado de referência.
 
 ## Comandos
 
@@ -22,6 +23,7 @@ scripts/verificar.sh --completo   # + golangci-lint, -race, contratos, e2e, eval
 cd agente-ia && pytest tests/test_x.py::test_y -v        # um teste Python (sem rede por default)
 cd backend && go test ./internal/engine -run TestNome -v  # um teste Go
 scripts/start-all.sh              # cérebro :8001 + gateway :8080 + mock-infodesk :9000
+python deploy/checar-env.py       # .env.example e compose contra o código (o CI roda)
 ```
 
 Setup, variáveis, Postgres de teste, Windows: skill `ambiente-testes`.
@@ -41,4 +43,4 @@ Setup, variáveis, Postgres de teste, Windows: skill `ambiente-testes`.
 
 ## Skills (carregue a que a tarefa pedir)
 
-`infodesk-api` · `jev-classificacao` · `nova-tool` · `evals-agente` · `refatorar-modulo` · `revisar-pr` · `ambiente-testes` · `analise-infodesk` (mede o uso real do Infodesk, só agregados, para decidir roteamento) — em `.claude/skills/`. Papéis de agente em `.claude/agents/`; briefing e isolamento em `docs/plano/05-agentes.md`; por que o harness é assim em `docs/plano/06-harness.md`.
+`infodesk-api` · `jev-classificacao` · `nova-tool` · `cadastro-solicitante` · `evals-agente` · `refatorar-modulo` · `revisar-pr` · `ambiente-testes` · `analise-infodesk` (mede o uso real do Infodesk, só agregados, para decidir roteamento) — em `.claude/skills/`. Papéis de agente em `.claude/agents/`; briefing e isolamento em `docs/plano/05-agentes.md`; por que o harness é assim em `docs/plano/06-harness.md`.

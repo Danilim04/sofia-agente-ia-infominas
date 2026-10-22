@@ -37,6 +37,52 @@ skills listadas → ler os arquivos da zona → implementar → rodar
 
 ---
 
+## Estado das etapas (2026-10-22)
+
+Conferido contra os PRs mergeados na `main`. As ondas não foram reordenadas; a tabela só diz o que já entrou e o que falta.
+
+| Etapa | Estado | PR | O que falta / observação |
+|---|---|---|---|
+| E0.1–E0.6 | entregue | #1 | E0.3 teve ajustes em #8, #16 (gitleaks só nos commits do PR; merge pelo orquestrador) |
+| E0.7 | entregue | #11 | plano realinhado com a API Infodesk v1 |
+| E1.1 | entregue | #7 |  |
+| E1.2 | entregue | #6 | correção para a API v1 em #13 |
+| E1.3 | entregue | #3 |  |
+| E1.4 | entregue | #2 | correção para a API v1 em #14 |
+| E1.5 | entregue | #5 | esteira passou a cobrir `agente-ia/evals` em #10 |
+| E1.6 | entregue | #4 | ADR 0006 |
+| E2.1 | entregue | #17 | teste de mídia sem depender do debounce em #23 |
+| E2.2 | entregue | #15 | `typesafe-sdk` no `requirements.txt` em #26 |
+| E2.3 | entregue | #25 |  |
+| E2.4 | entregue | #36 | o `baseline.json` do JEV real só existe com `TYPESAFE_API_KEY` (P8) |
+| E3.1 | entregue | #19 |  |
+| E3.2 | entregue | #12 | fonte Infominas segue stub até P6 |
+| E3.3 | entregue | #18 |  |
+| E3.4 | entregue | #22 |  |
+| E3.5 | entregue | #29, #31 | coletor e cenários reais anonimizados; 30+ cenários determinísticos |
+| E3.6 | entregue | #21 |  |
+| E3.7 | entregue | #30 |  |
+| E3.8 | entregue | #34 |  |
+| E3.9 | entregue | #39 |  |
+| E3.10 | entregue | #41 |  |
+| E4.1 | entregue | #37 |  |
+| E4.2 | entregue | #33 | infra real segue em aberto (P10) |
+| E4.3 | entregue | #32 |  |
+| E4.4 | entregue | #40 | o primeiro run noturno real depende das chaves (P8) |
+| E4.5 | entregue | #42, #43, #44, #45, #47 | ADR 0008, correções no gateway e no cérebro, esteira e dependências |
+| E4.6 | entregue com resíduo | este PR | `git rm` de `infra/terraform`, `infra/ansible`, `deploy/{chatwoot,env,build-on-host.sh,deploy-remote.sh}` e `.github/workflows/configure-server.yml` foi negado pelo classificador de permissões: ficam marcados "LEGADO DO ZAPIN" e listados em `legado-permitido.txt`; remover os caminhos e as linhas da lista |
+| E5.1 | parcial | #35 | proposta de taxonomia com mesa única entregue; falta a aprovação do dono (`decisoes/taxonomia-proposta.md`), promover a proposta a `taxonomia.yaml`, UUIDs de prioridade (P1, P4) |
+| E5.2 | pendente | — | export do histórico (P9) e chave do JEV (P8) para rotular e calibrar os `JEV_LIMIAR_*` |
+| E5.3 | entregue | #38 | segue aberto o valor final de `IDENT_EXIGIR_CPF` (ver E5.7) |
+| E5.4 | pendente | — | validar o reconciliador (E3.3) em produção contra o Desk real (W8, W9) |
+| E5.5 | parcial | #46 | horário humano configurável e aviso fora do horário entregues; faltam o horário real e o texto (P7) e a mesa de triagem (P11) |
+| E5.6 | pendente | — | smoke em produção: roteiro em `homologacao.md` e infra (P10) |
+| E5.7 | pendente | — | respostas da Infominas às decisões C6, T6, T10, T11, T12, D6, N1 do `07` |
+
+Fora de etapa: #9 (executores em Sonnet), #20, #24, #27 (leitura do código e do painel do Infodesk em `docs/infodesk/`), #28 (skill `analise-infodesk`). Entrega em host e infra seguem pendentes de P10 (`deploy/README.md`).
+
+---
+
 ## Onda 0 — Fundação do repositório (sequencial, uma sessão: `refatorador`)
 
 Sem esta onda os hooks de `.claude/settings.json` não têm ferramentas para

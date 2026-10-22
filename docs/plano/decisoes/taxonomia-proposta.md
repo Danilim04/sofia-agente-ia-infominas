@@ -115,14 +115,14 @@ ativos hoje? (`GET /users`, `departmentIds`; `10` §4: sem `userId` a conversa e
 na fila `PENDING` e quem é notificado são os atendentes do departamento); (2) o
 horário humano (P7) — nenhum dos 32 cenários depende dele.
 
-**Limitação de produto (fora desta etapa):** hoje a categoria só é fixada quando a intenção é
-`reclamacao_problema` (`INTENCOES_COM_CATEGORIA`, `src/classificacao/tipos.py`). Um pedido de boleto
-ou de preço (intenções `outro`/`duvida_informacao`) chega à transferência com categoria `indefinida`
-e vai para o departamento **padrão**, não para o da categoria. Responder Q2 não basta para
-`financeiro` e `comercial` irem aos departamentos próprios; precisa de uma mudança em `src/` (candidata
-a etapa nova). Por isso os dois cenários correspondentes continuam `xfail`.
+**Limitação de produto (resolvida na E3.10):** a categoria passou a ser fixada também nas intenções
+`outro` e `duvida_informacao` (`INTENCOES_COM_CATEGORIA`, `src/classificacao/tipos.py`; configurável em
+`JEV_INTENCOES_COM_CATEGORIA`). Um pedido de boleto ou de preço já chega à transferência com a categoria
+e vai ao departamento dela. Responder Q2 basta para `financeiro` e `comercial` irem aos departamentos
+próprios, e os dois cenários correspondentes já saíram do `xfail`; esperam só a aprovação desta taxonomia
+para subir de `pendentes/` à raiz.
 
-Destrava: `real-assunto-comercial-planos`, `real-financeiro-segunda-via` (com a mudança de produto).
+Destrava: `real-assunto-comercial-planos`, `real-financeiro-segunda-via`.
 
 ### Q3 — Prioridades: o que fazer sem `Media` e `Crítica`
 

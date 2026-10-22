@@ -309,15 +309,15 @@ venv/Scripts/python.exe -m evals.anonimizar evals/bruto/conversas-whatsapp-<data
    Saída: `evals/bruto/historico.candidato.jsonl` com `esperado`, `confianca` e
    `rotulador: "jev-prelabel"`. Depois da revisão humana, tire a chave `confianca`
    e mova para `classificacao/historico.jsonl`.
-2. **Executar os cenários reais.** O runner só enxerga `conversa/*.yaml`. Para
-   promover: `git mv evals/conversa/pendentes/real-*.yaml evals/conversa/`, rode
-   `python -m evals.conversa` e `pytest -m evals_pr evals/conversa/test_cenarios.py`
-   e leia as falhas. O que a Sofia ainda não faz fica com `xfail: "motivo"` (estrito);
-   comportamento errado do cenário se corrige no YAML. Cenários com
-   `xfail` já escritos: `real-assunto-comercial-planos` e `real-financeiro-segunda-via`
-   (a categoria só é fixada para `reclamacao_problema`). Atenção: as categorias dos
-   cenários são as do placeholder (P1); com a taxonomia real (E5.1) é preciso
-   remapeá-las (e-mail, VPN, acesso e impressora hoje não têm categoria).
+2. **Executar os cenários reais.** O runner só enxerga `conversa/*.yaml`; os
+   `conversa/pendentes/real-*.yaml` ficam fora dele de propósito. **Não promova tudo de
+   `pendentes/` com `git mv`**: os 22 usam categorias da taxonomia proposta e o CI recusaria
+   a categoria contra o `taxonomia.yaml` em uso (placeholder). Quem sobe, quando e como estão na
+   seção "Casos reais" de [`conversa/README.md`](conversa/README.md); até lá
+   `tests/test_taxonomia_proposta.py` os executa contra a proposta. O que a Sofia ainda não faz
+   fica com `xfail: "motivo"` (estrito); comportamento errado do cenário se corrige no YAML.
+   Os dois cenários de financeiro e comercial já saíram do `xfail` (a categoria é fixada também
+   fora de reclamação desde a E3.10).
 3. **Replay no mock** (cérebro + gateway + mock-infodesk): `scripts/start-all.sh`
    (no Windows, com `agente-ia/venv` acessível) e, para cada turno do cenário:
 

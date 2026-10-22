@@ -135,3 +135,47 @@ func legadoPermitido(t *testing.T, prefixo string) bool {
 	}
 	return false
 }
+
+// TestArquitetura_DeployEInfraSemLegado varre deploy/ e infra/ atrás dos termos
+// do domínio antigo (E4.6). O teste Python (tests/test_arquitetura.py) cobre
+// agente-ia, backend, contratos e mock-infodesk; estas duas pastas são de
+// operação e ficavam de fora. Caminhos em docs/plano/legado-permitido.txt são
+// tolerados (a lista só encolhe). Os termos vão em pedaços pelo mesmo motivo do
+// resto do arquivo: o teste Python varre este fonte.
+func TestArquitetura_DeployEInfraSemLegado(t *testing.T) {
+	termos := []string{"chat" + "woot", "azap" + "fy", "azap" + "docs", "mon" + "go"}
+	repo := filepath.Join(raizDoModulo(t), "..")
+	extensoes := map[string]bool{
+		".md": true, ".sh": true, ".yml": true, ".yaml": true, ".tpl": true, ".py": true,
+		".tf": true, ".tfvars": true, ".json": true, ".toml": true, ".txt": true, ".j2": true, ".cfg": true,
+	}
+	for _, base := range []string{"deploy", "infra"} {
+		err := filepath.WalkDir(filepath.Join(repo, base), func(caminho string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !extensoes[filepath.Ext(caminho)] {
+				return err
+			}
+			rel, err := filepath.Rel(repo, caminho)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			if legadoPermitido(t, rel) {
+				return nil
+			}
+			conteudo, err := os.ReadFile(caminho)
+			if err != nil {
+				return err
+			}
+			minusculo := strings.ToLower(string(conteudo))
+			for _, termo := range termos {
+				if strings.Contains(minusculo, termo) {
+					t.Errorf("%s cita %q (domínio antigo — ADR 0003); limpe o arquivo, não a regra", rel, termo)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("varrendo %s: %v", base, err)
+		}
+	}
+}

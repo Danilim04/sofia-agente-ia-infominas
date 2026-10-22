@@ -126,6 +126,8 @@ jobs:
       - name: testes de arquitetura (Go)
         working-directory: backend
         run: go test ./internal/arquitetura/... -v
+      - name: .env.example e compose contra o código (deploy/checar-env.py)
+        run: python deploy/checar-env.py
 
   # ------------------------------------------------- Contratos, E2E, evals
   contratos:
