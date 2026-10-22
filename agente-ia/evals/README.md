@@ -134,12 +134,13 @@ Uma linha JSON em `classificacao/sintetico.jsonl` (ou `historico.jsonl`):
   `malicioso_max`/`fora_de_escopo_max` são os tetos (mensagem legítima: o Noul
   não pode disparar). Desde a E2.4 o runner avalia frustração (faixa) e os dois
   Nouls (binários: `sim` = ≥ piso, `nao` = ≤ teto; confiança `|2p − 1|`); caso sem
-  nenhum desses campos não entra na pergunta.
+  nenhum desses campos não entra na pergunta. Atenção: o `previsto` da matriz sai
+  do piso/teto do caso, não de `p > 0.5` (p = 0.7 com piso 0.8 aparece como `nao`).
 - Divergência registrada: o `02` escreve `prioridade` e `frustracao_min`; a
   skill `evals-agente` escreve `prioridade_min` e `frustracao_max`. Este pacote
-  aceita `prioridade_min`, `frustracao_min` e `frustracao_max`; TODO(E2.4):
-  alinhar o texto do `02` (fora da zona de E1.5).
-- Hipótese de trabalho (TODO(E2.2)): pedidos de serviço sem reclamação
+  aceita `prioridade_min`, `frustracao_min` e `frustracao_max`. Alinhar o texto do
+  `02` (que está em `docs/`, fora da zona de evals) fica como follow-up.
+- Hipótese de trabalho (`perguntas.py` da E2.2 não fixa isto; revisar com o P9): pedidos de serviço sem reclamação
   ("manda o boleto", "quero cancelar") recebem intenção `outro`; perguntas
   ("como cancelo?") recebem `duvida_informacao`. **Desempate**: se a mensagem
   tem pedido e pergunta ("quero cancelar, como faço?"), a pergunta vence —
@@ -281,7 +282,8 @@ calibração e matriz de confusão. As perguntas do relatório:
 |---|---|
 | `intencao`, `categoria` | a resposta **bruta do JEV** (escolha + `confidence`). É isto que a cobertura@limiar, a acurácia@limiar e a calibração medem: o JEV decidiria sozinho quando `confidence ≥ limiar`. Sem JEV na rodada (`--llm`, ou JEV fora naquele turno) vale a resposta do fallback, com confiança 0 |
 | `categoria_final` | a categoria que o **roteador fixou** (com fallback, esclarecimento e `indefinida`), só nos casos de `reclamacao_problema` — único caso em que o roteador classifica categoria. É o que o cliente vive; compare com `categoria` para ver quanto o fallback e o esclarecimento recuperam |
-| `prioridade` | prioridade final (com o piso da taxonomia) contra `prioridade_min`; ordinal |
+| `prioridade` | nível **bruto do JEV** (Score) contra `prioridade_min`; ordinal |
+| `prioridade_final` | a prioridade que o roteador fixou (default da categoria + piso `prioridade_minima` da taxonomia) contra `prioridade_min`; o piso é regra de código, então esta mede o sistema, não o JEV |
 | `frustracao` | nível do JEV dentro da faixa `frustracao_min..frustracao_max`; ordinal |
 | `malicioso`, `fora_de_escopo` | Noul binário (ver "Escrever um caso"); confiança `|2p − 1|`, limiar 0.6 ⇔ `p ≥ 0.8` ou `p ≤ 0.2` |
 
@@ -311,6 +313,14 @@ Seção **Pipeline** (contexto, sem critério de aceite): `taxa_fallback_chamado
 esclarecimento), `taxa_transferencia`, `taxa_jev_indisponivel` (JEV fora do ar no
 turno — alerta do `02` se > 5 %), `taxa_categoria_indefinida_em_reclamacao` e
 `media_estado_caracteres` (tamanho do estado enviado, que cresce com a janela).
+
+Se o JEV falhar em algum turno (`taxa_jev_indisponivel` > 0), o relatório avisa:
+nesses turnos `intencao`/`categoria` valem a resposta do fallback com confiança 0, o
+que rebaixa a acurácia e distorce a calibração do JEV — resolva a indisponibilidade
+e rode de novo antes de gravar baseline.
+
+O `.json` ao lado leva `modo`, `simulado` e `banner`: quem consome o JSON (E4.4,
+gráficos) vê que o offline não é medição.
 
 Latência: no `--jev`/`--llm` é medida no cliente (a chamada inteira do
 `classificar()`, fallback incluso); no offline é sintética.

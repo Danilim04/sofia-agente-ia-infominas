@@ -2,7 +2,7 @@
 
 > **Exemplo offline com fakes, não é medição real. Os números medem o encanamento do runner (roteador + JEV/fallback simulados), nunca o desempenho do JEV (P8).**
 
-- **gerado_em**: 2026-10-22T06:37:46+00:00
+- **gerado_em**: 2026-10-22T06:48:23+00:00
 - **dataset**: sintetico.jsonl (237 casos)
 - **modo**: offline
 - **JEV**: JEVSimulado (FakeJEV lexical)
@@ -37,7 +37,8 @@ Negrito = melhor macro-F1 de categoria. Janela maior custa mais tokens (e latên
 | frustracao | 94 | 93.6% | — | 0.60 | 100.0% | 93.6% | — |
 | intencao | 237 | 68.8% | 69.5% | 0.70 | 72.2% | 67.8% | 0.147 |
 | malicioso | 49 | 100.0% | 100.0% | 0.60 | 100.0% | 100.0% | 0.082 |
-| prioridade | 150 | 58.0% | — | 0.60 | 100.0% | 58.0% | — |
+| prioridade | 150 | 50.7% | — | 0.60 | 100.0% | 50.7% | — |
+| prioridade_final | 150 | 58.0% | — | 0.60 | 100.0% | 58.0% | — |
 
 ## Pipeline (o que o roteador fez)
 
@@ -224,3 +225,5 @@ Negrito = melhor macro-F1 de categoria. Janela maior custa mais tokens (e latên
 | sim | 0 | 6 |
 
 ## prioridade
+
+## prioridade_final

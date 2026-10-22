@@ -431,3 +431,155 @@ def test_fallback_llm_real_responde_so_com_opcoes_fechadas():
         assert r.perguntas["categoria"].confianca == 0.0  # sem JEV não há confiança de JEV
     acuracia = sum(r.perguntas["intencao"].acerto for r in resultados) / len(resultados)
     assert acuracia >= 0.5, "um LLM com opções fechadas não pode errar metade das intenções"
+
+
+# ------------------------------------- caminhos do adaptador fora do offline feliz
+def _montar(jev_script=(), fb_padrao=None, *, com_jev=True):
+    """ClassificadorReal sobre os fakes compartilhados (JEV scriptado / fallback scriptado)."""
+    from evals.classificacao.adaptador import ClassificadorReal, GravadorFallback, GravadorJEV
+    from src.classificacao.fallback_llm import ResultadoFallback
+    from tests.fakes import FakeFallbackLLM, FakeJEV, servico_fake
+
+    gj = GravadorJEV(FakeJEV(list(jev_script))) if com_jev else None
+    gf = GravadorFallback(
+        FakeFallbackLLM(padrao=fb_padrao or ResultadoFallback("outro", "indefinida"))
+    )
+    servico = servico_fake(jev=gj, fallback=gf)  # type: ignore[arg-type]
+    return ClassificadorReal(servico, gj, gf), gf
+
+
+def test_jev_que_falha_cai_no_fallback_com_confianca_zero():
+    from src.classificacao.fallback_llm import ResultadoFallback
+    from src.classificacao.jev import JEVIndisponivel
+
+    classificador, _ = _montar(
+        [JEVIndisponivel("timeout")], ResultadoFallback("reclamacao_problema", "sem_conexao")
+    )
+    try:
+        r = classificador(["Cliente: minha internet caiu"])
+    finally:
+        classificador.fechar()
+    assert r["extras"]["jev_indisponivel"] is True and r["extras"]["fallback_chamado"] is True
+    assert (r["intencao"], r["categoria"]) == ("reclamacao_problema", "sem_conexao")
+    assert r["confiancas"]["intencao"] == 0.0 and r["confiancas"]["categoria"] == 0.0
+    assert "frustracao" not in r and "malicioso" not in r  # sem JEV não há Score nem Noul
+
+
+def test_modo_llm_sem_jev_usa_o_fallback_e_nao_marca_jev_indisponivel():
+    from src.classificacao.fallback_llm import ResultadoFallback
+
+    classificador, _ = _montar(
+        fb_padrao=ResultadoFallback("duvida_informacao", "duvida_planos"), com_jev=False
+    )
+    try:
+        r = classificador(["Cliente: quanto custa o plano de 500 mega?"])
+    finally:
+        classificador.fechar()
+    assert (r["intencao"], r["categoria"]) == ("duvida_informacao", "duvida_planos")
+    assert r["confiancas"]["categoria"] == 0.0
+    assert "jev_indisponivel" not in r["extras"]
+
+
+def test_fallback_com_ok_false_nao_vira_previsao():
+    from src.classificacao.fallback_llm import ResultadoFallback
+    from src.classificacao.jev import JEVIndisponivel
+
+    classificador, _ = _montar(
+        [JEVIndisponivel("x")], ResultadoFallback("outro", "indefinida", ok=False)
+    )
+    try:
+        r = classificador(["Cliente: minha internet caiu"])
+    finally:
+        classificador.fechar()
+    assert r["extras"]["fallback_chamado"] is True
+    assert (r["intencao"], r["categoria"]) == (r["final"]["intencao"], r["final"]["categoria"])
+
+
+def test_prioridade_bruta_do_jev_difere_da_final_com_piso():
+    """JEV diz `baixa`; o piso `alta` da taxonomia de sem_conexao vence na final."""
+    from tests.fakes import resp_jev
+
+    classificador, _ = _montar([resp_jev(prioridade=(0, 0.9))])
+    try:
+        r = classificador(["Cliente: minha internet caiu"])
+    finally:
+        classificador.fechar()
+    assert r["prioridade"] == "baixa" and r["final"]["prioridade"] == "alta"
+    par = cls.avaliar_caso(
+        _caso(Esperado("reclamacao_problema", "sem_conexao", "alta")), r, 0
+    ).perguntas
+    assert par["prioridade"].acerto is False and par["prioridade_final"].acerto is True
+    assert par["prioridade"].confianca == pytest.approx(0.9)
+
+
+def test_fallback_real_e_montado_com_o_llm_barato(monkeypatch: pytest.MonkeyPatch):
+    from types import SimpleNamespace
+
+    import src.agent.llm as llm_mod
+
+    class LLMFalso:
+        def with_structured_output(self, schema: object) -> LLMFalso:
+            return self
+
+        async def ainvoke(self, mensagens: object) -> SimpleNamespace:
+            return SimpleNamespace(intencao="reclamacao_problema", categoria="lentidao")
+
+    monkeypatch.setattr(llm_mod, "get_classifier_llm", LLMFalso)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "chave-falsa")
+    classificador, descricao = criar_classificador("llm")
+    try:
+        r = classificador(["Cliente: a net ta lenta"])
+    finally:
+        classificador.fechar()
+    assert "OpenRouter" in descricao.fallback and descricao.jev == "nenhum"
+    assert (r["intencao"], r["categoria"]) == ("reclamacao_problema", "lentidao")
+    assert r["extras"]["fallback_chamado"] is True
+
+
+# --------------------------------------------- chave do baseline, JSON e avisos da CLI
+def test_chave_do_baseline_segue_a_janela_efetiva(sem_rede: None, tmp_path: Path):
+    """`--janelas 1,3` (sem o 6) detalha a janela 1: não pode gravar como baseline padrão."""
+    assert _cli(tmp_path, "--fonte", "sintetico", "--janelas", "1,3", "--max", "20")[0] == 0
+    assert json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))["chave"].endswith("@j1")
+
+
+def test_offline_ignora_variaveis_de_ambiente_do_jev(
+    sem_rede: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("JEV_JANELA_MSGS", "2")
+    monkeypatch.setenv("JEV_LIMIAR_CATEGORIA_ALTO", "0.99")
+    codigo, _ = _cli(tmp_path, "--fonte", "sintetico", "--max", "40")
+    assert codigo == 0
+    dado = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+    assert dado["chave"] == "sintetico/offline"  # janela 6, a de referência
+    assert "janela de contexto**: 6 mensagens" in (tmp_path / "r.md").read_text(encoding="utf-8")
+    assert os.environ["JEV_JANELA_MSGS"] == "2"  # a isolação restaura o ambiente
+
+
+def test_json_do_relatorio_offline_diz_que_e_simulado(sem_rede: None, tmp_path: Path):
+    assert _cli(tmp_path, "--fonte", "sintetico", "--max", "10")[0] == 0
+    dado = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+    assert dado["simulado"] is True and dado["modo"] == "offline"
+    assert "não é medição real" in dado["banner"]
+
+
+def test_cli_avisa_quando_o_jev_nao_respondeu(
+    sem_rede: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from evals.relatorio import ParPrevisao, ResultadoCaso
+
+    def falso(modo: str, janela: int | None, casos: Any) -> tuple[list[ResultadoCaso], Any]:
+        par = ParPrevisao("outro", "outro", 0.0, True)
+        return (
+            [
+                ResultadoCaso("a", {"intencao": par}, 1.0, {"jev_indisponivel": True}),
+                ResultadoCaso("b", {"intencao": par}, 1.0, {"jev_indisponivel": False}),
+            ],
+            None,
+        )
+
+    monkeypatch.setattr(cli, "_rodar_janela", falso)
+    codigo, saida = _cli(tmp_path, "--fonte", "sintetico", "--nulo")
+    assert codigo == 0
+    assert any("JEV não respondeu em 1 de 2" in linha for linha in saida)

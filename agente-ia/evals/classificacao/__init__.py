@@ -41,6 +41,7 @@ LIMIARES_PADRAO: Final[Mapping[str, float]] = {
     "intencao": 0.70,  # JEV_LIMIAR_INTENCAO_ALTO (docs/plano/02)
     "categoria": 0.65,  # JEV_LIMIAR_CATEGORIA_ALTO
     "prioridade": 0.60,  # JEV_LIMIAR_PRIORIDADE
+    "prioridade_final": 0.60,
     "frustracao": 0.60,  # JEV_LIMIAR_FRUSTRACAO_CONFIANCA
     "categoria_final": 0.65,  # a final herda a confiança da categoria
     "malicioso": 0.60,  # |2p−1| ≥ 0.6 ⇔ p ≥ 0.8 ou p ≤ 0.2 (JEV_LIMIAR_MALICIOSO_BLOQUEIO)
@@ -130,8 +131,9 @@ def avaliar_caso(
     """Converte a resposta do classificador nos pares por pergunta.
 
     - intenção e categoria: exatas (a resposta bruta do JEV; ver `adaptador.py`);
-    - prioridade: acerto se `previsto ≥ prioridade_min` (ordinal com piso);
-      só avaliada quando o caso declara `prioridade_min`;
+    - prioridade: nível bruto do JEV; acerto se `previsto ≥ prioridade_min` (ordinal com
+      piso); só avaliada quando o caso declara `prioridade_min`. `prioridade_final` é a
+      mesma conta sobre a prioridade que o roteador fixou (default da categoria + piso);
     - frustração: acerto se `frustracao_min ≤ previsto ≤ frustracao_max`; só avaliada
       quando o caso declara um dos limites e o classificador devolveu o nível;
     - malicioso / fora_de_escopo: binárias — `*_min` (esperado alto) ou `*_max`
@@ -174,6 +176,21 @@ def avaliar_caso(
             previsto=prioridade,
             confianca=_confianca(resposta, "prioridade"),
             acerto=acerto,
+            exata=False,
+        )
+    if isinstance(final, Mapping) and caso.esperado.prioridade_min is not None:
+        prio_final = str(final.get("prioridade", ""))
+        try:
+            acerto_final = ordem_prioridade(prio_final) >= ordem_prioridade(
+                caso.esperado.prioridade_min
+            )
+        except ValueError:
+            acerto_final = False
+        perguntas["prioridade_final"] = ParPrevisao(
+            esperado=caso.esperado.prioridade_min,
+            previsto=prio_final,
+            confianca=float(final.get("confianca_prioridade", 0.0) or 0.0),
+            acerto=acerto_final,
             exata=False,
         )
     nivel = resposta.get("frustracao")

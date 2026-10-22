@@ -45,11 +45,12 @@ from src.classificacao.perguntas import (
     FRUSTRACAO,
     INTENCAO,
     MALICIOSO,
+    PRIORIDADE,
     montar_perguntas,
 )
 from src.classificacao.roteador import ServicoClassificacao
 from src.classificacao.taxonomia import Taxonomia, carregar_taxonomia
-from src.classificacao.tipos import Classificacao, Pergunta, RespostaJEV
+from src.classificacao.tipos import PRIORIDADES, Classificacao, Pergunta, RespostaJEV
 
 MODOS_REAIS = ("jev", "llm")
 MODOS = ("jev", "llm", "offline", "nulo")
@@ -162,6 +163,7 @@ class ClassificadorReal:
         choice_int = jev.choices.get(INTENCAO) if jev else None
         choice_cat = jev.choices.get(CATEGORIA) if jev else None
         fb_ok = fb if (fb is not None and fb.ok) else None
+        prio_jev = jev.scores.get(PRIORIDADE) if jev else None
         intencao = (
             choice_int.escolha if choice_int else (fb_ok.intencao if fb_ok else final.intencao)
         )
@@ -171,16 +173,24 @@ class ClassificadorReal:
         resposta: dict[str, Any] = {
             "intencao": intencao,
             "categoria": categoria,
-            "prioridade": final.prioridade,
+            # nível BRUTO do JEV quando ele respondeu (é ele que a cobertura@limiar mede);
+            # a prioridade final (default da categoria + piso da taxonomia) vai em `final`
+            "prioridade": (
+                PRIORIDADES[max(0, min(len(PRIORIDADES) - 1, prio_jev.nivel))]
+                if prio_jev
+                else final.prioridade
+            ),
             "confiancas": {
                 "intencao": choice_int.confianca if choice_int else 0.0,
                 "categoria": choice_cat.confianca if choice_cat else 0.0,
-                "prioridade": final.confiancas.get("prioridade", 0.0),
+                "prioridade": prio_jev.confianca if prio_jev else 0.0,
             },
             "final": {
                 "intencao": final.intencao,
                 "categoria": final.categoria,
+                "prioridade": final.prioridade,
                 "confianca": final.confianca,
+                "confianca_prioridade": final.confiancas.get("prioridade", 0.0),
             },
             "latencia_ms": latencia_ms,
             "extras": {
@@ -209,12 +219,25 @@ class ClassificadorReal:
 
 
 def _config(janela: int | None, *, isolada: bool) -> ConfigClassificacao:
-    """`isolada=True` ignora `.env`/ambiente: o relatório offline não pode depender da máquina."""
-    base = (
-        ConfigClassificacao(_env_file=None, TYPESAFE_API_KEY="")  # type: ignore[call-arg]
-        if isolada
-        else ConfigClassificacao()  # type: ignore[call-arg]
-    )
+    """`isolada=True` ignora `.env` E as variáveis `JEV_*`/`TAXONOMIA_PATH`/`TYPESAFE_API_KEY` do processo.
+
+    O relatório offline não pode depender da máquina (limiares e janela do ambiente
+    mudariam os números do exemplo commitado).
+    """
+    if not isolada:
+        base = ConfigClassificacao()  # type: ignore[call-arg]
+    else:
+        guardadas = {
+            k: v
+            for k, v in os.environ.items()
+            if k.upper().startswith("JEV_") or k.upper() in {"TAXONOMIA_PATH", "TYPESAFE_API_KEY"}
+        }
+        for k in guardadas:
+            del os.environ[k]
+        try:
+            base = ConfigClassificacao(_env_file=None)  # type: ignore[call-arg]
+        finally:
+            os.environ.update(guardadas)
     return base.model_copy(update={"jev_janela_msgs": janela}) if janela else base
 
 

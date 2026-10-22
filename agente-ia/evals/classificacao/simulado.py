@@ -324,8 +324,3 @@ class FallbackSimulado(FakeFallbackLLM):
         logits_c = _vocabulario(self._perguntas).logits(historico, atual, peso_historico=0.5)
         categoria = max(logits_c, key=lambda k: logits_c[k])
         return ResultadoFallback(intencao, categoria)
-
-
-def latencia_simulada_ms(estado: str) -> int:
-    """Exposta para o adaptador somar a latência do fallback quando ele é chamado."""
-    return _latencia_simulada_ms(estado)

@@ -233,6 +233,7 @@ def main(argv: Sequence[str] | None = None, saida_texto: Callable[[str], None] =
         "categoria": args.limiar_categoria,
         "categoria_final": args.limiar_categoria,
         "prioridade": args.limiar_prioridade,
+        "prioridade_final": args.limiar_prioridade,
     }
     avisos: list[str] = []
     if taxonomia.placeholder:
@@ -257,9 +258,18 @@ def main(argv: Sequence[str] | None = None, saida_texto: Callable[[str], None] =
     descricao_final = descricoes[detalhe]
     if descricao_final is not None:
         avisos.extend(descricao_final.avisos)
+    sem_jev = sum(1 for r in resultados_por_janela[detalhe] if r.extras.get("jev_indisponivel"))
+    if sem_jev:
+        avisos.append(
+            f"o JEV não respondeu em {sem_jev} de {len(resultados_por_janela[detalhe])} casos: "
+            "nesses turnos intencao/categoria valem a resposta do fallback com confiança 0, "
+            "o que rebaixa a acurácia e distorce a calibração do JEV (veja a taxa em Pipeline)"
+        )
     chave = f"{args.fonte}/{args.modo}"
-    if args.janela is not None and args.janela != JANELA_BASELINE:
-        chave = f"{chave}@j{args.janela}"  # janela fora da referência não se compara com o baseline
+    if descricao_final is not None and descricao_final.janela != JANELA_BASELINE:
+        # janela efetiva fora da referência (flag, `--janelas` sem o 6 ou JEV_JANELA_MSGS do
+        # ambiente) não se compara nem se grava como o baseline "padrão"
+        chave = f"{chave}@j{descricao_final.janela}"
 
     banner = (
         BANNER_OFFLINE if args.modo == "offline" else BANNER_NULO if args.modo == "nulo" else ""
@@ -305,7 +315,14 @@ def main(argv: Sequence[str] | None = None, saida_texto: Callable[[str], None] =
     caminho_md.parent.mkdir(parents=True, exist_ok=True)
     caminho_md.write_text(relatorio.para_markdown(), encoding="utf-8", newline="\n")
     metricas = relatorio.metricas_planas()
-    dado_json: dict[str, Any] = {"chave": chave, "limiares": limiares, "metricas": metricas}
+    dado_json: dict[str, Any] = {
+        "chave": chave,
+        "modo": args.modo,
+        "simulado": args.modo in {"offline", "nulo"},
+        "banner": banner,
+        "limiares": limiares,
+        "metricas": metricas,
+    }
     if len(relatorios_por_janela) > 1:
         dado_json["janelas"] = {
             str(j): r.metricas_planas() for j, r in sorted(relatorios_por_janela.items())
