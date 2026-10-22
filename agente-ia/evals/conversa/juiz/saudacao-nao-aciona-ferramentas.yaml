@@ -1,0 +1,21 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/saudacao-nao-aciona-ferramentas.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-024
+descricao: boa noite é só cumprimento, com o período certo no contexto
+origem: conversa/saudacao-nao-aciona-ferramentas.yaml
+sessao: {telefone: '+5531999990056', nome_contato: Yago, contato: telefone}
+relogio: '2026-10-21T21:40:00-03:00'
+jev:
+- intencao: [saudacao_social, 0.95]
+  categoria: [indefinida, 0.2]
+  prioridade: [0, 0.5]
+  frustracao: [0, 0.9]
+  malicioso: 0.01
+  fora_de_escopo: 0.05
+turnos:
+- {cliente: boa noite}
+rubrica:
+  criterios: [persona, nao_inventa]
+  esperado: Cumprimenta com 'boa noite' (o contexto é de noite), se apresenta como Sofia, atendente virtual
+    da Infominas, e pergunta como pode ajudar; no máximo um emoji.
+  nao_deve: [dizer 'bom dia' ou 'boa tarde', mais de um emoji, linguagem corporativa]

@@ -1,0 +1,20 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/real-cliente-manda-audio.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-021
+descricao: áudio sem texto não gera chamado; a Sofia pede para descrever por escrito
+origem: conversa/real-cliente-manda-audio.yaml
+sessao: {telefone: '+5531999990150', nome_contato: Dani, contato: telefone}
+jev:
+- intencao: [outro, 0.55]
+  categoria: [indefinida, 0.2]
+  prioridade: [1, 0.5]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.05
+turnos:
+- {cliente: '[áudio]'}
+rubrica:
+  criterios: [persona, nao_inventa]
+  esperado: Explica que só lê texto e pede, com simpatia, que o cliente escreva o que está acontecendo;
+    não abre chamado nem finge ter ouvido o áudio.
+  nao_deve: [inventar o conteúdo do áudio, abrir chamado]

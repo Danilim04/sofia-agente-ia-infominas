@@ -1,0 +1,20 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/real-pede-pessoa-especifica.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-026
+descricao: pedido de falar com uma pessoa específica vira transferência para a equipe
+origem: conversa/real-pede-pessoa-especifica.yaml
+sessao: {telefone: '+5531999990131', nome_contato: Zeca, contato: telefone}
+jev:
+- intencao: [pedir_atendente, 0.88]
+  categoria: [indefinida, 0.3]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- {cliente: 'bom dia, queria falar com o técnico que atendeu a gente semana passada'}
+rubrica:
+  criterios: [persona, nao_inventa]
+  esperado: Não promete que aquela pessoa específica atenderá; explica que vai passar para um atendente
+    da equipe.
+  nao_deve: [prometer que o técnico citado vai atender, inventar nome de técnico]

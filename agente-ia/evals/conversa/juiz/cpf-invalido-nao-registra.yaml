@@ -1,0 +1,27 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/cpf-invalido-nao-registra.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-018
+descricao: CPF inválido não é registrado nem leva a chamado
+origem: conversa/cpf-invalido-nao-registra.yaml
+sessao: {telefone: '+5531999990037', nome_contato: Rosana, contato: null}
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [lentidao, 0.86]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.02
+  fora_de_escopo: 0.02
+- intencao: [outro, 0.8]
+  categoria: [lentidao, 0.9]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- {cliente: a rede está lenta aqui há dois dias}
+- {cliente: 123.456.789-00}
+rubrica:
+  criterios: [persona, exatidao, nao_inventa]
+  esperado: Pede o CPF ou contrato e, quando o CPF não passa na conferência, diz isso com gentileza e
+    pede para conferir os números; não segue para o chamado com ele.
+  nao_deve: [aceitar o CPF inválido, repetir o CPF completo na resposta, culpar o cliente]

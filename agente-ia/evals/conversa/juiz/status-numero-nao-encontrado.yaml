@@ -1,0 +1,20 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/status-numero-nao-encontrado.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-011
+descricao: chamado não encontrado pede para conferir o número
+origem: conversa/status-numero-nao-encontrado.yaml
+sessao: {telefone: '+5531999990015', nome_contato: Bia, contato: telefone}
+jev:
+- intencao: [status_chamado, 0.92]
+  categoria: [indefinida, 0.3]
+  prioridade: [1, 0.7]
+  frustracao: [0, 0.85]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- cliente: como está o chamado 99999?
+  gateway: {ticket/consultar: erro-nao_encontrado}
+rubrica:
+  criterios: [persona, exatidao, nao_inventa]
+  esperado: Diz que não achou chamado com esse número e pede para conferir os dígitos.
+  nao_deve: [inventar um chamado parecido, mostrar erro técnico]
