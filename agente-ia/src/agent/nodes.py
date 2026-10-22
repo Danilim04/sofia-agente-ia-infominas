@@ -44,6 +44,7 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import BaseTool
 
+from src.agent.pii import descartar, mascarar_args, proteger_mensagem, reidratar
 from src.agent.prompts import (
     RESPOSTA_ACAO_SEM_FERRAMENTA,
     RESPOSTA_ERRO_INTERNO,
@@ -753,17 +754,27 @@ def make_agent_node(llm: Any, tools: list[BaseTool]) -> Callable[[AgentState], d
 
     def agent_node(state: AgentState) -> dict:
         system_msg = _build_system_message(state)
-        historico = _podar_historico(state.get("messages") or [])
+        # O estado guarda CPF/contrato mascarados; o modelo do turno precisa LER
+        # o que o cliente acabou de digitar para repassá-lo à tool (E3.7). A
+        # cópia em claro vive só nesta chamada — nunca volta ao estado.
+        historico = _podar_historico(reidratar(state.get("messages") or []))
         mensagens: list[BaseMessage] = [system_msg] + historico
         if usa_cache_control:
             mensagens = _aplicar_cache_control(mensagens)
         resposta = bound.invoke(mensagens)
         _log_uso(resposta)
+        # Antes de a resposta virar estado/trace: args com CPF/contrato mascarados
+        # (o valor em claro fica no cofre em memória até a tool executar).
+        resposta = proteger_mensagem(resposta)
         tool_calls = list(getattr(resposta, "tool_calls", None) or [])
         if tool_calls:
+            # Só nomes das tools e dos args: o conteúdo pode ser PII.
             logger.info(
                 "agent_tool_calls %s",
-                [{"nome": tc.get("name"), "args": tc.get("args")} for tc in tool_calls],
+                [
+                    {"nome": tc.get("name"), "args": sorted(tc.get("args") or {})}
+                    for tc in tool_calls
+                ],
             )
         else:
             logger.info("agent_resposta_textual len=%d", len(str(resposta.content or "")))
@@ -804,7 +815,10 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
         messages = state.get("messages") or []
         if not messages:
             return {}
-        last = messages[-1]
+        # Mensagens do estado têm CPF/contrato mascarados; a tool executa com o
+        # valor em claro, só em memória (E3.7). `em_claro` nunca volta ao estado.
+        em_claro = reidratar(messages)
+        last = em_claro[-1]
         tool_calls = list(getattr(last, "tool_calls", None) or [])
         if not tool_calls:
             return {}
@@ -834,7 +848,7 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
             # (CPF/contrato em `informar_identificacao`) — valores só em DEBUG.
             args_llm = tc.get("args") or {}
             logger.info("tool_exec nome=%s args=%s", nome, sorted(args_llm))
-            logger.debug("tool_exec_args nome=%s args=%s", nome, args_llm)
+            logger.debug("tool_exec_args nome=%s args=%s", nome, mascarar_args(args_llm))
             args, recusa = aplicar_politica(nome, tc.get("args") or {}, state)
             if recusa:
                 logger.warning("tool_politica_recusa nome=%s motivo=%s", nome, recusa)
@@ -857,7 +871,11 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
 
             # Efeito da tool sobre o estado (duas fases do chamado, identificação…):
             # decidido pelo registro `EFEITOS`, nunca pelo texto do modelo.
-            efeitos_do_turno.update(efeito_pos_tool(nome, resultado, {**state, **efeitos_do_turno}))
+            efeitos_do_turno.update(
+                efeito_pos_tool(
+                    nome, resultado, {**state, **efeitos_do_turno, "messages": em_claro}
+                )
+            )
 
             if nome == "consultar_base_conhecimento":
                 tentou_rag = True
@@ -953,6 +971,7 @@ def output_guardrail_node(state: AgentState) -> dict:
     SUBSTITUI em vez de acrescentar (o estado persistido fica coerente).
     """
     messages = state.get("messages") or []
+    descartar(messages)  # fim do turno: o valor em claro some da memória (E3.7)
     if not messages or not isinstance(messages[-1], AIMessage):
         return {}
     ultima = messages[-1]
@@ -997,6 +1016,7 @@ def safe_response_node(state: AgentState) -> dict:
     Off-topic não passa mais por aqui (F8): segue ao agente com a dica do
     classificador, que redireciona com contexto e persona.
     """
+    descartar(state.get("messages") or [])  # fim do turno (E3.7)
     return {"messages": [AIMessage(content=RESPOSTA_OFF_TOPIC)]}
 
 

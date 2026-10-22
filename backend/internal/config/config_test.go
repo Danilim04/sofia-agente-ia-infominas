@@ -49,8 +49,45 @@ func TestDefaultsDoGateway(t *testing.T) {
 	if cfg.DepartamentoHumanoPadrao != "" || cfg.InfodeskWebhookSecret != "" || cfg.ToolsAPIToken != "" {
 		t.Fatalf("opcionais deviam ficar vazias: %+v", cfg)
 	}
-	if cfg.Port != "8080" || cfg.TurnoTeto != 45*time.Second || cfg.DebounceJanela != 8*time.Second || cfg.ReplyMaxChars != 900 {
+	if cfg.Port != "8080" || cfg.TurnoTeto != 80*time.Second || cfg.BrainTimeout != 90*time.Second || cfg.DebounceJanela != 8*time.Second || cfg.ReplyMaxChars != 900 {
 		t.Fatalf("defaults de transporte inesperados: %+v", cfg)
+	}
+}
+
+// TestOrdemDosPrazosDoTurno (E3.7): BRAIN_TIMEOUT > TURNO_TETO é checado no boot.
+func TestOrdemDosPrazosDoTurno(t *testing.T) {
+	casos := []struct {
+		nome, brain, teto string
+		ok                bool
+	}{
+		{"defaults", "", "", true},
+		{"folga", "100s", "80s", true},
+		{"formato composto", "1m30s", "80s", true},
+		{"iguais", "80s", "80s", false},
+		{"brain menor", "60s", "80s", false},
+		{"so o brain abaixo do teto default", "70s", "", false},
+		{"so o teto acima do brain default", "", "95s", false},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			comObrigatorias(t)
+			t.Setenv("BRAIN_TIMEOUT", c.brain)
+			t.Setenv("TURNO_TETO", c.teto)
+			_, err := Load()
+			if c.ok && err != nil {
+				t.Fatalf("esperava aceitar: %v", err)
+			}
+			if !c.ok {
+				if err == nil {
+					t.Fatal("esperava erro de configuração")
+				}
+				for _, v := range []string{"BRAIN_TIMEOUT", "TURNO_TETO"} {
+					if !strings.Contains(err.Error(), v) {
+						t.Fatalf("erro devia citar %s: %v", v, err)
+					}
+				}
+			}
+		})
 	}
 }
 

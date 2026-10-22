@@ -70,7 +70,10 @@ type Config struct {
 	BrainTimeout time.Duration
 	// TurnoTeto: prazo total do turno desde a MENSAGEM do cliente (coalescência
 	// + chamada ao cérebro + novas tentativas). Passado o teto, não há nova
-	// tentativa e a conversa é transferida (ZC-5). Default 45s.
+	// tentativa e a conversa é transferida (ZC-5). Default 80s. Regra de ordem
+	// (E3.7), checada no boot: BRAIN_TIMEOUT > TURNO_TETO. O prazo do turno no
+	// cérebro (BRAIN_TURNO_PRAZO, 70s) tem de ser MENOR que o TURNO_TETO — o
+	// gateway não o conhece; o cérebro confere do lado dele.
 	TurnoTeto time.Duration
 
 	// Alertas ao responsável (ZC-7): a decisão de QUANDO alertar é do pacote
@@ -215,8 +218,8 @@ func Load() (*Config, error) {
 	}{
 		{&cfg.InfodeskTimeout, "INFODESK_TIMEOUT", "15s"},
 		{&cfg.ReferenciaCacheTTL, "REFERENCIA_CACHE_TTL", "10m"},
-		{&cfg.BrainTimeout, "BRAIN_TIMEOUT", "60s"},
-		{&cfg.TurnoTeto, "TURNO_TETO", "45s"},
+		{&cfg.BrainTimeout, "BRAIN_TIMEOUT", "90s"},
+		{&cfg.TurnoTeto, "TURNO_TETO", "80s"},
 		{&cfg.DebounceJanela, "DEBOUNCE_JANELA", "8s"},
 		{&cfg.DebounceTeto, "DEBOUNCE_TETO", "20s"},
 		{&cfg.EventoIdadeMax, "EVENTO_IDADE_MAX", "10m"},
@@ -230,6 +233,15 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("%s inválido: %w", d.env, err)
 		}
 		*d.dst = v
+	}
+
+	// Ordem dos prazos (E3.7): o gateway só espera o cérebro por BRAIN_TIMEOUT, e o
+	// teto do turno (que inclui a coalescência) tem de caber nele; o inverso faria o
+	// cliente receber erro enquanto o cérebro ainda trabalha.
+	if cfg.BrainTimeout <= cfg.TurnoTeto {
+		return nil, fmt.Errorf("BRAIN_TIMEOUT (%s) precisa ser maior que TURNO_TETO (%s); "+
+			"BRAIN_TURNO_PRAZO do cérebro, por sua vez, precisa ser menor que TURNO_TETO",
+			cfg.BrainTimeout, cfg.TurnoTeto)
 	}
 
 	if cfg.IdentLookupAmbiguo != IdentAmbiguoPedirCPF {
