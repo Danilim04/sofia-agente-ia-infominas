@@ -248,7 +248,7 @@ func (e *Engine) processarLote(ctx context.Context, lote []Inbound) {
 	// Limites de abuso (E4.5, M4): o texto coalescido tem teto de caracteres e o
 	// telefone tem teto de turnos por hora.
 	texto = e.limitarLote(convID, texto)
-	if e.passouDoLimiteDeTurnos(ctx, convID, ultimo.Telefone) {
+	if e.passouDoLimiteDeTurnos(ctx, convID, e.telefoneDoLote(ctx, lote)) {
 		return
 	}
 
@@ -463,7 +463,7 @@ func (e *Engine) send(ctx context.Context, convID, content string) bool {
 					e.marcarEstado(ctx, convID, store.EstadoEncerrada)
 					e.EncerrarEpisodio(ctx, convID)
 				} else {
-					e.log.Error("enviar mensagem", "conversation_id", convID, "err", DescreverErro(err))
+					e.log.Error("enviar mensagem", "conversation_id", convID, "err", erroParaLog(err))
 				}
 				return false
 			}
@@ -483,7 +483,7 @@ func (e *Engine) enviarParte(ctx context.Context, convID, parte string) error {
 			return err
 		}
 		e.log.Warn("envio transitório falhou; nova tentativa",
-			"conversation_id", convID, "tentativa", tentativa+1, "err", DescreverErro(err))
+			"conversation_id", convID, "tentativa", tentativa+1, "err", erroParaLog(err))
 		if !e.dormir(ctx, e.esperasEnvio[tentativa]) {
 			return err
 		}

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"bot-infominas/internal/config"
 )
 
 // Limites de abuso (E4.5, M4). Dois tetos configuráveis, com defaults folgados
@@ -93,7 +95,12 @@ func (e *Engine) passouDoLimiteDeTurnos(ctx context.Context, convID, telefone st
 	if telefone == "" {
 		return false
 	}
-	n := e.turnos.registrar(telefone, e.agora())
+	// Chave normalizada: +55…, 55… e sem o 9º dígito são o mesmo telefone.
+	chave := telefone
+	if k, ok := config.ChaveTelefone(telefone); ok {
+		chave = k
+	}
+	n := e.turnos.registrar(chave, e.agora())
 	if n <= e.turnosPorHoraMax() {
 		return false
 	}

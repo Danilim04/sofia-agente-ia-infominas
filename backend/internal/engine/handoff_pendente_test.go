@@ -332,3 +332,30 @@ func TestLogDoHandoffQueFalhaNaoTrazAMensagemDoServidor(t *testing.T) {
 		t.Fatalf("o log descreve o erro por tipo/status/code/rota:\n%s", log)
 	}
 }
+
+// O aviso que não foi entregue (ex.: o número do chamado) vira WARN e o handoff segue.
+func TestAvisoNaoEntregueViraWarnEOHandoffSegue(t *testing.T) {
+	e, _, tr, _ := engineCompleta(t)
+	comRelogioFalso(e)
+	var buf strings.Builder
+	e.log = slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	tr.enviarErr = &infodesk.HTTPError{Status: 400, Code: infodesk.CodeValidationError, Rota: "/conversations/x/messages"}
+	e.TransferirParaHumano(context.Background(), "c-w1", Transferencia{Origem: OrigemTicketAberto, Mensagem: MsgChamadoAberto(7)})
+	if !strings.Contains(buf.String(), "aviso ao cliente antes do handoff não foi entregue") {
+		t.Fatalf("faltou o WARN:\n%s", buf.String())
+	}
+	if len(tr.transferida("c-w1")) != 1 {
+		t.Fatalf("o handoff segue: %v", tr.transferida("c-w1"))
+	}
+}
+
+// Erro interno (store, contexto) segue inteiro no log; só o do Infodesk é resumido.
+func TestErroParaLog(t *testing.T) {
+	if got := erroParaLog(errors.New("disco cheio")); got != "disco cheio" {
+		t.Fatalf("erro interno inteiro: %q", got)
+	}
+	he := &infodesk.HTTPError{Status: 400, Code: "X", Rota: "/r", Mensagem: "CPF 1"}
+	if got := erroParaLog(he); strings.Contains(got, "CPF") || !strings.Contains(got, "http 400 X /r") {
+		t.Fatalf("erro do Infodesk resumido: %q", got)
+	}
+}

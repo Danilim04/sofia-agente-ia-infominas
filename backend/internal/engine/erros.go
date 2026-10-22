@@ -40,3 +40,13 @@ func ErroDoInfodesk(err error) bool {
 	var rp *infodesk.ErroResposta
 	return errors.As(err, &he) || errors.As(err, &re) || errors.As(err, &rp)
 }
+
+// erroParaLog é o valor do campo "err" dos logs da engine: erro do Infodesk é
+// resumido (DescreverErro, sem a mensagem do servidor); erro interno (store,
+// contexto cancelado…) segue inteiro, para não perder o diagnóstico.
+func erroParaLog(err error) string {
+	if ErroDoInfodesk(err) {
+		return DescreverErro(err)
+	}
+	return err.Error()
+}

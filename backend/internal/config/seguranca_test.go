@@ -39,8 +39,8 @@ func TestWebhookSemSegredoFalhaSalvoFlagExplicita(t *testing.T) {
 	if err != nil {
 		t.Fatalf("com a flag explícita sobe: %v", err)
 	}
-	if !cfg.ModoDev() {
-		t.Fatal("a flag explícita é modo dev")
+	if cfg.ModoDev() {
+		t.Fatal("a flag só dispensa o segredo do webhook; contra um Infodesk real não é modo dev")
 	}
 	if av := avisosCom(cfg, "WEBHOOK_SEM_AUTENTICACAO"); len(av) != 1 {
 		t.Fatalf("sobe com aviso claro: %v", cfg.Avisos())
@@ -174,6 +174,56 @@ func TestLimitesDeAbusoDefaultsEInvalidos(t *testing.T) {
 		t.Setenv(c.v, c.valor)
 		if _, err := Load(); err == nil || !strings.Contains(err.Error(), c.v) {
 			t.Errorf("%s=%q devia derrubar o boot citando a variável: %v", c.v, c.valor, err)
+		}
+	}
+}
+
+// A flag WEBHOOK_SEM_AUTENTICACAO não afrouxa o resto: contra um Infodesk real,
+// segredo curto e lista vazia sem opt-in continuam derrubando o boot.
+func TestFlagSemAutenticacaoNaoAfrouxaOResto(t *testing.T) {
+	prodSegura(t)
+	t.Setenv("INFODESK_WEBHOOK_SECRET", "")
+	t.Setenv("WEBHOOK_SEM_AUTENTICACAO", "true")
+
+	t.Setenv("TOOLS_API_TOKEN", "dev-token")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TOOLS_API_TOKEN") {
+		t.Fatalf("token curto continua barrado: %v", err)
+	}
+	t.Setenv("TOOLS_API_TOKEN", segredoLongo)
+	t.Setenv("TESTADORES_TELEFONES", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "SOFIA_PRODUCAO_ABERTA") {
+		t.Fatalf("lista vazia sem opt-in continua barrada: %v", err)
+	}
+	t.Setenv("SOFIA_PRODUCAO_ABERTA", "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(avisosCom(cfg, "PRODUÇÃO ABERTA")) != 1 || len(avisosCom(cfg, "WEBHOOK_SEM_AUTENTICACAO")) != 1 {
+		t.Fatalf("os dois avisos aparecem: %v", cfg.Avisos())
+	}
+}
+
+// Só loopback de verdade é modo dev: nada de prefixo "127." em nome de host,
+// subdomínio de domínio público, userinfo ou porta que enganem.
+func TestBaseURLLocalSoLoopbackDeVerdade(t *testing.T) {
+	sim := []string{
+		"http://localhost:9000", "http://LOCALHOST", "http://mock.localhost:9000/api", "http://127.0.0.1:9000",
+		"http://127.1.2.3", "http://[::1]:9000", "http://user:senha@localhost:9000",
+	}
+	nao := []string{
+		"https://infodesk.infominas.net/v1", "https://localhost.exemplo.com", "http://127.0.0.1.nip.io",
+		"http://127.foo.com", "http://exemplo.com/localhost", "http://localhost@exemplo.com", "", "://quebrada",
+		"http://10.0.0.5", "http://192.168.1.10:9000",
+	}
+	for _, u := range sim {
+		if !baseURLLocal(u) {
+			t.Errorf("%q devia ser loopback", u)
+		}
+	}
+	for _, u := range nao {
+		if baseURLLocal(u) {
+			t.Errorf("%q NÃO é loopback", u)
 		}
 	}
 }

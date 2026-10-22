@@ -243,8 +243,10 @@ func (h *Handler) alertar(tipo, titulo, texto, convID string) {
 }
 
 // propostaPreparadaValidade é por quanto tempo uma proposta preparada pode ser
-// aberta (casa com PROPOSTA_VALIDADE do cérebro, 15 min).
-const propostaPreparadaValidade = 15 * time.Minute
+// aberta: os 15 min de PROPOSTA_VALIDADE do cérebro (contados do carimbo, que é
+// POSTERIOR ao preparar) mais 2 min de margem, para um "sim" no limite não ser
+// aceito pelo cérebro e recusado aqui.
+const propostaPreparadaValidade = 15*time.Minute + 2*time.Minute
 
 // hashProposta é o selo da proposta de chamado: o que o `preparar` devolveu e o
 // `abrir` precisa receber de volta, byte a byte, para criar o ticket (E4.5, M8).

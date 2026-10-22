@@ -767,3 +767,28 @@ func TestPrepararCadastro_TentativasContamPorTelefoneEntreConversas(t *testing.T
 		t.Fatalf("a 2ª tentativa, em outra conversa do MESMO telefone, esgota o limite: %+v", out)
 	}
 }
+
+// Degradação ACEITA (E4.5, I2): se o Infodesk cadastrou mas o contato não foi
+// gravado, a linha já perdeu nome e e-mail; o retry repara o contato (sem novo
+// POST), porém sem o nome — o cliente é identificado, mas o nome fica vazio (o
+// cérebro ainda o tem na conversa). Nada disso vaza o nome em claro.
+func TestCadastrar_RetryAposFalhaParcialReparaOContatoSemONome(t *testing.T) {
+	a, fc := novoAmbCad(t)
+	chave := chaveDaProposta(t, a.prepararCadastro("Maria Souza", "ACME Ltda", "maria@acme.com.br"))
+	a.h.d.Store = &failSalvarContato{Store: a.st, falhas: 1}
+	if out := a.cadastrar(chave); motivoDe(out) != "infodesk_indisponivel" {
+		t.Fatalf("1ª chamada: %+v", out)
+	}
+	out := a.cadastrar(chave)
+	if out["status"] != true || out["solicitante"].(map[string]any)["nome"] != "" || fc.totalCriados() != 1 {
+		t.Fatalf("retry: %+v (POSTs=%d)", out, fc.totalCriados())
+	}
+	c, _ := a.st.ObterContato(context.Background(), telTeste, time.Now())
+	if c == nil || c.RequesterID != idSolicitante || c.NomeCadastro != "" || c.ValorMascarado != "" {
+		t.Fatalf("contato reparado sem o nome: %+v", c)
+	}
+	linha, _ := a.st.ObterCadastro(context.Background(), chave)
+	if linha.Nome != "" || linha.Email != "" {
+		t.Fatalf("a linha não guarda mais PII: %+v", linha)
+	}
+}

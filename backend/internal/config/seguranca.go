@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -23,23 +24,30 @@ const (
 	ModoAberto = "aberto" // lista vazia: todo cliente fala com a Sofia
 )
 
-// ModoDev diz se o gateway roda contra um Infodesk local (mock) ou com a
-// autenticação do webhook desligada de forma explícita: nada disso alcança
-// cliente real. Só neste modo valem segredos curtos e a lista de testadores
-// vazia sem SOFIA_PRODUCAO_ABERTA.
+// ModoDev diz se o gateway roda contra um Infodesk LOCAL (o mock do harness e do
+// E2E, host loopback): nada ali alcança cliente real. Só neste modo valem
+// segredos curtos e a lista de testadores vazia sem SOFIA_PRODUCAO_ABERTA.
+// WEBHOOK_SEM_AUTENTICACAO NÃO liga o modo dev: ela só dispensa o segredo do
+// webhook; quem pula o HMAC contra um Infodesk real continua sujeito ao
+// tamanho dos segredos e ao opt-in de produção aberta.
 func (c *Config) ModoDev() bool {
-	return c.WebhookSemAutenticacao || baseURLLocal(c.InfodeskBaseURL)
+	return baseURLLocal(c.InfodeskBaseURL)
 }
 
-// baseURLLocal: o host da URL é loopback (localhost, 127.0.0.0/8, ::1 ou
-// *.localhost).
+// baseURLLocal: o host da URL é loopback — `localhost`, `*.localhost` ou um IP
+// loopback (127.0.0.0/8, ::1). Nome que só COMEÇA ou CONTÉM "127." ou
+// "localhost" (127.0.0.1.nip.io, localhost.exemplo.com) não é.
 func baseURLLocal(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return false
 	}
 	h := strings.ToLower(u.Hostname())
-	return h == "localhost" || strings.HasSuffix(h, ".localhost") || h == "::1" || h == "127.0.0.1" || strings.HasPrefix(h, "127.")
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Modo devolve o modo do atendimento (ModoPiloto ou ModoAberto).

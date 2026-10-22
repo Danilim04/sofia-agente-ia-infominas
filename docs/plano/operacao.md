@@ -194,7 +194,7 @@ O gateway **recusa subir** (`config inválida`, sem repetir o valor do segredo) 
 | `INFODESK_WEBHOOK_SECRET` ou `TOOLS_API_TOKEN` com menos de 32 caracteres | gere um maior (`openssl rand -hex 32`). `TOOLS_API_TOKEN` vazio = API de tools desligada, não é erro |
 | `TESTADORES_TELEFONES` vazia (ou só vírgulas) sem `SOFIA_PRODUCAO_ABERTA=true` | preencha a lista (homologação) ou abra de propósito com `SOFIA_PRODUCAO_ABERTA=true` |
 
-**Modo dev** = `INFODESK_BASE_URL` com host loopback (`localhost`, `127.0.0.1`, `::1`, `*.localhost`: o mock-infodesk do harness e do E2E) ou `WEBHOOK_SEM_AUTENTICACAO=true`. Nele valem segredos curtos e a lista vazia sem o opt-in, com WARN no boot. `scripts/start-all.sh` já passa `INFODESK_WEBHOOK_SECRET` e `TOOLS_API_TOKEN` (curtos: `segredo-mock`, `dev-token`) e aponta para o mock, então segue funcionando sem mudança.
+**Modo dev** = `INFODESK_BASE_URL` com host loopback de verdade (`localhost`, `*.localhost` ou IP loopback `127.0.0.0/8`/`::1`: o mock-infodesk do harness e do E2E; `127.0.0.1.nip.io` ou `localhost.exemplo.com` não contam). `WEBHOOK_SEM_AUTENTICACAO=true` **não** liga o modo dev: só dispensa o segredo do webhook (com WARN), e o resto (tamanho dos segredos, opt-in de produção aberta, alerta `producao_aberta`) segue valendo. No modo dev valem segredos curtos e a lista vazia sem o opt-in, com WARN no boot. `scripts/start-all.sh` já passa `INFODESK_WEBHOOK_SECRET` e `TOOLS_API_TOKEN` (curtos: `segredo-mock`, `dev-token`) e aponta para o mock, então segue funcionando sem mudança.
 
 ## 9. Limites de abuso, proposta selada e token do cérebro (E4.5)
 

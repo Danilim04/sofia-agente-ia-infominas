@@ -913,3 +913,39 @@ func TestStorePropostaTicket(t *testing.T) {
 		})
 	}
 }
+
+// TestStoreTentativasCadastroJanela (E4.5, M5): tentativa há mais de
+// TentativasCadastroJanela recomeça em 1; dentro da janela soma. Envelhece a
+// linha direto no banco (os dois backends).
+func TestStoreTentativasCadastroJanela(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			var o *ops
+			switch s := st.(type) {
+			case *SQLiteStore:
+				o = s.ops
+			case *PostgresStore:
+				o = s.ops
+			default:
+				t.Skipf("backend %T sem acesso ao banco", st)
+			}
+			ctx := context.Background()
+			chave := unico("tel:janela")
+			for i := 1; i <= 3; i++ {
+				if n, err := st.IncrementarTentativasCadastro(ctx, chave); err != nil || n != i {
+					t.Fatalf("tentativa %d: n=%d err=%v", i, n, err)
+				}
+			}
+			velho := time.Now().Add(-TentativasCadastroJanela - time.Hour).UnixMilli()
+			if _, err := o.db.ExecContext(ctx, o.rebind(`UPDATE gw.cadastro_tentativas SET updated_at = ? WHERE conversation_id = ?`), velho, chave); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := st.IncrementarTentativasCadastro(ctx, chave); err != nil || n != 1 {
+				t.Fatalf("depois da janela o contador recomeça em 1: n=%d err=%v", n, err)
+			}
+			if n, _ := st.IncrementarTentativasCadastro(ctx, chave); n != 2 {
+				t.Fatalf("dentro da janela soma: %d", n)
+			}
+		})
+	}
+}

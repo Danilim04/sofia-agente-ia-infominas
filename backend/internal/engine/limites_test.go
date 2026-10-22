@@ -101,3 +101,30 @@ func TestContadorDeTurnosDescartaOQueSaiuDaJanela(t *testing.T) {
 		t.Fatalf("só 2 na última hora (a das 12:03 e esta, 13:02): %d", n)
 	}
 }
+
+// A chave do limite é o telefone normalizado, e o telefone ausente no evento vem
+// da conversa (evento recuperado pelo feed).
+func TestLimiteDeTurnosNormalizaOTelefoneEUsaOTelefoneDaConversa(t *testing.T) {
+	e, tr, br, _ := engineComLimites(t, &config.Config{TurnosPorHoraMax: 2})
+	ctx := context.Background()
+	variantes := []string{"+5531990000000", "5531990000000", "31990000000"}
+	for i, tel := range variantes {
+		m := msg("c-n"+string(rune('a'+i)), "oi")
+		m.Telefone = tel
+		e.processarLote(ctx, []Inbound{m})
+	}
+	if br.total() != 2 || len(tr.transferida("c-nc")) != 1 {
+		t.Fatalf("as 3 variantes são o mesmo telefone: cérebro=%d handoff(c)=%v", br.total(), tr.transferida("c-nc"))
+	}
+	// Sem telefone no evento: usa o da conversa.
+	_, _ = e.st.AtualizarConversa(ctx, "c-nd", func(c *store.Conversa, _ bool) bool {
+		c.Telefone, c.Estado = "+5531990000000", store.EstadoBot
+		return true
+	})
+	sem := msg("c-nd", "oi")
+	sem.Telefone = ""
+	e.processarLote(ctx, []Inbound{sem})
+	if br.total() != 2 || len(tr.transferida("c-nd")) != 1 {
+		t.Fatalf("evento sem telefone conta pelo da conversa: cérebro=%d", br.total())
+	}
+}
