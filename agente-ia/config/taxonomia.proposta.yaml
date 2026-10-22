@@ -18,7 +18,8 @@
 #   (vários itens), `catalogo` fica omitido e a triagem humana escolhe o item (`requireTicketFields`
 #   está desligado: o item é opcional).
 # - O catálogo não tem área financeira nem comercial: boleto, cobrança e preço de serviço caem em
-#   `indefinida` (a Sofia esclarece uma vez e passa a um atendente).
+#   `indefinida` (reclamação: esclarece uma vez e transfere; pedido de informação: sem esclarecimento,
+#   transferência só se o LLM chamar a tool). Ver Q6 no documento de decisões.
 # - Departamentos de chat existentes: "Técnicos", "Administrativo / Financeiro", "Comercial".
 #
 # `exemplos` vêm dos casos reais (evals/conversa/) onde existem; nas áreas sem caso real nos 32

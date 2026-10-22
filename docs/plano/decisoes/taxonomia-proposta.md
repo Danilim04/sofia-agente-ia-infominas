@@ -19,9 +19,10 @@ placeholder (`placeholder: true`); a proposta está em
    primeira versão da proposta (9 categorias "visão do cliente", mergeada no PR #35).
 
 O resto (departamento, prioridade sem `Media`, item de catálogo) continua como **proposta
-marcada `DECISÃO PENDENTE`** no YAML; as recomendações estão em Q2–Q4. O dono aprovou a
-proposta em 2026-10-22; esta página registra a leitura de que isso aceita as recomendações
-de Q2–Q4. Falta só a confirmação explícita para trocar as marcas por "decidido" e promover.
+marcada `DECISÃO PENDENTE`** no YAML; as recomendações estão em Q2–Q4. Sobre a aprovação: o dono respondeu "está aprovado" à proposta (2026-10-22, mensagem à sessão que
+a preparou), pedindo para seguir explicitamente o Infodesk e "apenas seguir as categorias". Isso decide
+mesa única e Q1. **Não** há resposta explícita sobre Q2–Q4; elas seguem como recomendação,
+aguardando confirmação, e as marcas `DECISÃO PENDENTE` do YAML ficam até lá.
 
 ## O que os dados dizem (fatos do inventário de 2026-10-21)
 
@@ -67,7 +68,7 @@ item do próprio catálogo**. O departamento é proposta (Q2).
 | `certificados_digitais` (Certificados Digitais) | Certificado não reconhecido, Token não reconhecido, Erro em assinatura digital | 0 | Técnicos | suporte técnico |
 | `projetos` (Projetos) | Cabeamento estruturado, Implantação Wi-Fi, Documentação de ambiente | 1 | Comercial | projeto novo é proposta/orçamento; único departamento de vendas |
 | `consultoria` (Consultoria) | Assessment de TI, Auditoria de ambiente, Plano Diretor de TI | 0 | Comercial | serviço novo, idem |
-| `indefinida` | vago, áudio/imagem sem texto, assunto sem área (boleto, cobrança, preço) | 11 (inclui os sem categoria) | Técnicos (= padrão proposto) | sem assunto; a triagem humana é a mesma mesa |
+| `indefinida` | vago, áudio/imagem sem texto, assunto sem área (boleto, cobrança, preço) | 3 (vago, áudio, imagem); os outros 8 cenários sem categoria são pedido de atendente, status, fora de escopo, injeção, senha de terceiro e acesso/senha | Técnicos (= padrão proposto) | sem assunto; a triagem humana é a mesma mesa |
 
 Casos reais: dos 32 cenários, 21 caem numa área (redes 11, servidores 2, computadores 2,
 impressoras 1, projetos 1, e-mail 1 e VPN 1, que nos cenários ainda aparecem como `indefinida`
@@ -152,9 +153,14 @@ Destrava: `real-nao-identificado-informa-cpf`, `real-cpf-invalido`.
 
 Efeito direto de seguir só o catálogo: 2 dos 32 cenários reais (`real-cobranca-financeiro`,
 `real-financeiro-segunda-via`) são de financeiro, e o catálogo não tem nada financeiro. Com as 17
-áreas eles viram `indefinida`: a Sofia esclarece uma vez e transfere ao departamento padrão
-(`Técnicos`, Q2), **não** ao `Administrativo / Financeiro`. O roteamento por categoria de pedido
-que não é reclamação (E3.10) deixa de ajudar nesses dois casos, porque não há categoria para fixar.
+áreas eles viram `indefinida`, e o caminho depende da intenção:
+
+- **reclamação** (cobrança duplicada, `real-cobranca-financeiro`): a Sofia esclarece uma vez e, se continuar
+  `indefinida`, transfere ao departamento padrão (`Técnicos`, Q2), **não** ao `Administrativo / Financeiro`;
+- **pedido de informação** (boleto, 2ª via, preço; intenção `outro`/`duvida_informacao`,
+  `real-financeiro-segunda-via`): não há pergunta de esclarecimento (só reclamação a tem); a categoria fica
+  `indefinida`, sem ação do roteador, e a transferência só acontece se o LLM chamar
+  `transferir_para_atendente`. O roteamento por categoria fora de reclamação (E3.10) não tem o que fixar.
 
 | Opção | Efeito |
 |---|---|

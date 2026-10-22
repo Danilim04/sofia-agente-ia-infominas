@@ -105,7 +105,7 @@ As perguntas da [taxonomia proposta](decisoes/taxonomia-proposta.md). Q1 já est
 
 **Depois de decidir:** um PR promove `taxonomia.proposta.yaml` a
 `taxonomia.yaml`, remapeia os testes e os 21 cenários reais parados em
-`evals/conversa/pendentes/`, e liga `STRICT_TAXONOMIA=true`. É a única
+`evals/conversa/pendentes/` (2 precisam de reescrita pela Q6 e 2 dependem da E5.3), e liga `STRICT_TAXONOMIA=true`. É a única
 decisão que gera um PR de tamanho médio.
 
 ## B. Comportamento da Sofia (pode ajustar durante o piloto)
