@@ -52,7 +52,6 @@ from src.classificacao.tipos import (
     INTENCAO_PEDIR_ATENDENTE,
     INTENCAO_RECLAMACAO,
     INTENCOES,
-    INTENCOES_COM_CATEGORIA,
     PRIORIDADE_PADRAO,
     PRIORIDADES,
     Acao,
@@ -196,7 +195,7 @@ async def classificar(
     origem_int_t: OrigemPergunta = origem_int  # type: ignore[assignment]
 
     # --- 4. categoria --------------------------------------------------------
-    if intencao in INTENCOES_COM_CATEGORIA:
+    if intencao in cfg.intencoes_com_categoria:
         decisao = await _decidir_categoria(
             resposta=resposta,
             fallback_llm=fallback_llm,
@@ -221,7 +220,7 @@ async def classificar(
         cfg=cfg,
         categoria=decisao.categoria,
         anterior=anterior,
-        herdar=intencao not in INTENCOES_COM_CATEGORIA,
+        herdar=intencao not in cfg.intencoes_com_categoria,
     )
 
     # --- 6. frustração e segurança ------------------------------------------
@@ -345,10 +344,19 @@ async def _decidir_categoria(
         and anterior.categoria != CATEGORIA_INDEFINIDA
         and anterior.origem in ("jev", "llm")
     )
+    # Pegajosa só contra troca de FILA de reclamação. Uma categoria fixada num turno
+    # de informação (preço, boleto) não trava a seguinte: a reclamação que vier depois
+    # define a fila do chamado, e dois pedidos de informação seguidos se corrigem sozinhos.
+    # Limitação conhecida: o estado só guarda a intenção do ÚLTIMO turno, então depois de
+    # um "ok" no meio a categoria informativa volta a ser pegajosa (conservador).
+    informativas = cfg.intencoes_com_categoria - {INTENCAO_RECLAMACAO}
+    anterior_trava = (
+        anterior is not None and anterior_fixa and anterior.intencao not in informativas
+    )
 
     if candidata is not None:
         categoria, confianca, origem = candidata
-        if anterior is not None and anterior_fixa and categoria != anterior.categoria:
+        if anterior is not None and anterior_trava and categoria != anterior.categoria:
             # Pegajosa: só troca com correção explícita ou conf ≥ troca (do JEV).
             troca = corrigiu_explicitamente(texto_atual) or (
                 origem == "jev" and confianca >= cfg.limiar_categoria_troca

@@ -41,12 +41,17 @@ INTENCOES: Final[tuple[str, ...]] = (
     INTENCAO_OUTRO,
 )
 
-#: Intenções em que a categoria do problema é (re)calculada: SÓ reclamação
-#: (02: "categoria.confidence quando intenção = reclamação"). Nas demais
-#: (dúvida, status, saudação, "sim/ok", pedido de atendente) a categoria já
-#: fixada é herdada: uma dúvida de cobrança não pode virar a fila de uma
-#: reclamação de conexão feita depois, e um "ok" não apaga a classificação.
-INTENCOES_COM_CATEGORIA: Final[frozenset[str]] = frozenset({INTENCAO_RECLAMACAO})
+#: DEFAULT das intenções em que a categoria é (re)calculada (E3.10): reclamação
+#: e os pedidos de informação/serviço (`outro`, `duvida_informacao`), para que um
+#: boleto ou um preço também cheguem à transferência com categoria e sigam ao
+#: departamento da categoria. Configurável em `JEV_INTENCOES_COM_CATEGORIA`
+#: (`ConfigClassificacao.intencoes_com_categoria`). Nas demais (status, saudação,
+#: "sim/ok", pedido de atendente) a categoria já fixada é herdada: um "ok" não
+#: apaga a classificação. A PERGUNTA de esclarecimento por baixa confiança só
+#: existe em reclamação (quem só pediu informação não é indagado sobre categoria).
+INTENCOES_COM_CATEGORIA: Final[frozenset[str]] = frozenset(
+    {INTENCAO_RECLAMACAO, INTENCAO_OUTRO, INTENCAO_DUVIDA}
+)
 
 #: Ordem canônica das prioridades da Sofia (índice = nível do Score do JEV).
 PRIORIDADES: Final[tuple[str, ...]] = ("baixa", "media", "alta", "urgente")
