@@ -4,38 +4,40 @@ Plano: `docs/plano/02-classificacao.md` (seção "Dataset de avaliação") e
 `docs/plano/04-esteira-qualidade.md` (camada 2). Skill: `.claude/skills/evals-agente/`.
 Este pacote vive **fora** de `src/` e nunca é importado por ele.
 
-Estado em E1.5: **scaffolding**. Formatos, anonimizador, dataset sintético,
-relatório e runners existem e são testados; o classificador real (E2.2) e a
-execução dos cenários de conversa (E3.5) ainda não. Enquanto
-`config/taxonomia.yaml` tiver `placeholder: true` (P1), as métricas de
-categoria são informativas.
+Estado em E2.4: o runner de classificação usa o `src.classificacao.classificar()`
+**real** em três modos (`--offline`, `--jev`, `--llm`), mede calibração, janelas de
+contexto (C-JEV1) e tudo que o `02` define, e roda no CI sem rede. **Nenhuma
+medição do JEV existe ainda**: não há `TYPESAFE_API_KEY` (P8), então
+`baseline.json` segue vazio e o que sai do modo offline mede o encanamento, não o
+JEV. Enquanto `config/taxonomia.yaml` tiver `placeholder: true` (P1), as métricas
+de categoria são informativas (os testes de categoria com JEV real ficam `xfail`).
 
 ## Famílias
 
 | Família | Onde | Determinística? | Roda | Comando |
 |---|---|---|---|---|
 | **Conversa** | `conversa/*.yaml` | sim (LLM scriptado + `FakeJEV` + gateway falso) | todo PR, bloqueia (`evals-pr`) | `pytest -m evals_pr evals/` |
-| **Classificação** | `classificacao/*.jsonl` | `--llm` sim (fakes) · `--jev` não (JEV real) | PR que toca classificação; noturno | `python -m evals.classificacao --fonte sintetico\|historico [--jev\|--llm]` |
+| **Classificação** | `classificacao/*.jsonl` | `--offline` sim (JEV/LLM simulados) · `--jev`/`--llm` não (serviços reais) | `--offline` todo PR; `--jev` em PR que toca classificação e noturno | `python -m evals.classificacao --fonte sintetico\|historico [--offline\|--jev\|--llm] [--janelas]` |
 | **Juiz** | `conversa/juiz/*.yaml` (E4.4) | não (LLM real + juiz) | noturno | `python -m evals.juiz` |
 
-Hoje: os cenários de conversa carregam, validam e **executam** contra o grafo
+Os cenários de conversa carregam, validam e **executam** contra o grafo
 real (E3.5: LLM scriptado + `FakeJEV` + gateway falso; `python -m evals.conversa`
-imprime o resultado de cada um — só os de `conversa/*.yaml`, não os de `pendentes/`); `--jev` e `--llm` caem no
-`classificador_nulo` (sempre `outro`/`indefinida`/`media`, confiança 0; também
-acessível por `--nulo`), que serve para provar o encanamento e produzir um
-relatório — não para calibrar nada (`--atualizar-baseline` recusa nesse caso).
+imprime o resultado de cada um — só os de `conversa/*.yaml`, não os de `pendentes/`).
+O classificador nulo (`--nulo`: sempre `outro`/`indefinida`/`media`, confiança 0)
+continua como smoke do encanamento.
 
 ## Layout
 
 ```
 evals/
   formatos.py          # dataclasses + validadores (campo e motivo) dos dois formatos
-  relatorio.py         # métricas e Markdown
+  relatorio.py         # métricas (ECE, macro-F1, cobertura@limiar…), comparação de janelas e Markdown
   anonimizar.py        # CLI: export bruto → JSONL com <CPF>/<TEL>/...
-  baseline.json        # métricas de referência por "<fonte>/<modo>" (vazio até E2.4)
-  classificacao/       # __main__ (CLI), sintetico.jsonl (v0, 189 casos), historico.jsonl (P9, não versionado ainda)
-  conversa/            # TEMPLATE.yaml, cenários, runner.py (esqueleto), test_cenarios.py
-  exemplos/            # export fictício para testar o anonimizador
+  baseline.json        # métricas de referência por "<fonte>/<modo>" (vazio: falta a chave do JEV, P8)
+  classificacao/       # __main__ (CLI), adaptador.py (liga ao classificar() real), simulado.py (JEV/LLM do modo offline),
+                       #   sintetico.jsonl (v1, 237 casos), historico.jsonl (P9, não versionado ainda)
+  conversa/            # TEMPLATE.yaml, cenários, runner.py, test_cenarios.py
+  exemplos/            # export fictício (anonimizador) e relatorio-offline-exemplo.md (relatório offline commitado)
   tests_evals/         # testes unitários do pacote (pytest evals/)
   bruto/               # GITIGNORED: export real com PII
   relatorios/          # GITIGNORED: saída dos runners
@@ -47,19 +49,68 @@ evals/
 cd agente-ia
 venv/Scripts/python.exe -m pytest evals/ -q                 # tudo: unitários + cenários (xfail)
 venv/Scripts/python.exe -m pytest -m evals_pr evals/ -q     # só o que bloqueia PR
-venv/Scripts/python.exe -m evals.classificacao --fonte sintetico --llm
-venv/Scripts/python.exe -m evals.classificacao --fonte sintetico --jev --relatorio evals/relatorios/jev.md
+venv/Scripts/python.exe -m evals.classificacao --fonte sintetico --offline   # sem rede nem chave (o padrão)
 venv/Scripts/python.exe -m evals.conversa                   # lista e valida os cenários
 venv/Scripts/python.exe -m ruff check evals && venv/Scripts/python.exe -m mypy evals
 ```
 
 (No Linux/macOS, `venv/bin/python`.) Os testes não usam rede nem `.env`; o
 `conftest.py` troca qualquer `TYPESAFE_API_KEY`/`OPENROUTER_API_KEY` presente
-por um valor falso.
+por um valor falso (exceto nos testes marcados `jev`/`llm_real`, que existem para
+usar a chave real e ficam fora da rodada por default).
 
-`scripts/verificar.sh --rapido` hoje cobre `src` e `tests`; os comandos acima
-são a verificação deste pacote até a esteira incluí-los (ajuste em
-`pyproject.toml`/`verificar.sh`, fora da zona de E1.5).
+`scripts/verificar.sh --rapido` já cobre `evals/` (ruff, mypy e pytest).
+
+## Evals de classificação: os modos
+
+`python -m evals.classificacao --fonte sintetico|historico [modo] [opções]`.
+Todos os modos (menos `--nulo`) executam o `src.classificacao.classificar()`
+**real** — estado montado por `estado_para_jev` com PII mascarada, uma chamada com
+as 6 perguntas, roteador, limiares `JEV_LIMIAR_*`, fallback, esclarecimento. O que
+muda é quem responde:
+
+| modo | JEV | fallback LLM | precisa de | pytest |
+|---|---|---|---|---|
+| `--offline` (padrão) | `JEVSimulado` (classe `FakeJEV` de `tests/fakes.py`, lexical e determinístico) | `FallbackSimulado` (`FakeFallbackLLM`) | nada | roda por default |
+| `--jev` | JEV real (`JEVTypeSafe`, modelo pinado em `JEV_MODEL`) | LLM real se houver `OPENROUTER_API_KEY`; senão nenhum, com aviso | `TYPESAFE_API_KEY` (P8) | `-m jev` |
+| `--llm` | nenhum | LLM real (`FallbackLLMEstruturado`) | `OPENROUTER_API_KEY` | `-m llm_real` |
+| `--nulo` | — | — | nada | smoke do encanamento |
+
+```bash
+# offline, sem rede: gera evals/relatorios/<data>-classificacao-sintetico-offline.md (+ .json)
+venv/Scripts/python.exe -m evals.classificacao --fonte sintetico --offline
+# comparação de janelas de contexto 1/3/6/10 (C-JEV1); --janela N escolhe a do detalhe (padrão 6)
+venv/Scripts/python.exe -m evals.classificacao --fonte sintetico --offline --janelas
+venv/Scripts/python.exe -m evals.classificacao --fonte sintetico --janelas 1,6 --jev   # lista própria
+# JEV real (precisa da chave): sem ela o comando sai com código 2 e diz o porquê
+TYPESAFE_API_KEY=... OPENROUTER_API_KEY=... venv/Scripts/python.exe -m evals.classificacao --fonte sintetico --jev --janelas
+# só o LLM de fallback
+OPENROUTER_API_KEY=... venv/Scripts/python.exe -m evals.classificacao --fonte sintetico --llm
+# testes que usam a chave real (excluídos por default)
+TYPESAFE_API_KEY=... venv/Scripts/python.exe -m pytest -m jev evals/ -q
+OPENROUTER_API_KEY=... venv/Scripts/python.exe -m pytest -m llm_real evals/ -q
+```
+
+Saídas: `evals/relatorios/<data>-classificacao-<fonte>-<modo>[-janelas].md` e um
+`.json` ao lado com as métricas planas (gitignored). Código de saída: 0 ok · 1
+regressão acima da tolerância contra `baseline.json` · 2 dataset inválido, chave
+ausente ou argumento errado.
+
+**O modo offline nunca é desempenho do JEV.** O `JEVSimulado` é um casador de
+palavras que só enxerga o `estado` que o `classificar()` lhe manda (nada do
+`esperado`), com latência sintética e ECE próprio; ele existe para provar que o
+runner, o roteador, o mascaramento de PII, a janela de contexto e o relatório
+funcionam no CI. Todo relatório offline abre com a faixa "Exemplo offline com
+fakes, não é medição real", e `--atualizar-baseline` o recusa. O exemplo
+commitado (`exemplos/relatorio-offline-exemplo.md`) é desse modo, tem teste que o
+mantém em dia e é só uma amostra do formato: **não cite os números dele**.
+
+A comparação de janelas (`--janelas`) repete a rodada com `JEV_JANELA_MSGS` =
+1, 3, 6 e 10 (a janela inclui a mensagem atual) e acrescenta uma tabela com
+acurácia da intenção, acurácia/macro-F1/cobertura@limiar/acurácia@limiar/ECE da
+categoria, tamanho médio do estado enviado e latência. No sintético só 39 casos
+têm histórico (15 passam de 6 mensagens, 3 passam de 10): a tabela serve para ver
+o mecanismo; a decisão da C-JEV1 precisa do histórico real (P9).
 
 ## Escrever um caso de classificação
 
@@ -79,8 +130,11 @@ Uma linha JSON em `classificacao/sintetico.jsonl` (ou `historico.jsonl`):
   (acerto se o previsto for ≥); `frustracao_min`/`frustracao_max` são piso e
   teto do score de frustração (o piso ≥ 2 marca os casos irritados: é
   `frustracao ≥ 3` que dispara transferência); `malicioso_min` e
-  `fora_de_escopo_min` são pisos dos Nouls (injeção, off-topic). Frustração e
-  Nouls ainda não são avaliados pelo runner (TODO(E2.4)).
+  `fora_de_escopo_min` são pisos dos Nouls (injeção, off-topic) e
+  `malicioso_max`/`fora_de_escopo_max` são os tetos (mensagem legítima: o Noul
+  não pode disparar). Desde a E2.4 o runner avalia frustração (faixa) e os dois
+  Nouls (binários: `sim` = ≥ piso, `nao` = ≤ teto; confiança `|2p − 1|`); caso sem
+  nenhum desses campos não entra na pergunta.
 - Divergência registrada: o `02` escreve `prioridade` e `frustracao_min`; a
   skill `evals-agente` escreve `prioridade_min` e `frustracao_max`. Este pacote
   aceita `prioridade_min`, `frustracao_min` e `frustracao_max`; TODO(E2.4):
@@ -216,9 +270,22 @@ venv/Scripts/python.exe -m evals.anonimizar evals/bruto/conversas-whatsapp-<data
 
 ## Interpretar o relatório (`relatorio.py`)
 
-O runner grava `evals/relatorios/classificacao-<fonte>-<modo>.md` e um `.json`
-com as métricas planas (0–100). Por pergunta (`intencao`, `categoria`,
-`prioridade`):
+O runner grava `evals/relatorios/<data>-classificacao-<fonte>-<modo>.md` e um `.json`
+com as métricas planas (0–100). Abra pelo topo: a faixa em negrito diz se o
+número é medição (`--jev`/`--llm`) ou exemplo offline com fakes (não é medição).
+Depois vêm o contexto (modo, JEV, fallback, janela, taxonomia — placeholder ou
+não), o resumo por pergunta, o pipeline e, por pergunta, F1 por classe,
+calibração e matriz de confusão. As perguntas do relatório:
+
+| pergunta | o que é avaliado |
+|---|---|
+| `intencao`, `categoria` | a resposta **bruta do JEV** (escolha + `confidence`). É isto que a cobertura@limiar, a acurácia@limiar e a calibração medem: o JEV decidiria sozinho quando `confidence ≥ limiar`. Sem JEV na rodada (`--llm`, ou JEV fora naquele turno) vale a resposta do fallback, com confiança 0 |
+| `categoria_final` | a categoria que o **roteador fixou** (com fallback, esclarecimento e `indefinida`), só nos casos de `reclamacao_problema` — único caso em que o roteador classifica categoria. É o que o cliente vive; compare com `categoria` para ver quanto o fallback e o esclarecimento recuperam |
+| `prioridade` | prioridade final (com o piso da taxonomia) contra `prioridade_min`; ordinal |
+| `frustracao` | nível do JEV dentro da faixa `frustracao_min..frustracao_max`; ordinal |
+| `malicioso`, `fora_de_escopo` | Noul binário (ver "Escrever um caso"); confiança `|2p − 1|`, limiar 0.6 ⇔ `p ≥ 0.8` ou `p ≤ 0.2` |
+
+Cada métrica, por pergunta (`intencao`, `categoria`, `prioridade`…):
 
 | métrica | o que diz | critério inicial (02) |
 |---|---|---|
@@ -230,11 +297,23 @@ com as métricas planas (0–100). Por pergunta (`intencao`, `categoria`,
 | matriz de confusão | linha = esperado, coluna = previsto: onde o modelo troca categorias parecidas | guia para `nao_e`/`exemplos` da taxonomia |
 | latência p50/p95 | do classificador, por caso (*nearest-rank*) | p95 < 2 s (timeout do JEV) |
 
-`prioridade` é ordinal com piso (`previsto ≥ prioridade_min`): tem acurácia e
-cobertura, não F1, confusão nem calibração (a confiança é do score exato, o
-acerto é "≥ piso": o ECE não significaria nada). Leitura típica: cobertura baixa com
+`prioridade` e `frustracao` são ordinais com piso/faixa: têm acurácia e cobertura, não
+F1, confusão nem calibração (a confiança é do score exato, o acerto é "dentro
+da faixa": o ECE não significaria nada). Leitura típica: cobertura baixa com
 acurácia@limiar alta → limiar conservador demais; cobertura alta com
-acurácia@limiar < 0.95 → subir o limiar ou melhorar `nao_e`.
+acurácia@limiar < 0.95 → subir o limiar ou melhorar `nao_e`; ECE alto com
+confiança sempre perto de 1 → o JEV está sobreconfiante, suba o limiar até a
+acurácia@limiar chegar a 0.95 (a calibração em 10 bins mostra em que faixa de
+confiança a acurácia cai).
+
+Seção **Pipeline** (contexto, sem critério de aceite): `taxa_fallback_chamado`
+(quanto do tráfego gastaria o LLM), `taxa_esclarecimento` (perguntas de
+esclarecimento), `taxa_transferencia`, `taxa_jev_indisponivel` (JEV fora do ar no
+turno — alerta do `02` se > 5 %), `taxa_categoria_indefinida_em_reclamacao` e
+`media_estado_caracteres` (tamanho do estado enviado, que cresce com a janela).
+
+Latência: no `--jev`/`--llm` é medida no cliente (a chamada inteira do
+`classificar()`, fallback incluso); no offline é sintética.
 
 ## Baseline e regressão (`baseline.json`)
 
@@ -251,5 +330,10 @@ acurácia@limiar < 0.95 → subir o limiar ou melhorar `nao_e`.
 - Atualizar (só ao melhorar, ou com decisão registrada):
   `python -m evals.classificacao --fonte sintetico --jev --atualizar-baseline --justificativa "perguntas.py: exemplos de instabilidade"`
   e commitar o `baseline.json` **no mesmo PR**, com a justificativa no texto do PR.
-- Hoje está vazio de propósito: o classificador nulo não é referência. O
-  primeiro baseline real entra em E2.4 com `--jev` (precisa de `TYPESAFE_API_KEY`).
+- Hoje está vazio de propósito: nem o classificador nulo nem o modo offline
+  (fakes) são referência — `--atualizar-baseline` recusa o offline. O primeiro
+  baseline real exige `--jev` com `TYPESAFE_API_KEY` (P8): rode, leia o relatório,
+  grave com justificativa no mesmo PR. Uma janela diferente de 6 (`--janela N`)
+  usa a chave `<fonte>/<modo>@jN`, para não ser comparada com a de referência.
+- Mexeu em `perguntas.py`, `taxonomia.yaml` ou limiares? Rode `--jev --janelas`
+  antes e depois e cole o resumo no PR (skill `jev-classificacao`).

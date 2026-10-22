@@ -19,6 +19,11 @@ Convenções (todas determinísticas, sem dependência de numpy/sklearn):
   Σ (n_b/N)·|acc_b − conf_b|. Só para perguntas exatas: numa ordinal com piso a
   confiança é do score exato e o acerto é "≥ piso", então o ECE não significa nada.
 - **percentil**: método *nearest-rank* (posição ⌈p·n⌉ da lista ordenada).
+- **pipeline**: taxas e médias dos `extras` de cada caso (fração de turnos com
+  fallback LLM, com esclarecimento, com JEV fora do ar…): `bool` vira taxa,
+  número vira média. Contexto do relatório, não critério de aceite.
+- **comparar_janelas**: uma linha por janela de contexto (C-JEV1: 1/3/6/10
+  mensagens) com as métricas que decidem a janela.
 """
 
 from __future__ import annotations
@@ -46,6 +51,9 @@ class ResultadoCaso:
     id: str
     perguntas: Mapping[str, ParPrevisao]
     latencia_ms: float
+    #: Observações do pipeline neste caso: `bool` (fallback usado, esclarecimento…)
+    #: ou número (tamanho do estado enviado). Agregadas em `Relatorio.pipeline`.
+    extras: Mapping[str, float | bool] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -82,6 +90,12 @@ class Relatorio:
     latencia_p95_ms: float
     avisos: tuple[str, ...] = ()
     contexto: Mapping[str, str] = field(default_factory=dict)
+    #: Taxa (0–1) por extra booleano, média por extra numérico.
+    pipeline: Mapping[str, float] = field(default_factory=dict)
+    #: Faixa no topo do relatório (ex.: "exemplo offline com fakes, não é medição real").
+    banner: str = ""
+    #: Blocos Markdown já formatados (ex.: comparação de janelas), antes do detalhe.
+    secoes_extra: tuple[str, ...] = ()
 
     def metricas_planas(self) -> dict[str, float]:
         """`{"categoria.macro_f1": 0.91, ...}` em pontos percentuais (0–100)."""
@@ -101,6 +115,8 @@ class Relatorio:
 
     def para_markdown(self) -> str:
         linhas: list[str] = [f"# {self.titulo}", ""]
+        if self.banner:
+            linhas.extend([f"> **{self.banner}**", ""])
         if self.contexto:
             linhas.extend(f"- **{k}**: {v}" for k, v in self.contexto.items())
             linhas.append("")
@@ -113,6 +129,8 @@ class Relatorio:
             linhas.append(f"> ⚠️ {aviso}")
         if self.avisos:
             linhas.append("")
+        for secao in self.secoes_extra:
+            linhas.extend([secao.rstrip(), ""])
         linhas.append("## Resumo por pergunta")
         linhas.append("")
         linhas.append(
@@ -126,6 +144,14 @@ class Relatorio:
                 f"{_ece(p.ece)} |"
             )
         linhas.append("")
+        if self.pipeline:
+            linhas.append("## Pipeline (o que o roteador fez)")
+            linhas.append("")
+            linhas.append("| observação | valor |")
+            linhas.append("|---|---:|")
+            for nome, valor in sorted(self.pipeline.items()):
+                linhas.append(f"| {nome} | {_fmt_pipeline(nome, valor)} |")
+            linhas.append("")
         for p in self.perguntas:
             linhas.append(f"## {p.pergunta}")
             linhas.append("")
@@ -173,6 +199,11 @@ def _pct(v: float) -> float:
 
 def _fmt(v: float | None) -> str:
     return "—" if v is None else f"{100.0 * v:.1f}%"
+
+
+def _fmt_pipeline(nome: str, valor: float) -> str:
+    """Taxas (`taxa_*`) em %, o resto como número."""
+    return f"{100.0 * valor:.1f}%" if nome.startswith("taxa_") else f"{valor:.1f}"
 
 
 def _ece(v: float | None) -> str:
@@ -309,7 +340,73 @@ def gerar_relatorio(
         latencia_p95_ms=percentil(latencias, 95),
         avisos=tuple(avisos),
         contexto=dict(contexto or {}),
+        pipeline=agregar_pipeline(resultados),
     )
+
+
+def agregar_pipeline(resultados: Sequence[ResultadoCaso]) -> dict[str, float]:
+    """`taxa_<extra>` para extras booleanos, `media_<extra>` para numéricos."""
+    por_extra: dict[str, list[float | bool]] = {}
+    for r in resultados:
+        for nome, valor in r.extras.items():
+            por_extra.setdefault(nome, []).append(valor)
+    agregado: dict[str, float] = {}
+    for nome, valores in sorted(por_extra.items()):
+        if all(isinstance(v, bool) for v in valores):
+            agregado[f"taxa_{nome}"] = sum(1 for v in valores if v) / len(valores)
+        else:
+            agregado[f"media_{nome}"] = sum(float(v) for v in valores) / len(valores)
+    return agregado
+
+
+def comparar_janelas(relatorios: Mapping[int, Relatorio]) -> str:
+    """Tabela Markdown: uma linha por janela de contexto (C-JEV1), com o que decide a janela.
+
+    Marca em negrito a melhor janela por macro-F1 de categoria (empate → a menor
+    janela, que custa menos tokens). É insumo para a decisão, não a decisão.
+    """
+
+    def metrica(r: Relatorio, pergunta: str, atributo: str) -> float | None:
+        for p in r.perguntas:
+            if p.pergunta == pergunta:
+                valor = getattr(p, atributo)
+                return float(valor) if valor is not None else None
+        return None
+
+    melhor: int | None = None
+    melhor_f1 = -1.0
+    for janela in sorted(relatorios):
+        f1 = metrica(relatorios[janela], "categoria", "macro_f1")
+        if f1 is not None and f1 > melhor_f1:
+            melhor, melhor_f1 = janela, f1
+
+    linhas = [
+        "## Comparação de janelas de contexto (C-JEV1)",
+        "",
+        "| janela (msgs) | intenção acurácia | categoria acurácia | categoria macro-F1 | "
+        "categoria cobertura@limiar | categoria acurácia@limiar | categoria ECE | "
+        "estado médio (caracteres) | latência p50 (ms) |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for janela in sorted(relatorios):
+        r = relatorios[janela]
+        rotulo = f"**{janela}**" if janela == melhor else str(janela)
+        ece = metrica(r, "categoria", "ece")
+        linhas.append(
+            f"| {rotulo} | {_fmt(metrica(r, 'intencao', 'acuracia'))} | "
+            f"{_fmt(metrica(r, 'categoria', 'acuracia'))} | "
+            f"{_fmt(metrica(r, 'categoria', 'macro_f1'))} | "
+            f"{_fmt(metrica(r, 'categoria', 'cobertura_no_limiar'))} | "
+            f"{_fmt(metrica(r, 'categoria', 'acuracia_no_limiar'))} | {_ece(ece)} | "
+            f"{r.pipeline.get('media_estado_caracteres', 0.0):.0f} | {r.latencia_p50_ms:.0f} |"
+        )
+    linhas.append("")
+    linhas.append(
+        "Negrito = melhor macro-F1 de categoria. Janela maior custa mais tokens (e latência) e "
+        "só vale se subir as métricas; o `.env` usa `JEV_JANELA_MSGS`. Decidir com o dataset "
+        "histórico (P9), não com o sintético."
+    )
+    return "\n".join(linhas)
 
 
 # -------------------------------------------------------------------- baseline
