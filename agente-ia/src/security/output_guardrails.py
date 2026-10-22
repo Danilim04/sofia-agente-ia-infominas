@@ -258,6 +258,11 @@ _AFIRMACOES_DE_ACAO_RE = tuple(
 )
 # Negação logo antes da afirmação ("ainda não registrei", "não abri o chamado").
 _NEGACAO_ANTES_RE = re.compile(r"\b(?:nao|nunca|nem|jamais|sem)\s+(?:\w+\s+)?$")
+# "se" (condicional/incerteza) na MESMA oração, antes da afirmação: "não consegui
+# confirmar se o chamado foi registrado", "vou ver se anotaram". Não é afirmar a
+# ação — é dizer que não se sabe. A oração termina em pontuação ou "mas".
+_FRONTEIRA_ORACAO_RE = re.compile(r"[.,;:!?\n]|\bmas\b")
+_CONDICIONAL_RE = re.compile(r"\bse\b")
 # Trechos entre aspas são fala citada (em geral do cliente) — não contam.
 _TRECHO_CITADO_RE = re.compile(r"[\"“”«»]([^\"“”«»]{1,240})[\"“”«»]")
 
@@ -268,7 +273,11 @@ def afirmacoes_de_acao(texto: str | None) -> list[str]:
     Registro, anotação, aviso/encaminhamento ao time ou abertura de chamado —
     coisas que só acontecem por ferramenta. Devolve os trechos casados
     (normalizados: minúsculas, sem acento) para log/teste; lista vazia = nada
-    afirmado. Fala citada entre aspas e afirmações negadas são ignoradas.
+    afirmado. Fala citada entre aspas, afirmações negadas e construções de
+    incerteza/condição ("não consegui confirmar SE o chamado foi registrado")
+    são ignoradas — estas últimas só valem com o "se" na mesma oração (sem vírgula
+    ou ponto entre ele e a afirmação), então "abri o chamado, se precisar me chame"
+    segue barrado.
     """
     if not texto:
         return []
@@ -278,6 +287,9 @@ def afirmacoes_de_acao(texto: str | None) -> list[str]:
         for m in padrao.finditer(alvo):
             antes = alvo[max(0, m.start() - 24) : m.start()]
             if _NEGACAO_ANTES_RE.search(antes):
+                continue
+            oracao = _FRONTEIRA_ORACAO_RE.split(alvo[max(0, m.start() - 60) : m.start()])[-1]
+            if _CONDICIONAL_RE.search(oracao):
                 continue
             achadas.append(m.group(0))
     return achadas
