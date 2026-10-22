@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // grafo devolve importPath → imports diretos de todos os pacotes do módulo.
@@ -145,13 +146,9 @@ func legadoPermitido(t *testing.T, prefixo string) bool {
 func TestArquitetura_DeployEInfraSemLegado(t *testing.T) {
 	termos := []string{"chat" + "woot", "azap" + "fy", "azap" + "docs", "mon" + "go"}
 	repo := filepath.Join(raizDoModulo(t), "..")
-	extensoes := map[string]bool{
-		".md": true, ".sh": true, ".yml": true, ".yaml": true, ".tpl": true, ".py": true,
-		".tf": true, ".tfvars": true, ".json": true, ".toml": true, ".txt": true, ".j2": true, ".cfg": true,
-	}
 	for _, base := range []string{"deploy", "infra"} {
 		err := filepath.WalkDir(filepath.Join(repo, base), func(caminho string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !extensoes[filepath.Ext(caminho)] {
+			if err != nil || d.IsDir() {
 				return err
 			}
 			rel, err := filepath.Rel(repo, caminho)
@@ -165,6 +162,9 @@ func TestArquitetura_DeployEInfraSemLegado(t *testing.T) {
 			conteudo, err := os.ReadFile(caminho)
 			if err != nil {
 				return err
+			}
+			if len(conteudo) > 1<<20 || bytes.IndexByte(conteudo, 0) >= 0 || !utf8.Valid(conteudo) {
+				return nil // binário ou grande demais: não é texto de operação
 			}
 			minusculo := strings.ToLower(string(conteudo))
 			for _, termo := range termos {

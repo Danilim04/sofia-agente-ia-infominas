@@ -170,15 +170,14 @@ tanto na taxonomia em uso quanto na proposta: foram movidos (`git mv`) de
 `real-status-sem-numero`.
 
 Os outros 22 ficam em `pendentes/`, **já remapeados** para as categorias da proposta
-(`test_taxonomia_proposta.py` os executa contra ela; todos passam, os dois `xfail`
-continuam `xfail`). Não podem ir para a raiz antes da aprovação porque o runner valida a
+(`test_taxonomia_proposta.py` os executa contra ela; todos passam, sem `xfail`). Não podem ir para a raiz antes da aprovação porque o runner valida a
 categoria contra `taxonomia.yaml`: `internet_rede` ainda não existe lá.
 
 | Destrava | Cenários |
 |---|---|
 | **Q1** (aprovar categorias e promover a proposta a `taxonomia.yaml`; depois `git mv`) | `real-internet-caiu-empresa`, `real-internet-lenta`, `real-internet-oscila`, `real-dois-links-fora-urgente`, `real-formulario-do-site`, `real-cita-protocolo-nao-abre-novo`, `real-cliente-irritado`, `real-cliente-impaciente-sem-transferir`, `real-vago-depois-descreve` (`internet_rede`); `real-computador-lento`, `real-pergunta-nao-confirma` (`computador`); `real-impressora-nao-imprime` (`impressora`); `real-servidor-desligando`, `real-muda-descricao-antes-de-confirmar` (`servidor_arquivos`); `real-cobranca-financeiro` (`financeiro`) |
 | **Q1**, reescrevendo o esperado (hoje descrevem o comportamento sem categoria: esclarece e transfere; com a categoria, deveria abrir chamado) | `real-email-nao-envia` (`email`), `real-vpn-nao-conecta` (`vpn`), `real-senha-acesso-usuario` (`acesso_senha`) |
-| **Q1 + Q2** e a mudança de produto descrita em Q2 | `real-assunto-comercial-planos` (`comercial`), `real-financeiro-segunda-via` (`financeiro`) |
+| **Q1 + Q2** (a mudança de produto saiu na E3.10) | `real-assunto-comercial-planos` (`comercial`), `real-financeiro-segunda-via` (`financeiro`) |
 | **Q5** (E5.3) | `real-nao-identificado-informa-cpf`, `real-cpf-invalido` |
 
 Cada arquivo em `pendentes/` traz uma linha `# Destrava: …` com a mesma informação.

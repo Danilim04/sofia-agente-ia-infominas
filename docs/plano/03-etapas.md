@@ -70,7 +70,7 @@ Conferido contra os PRs mergeados na `main`. As ondas não foram reordenadas; a 
 | E4.3 | entregue | #32 |  |
 | E4.4 | entregue | #40 | o primeiro run noturno real depende das chaves (P8) |
 | E4.5 | entregue | #42, #43, #44, #45, #47 | ADR 0008, correções no gateway e no cérebro, esteira e dependências |
-| E4.6 | entregue com resíduo | este PR | `git rm` de `infra/terraform`, `infra/ansible`, `deploy/{chatwoot,env,build-on-host.sh,deploy-remote.sh}` e `.github/workflows/configure-server.yml` foi negado pelo classificador de permissões: ficam marcados "LEGADO DO ZAPIN" e listados em `legado-permitido.txt`; remover os caminhos e as linhas da lista |
+| E4.6 | entregue com resíduo | #48 | `git rm` de `infra/terraform`, `infra/ansible`, `deploy/chatwoot`, `deploy/env`, `deploy/build-on-host.sh` e `deploy/deploy-remote.sh` foi negado pelo classificador de permissões: ficam marcados "LEGADO DO ZAPIN" e listados em `legado-permitido.txt`. Também fica `.github/workflows/configure-server.yml` (Ansible do Zapin, fora da zona da etapa; `workflow_dispatch` apontando para `infra/ansible`), sem marca nem lista. Remover os seis caminhos, o workflow e as linhas da lista; só então "legado vazio" vale |
 | E5.1 | parcial | #35 | proposta de taxonomia com mesa única entregue; falta a aprovação do dono (`decisoes/taxonomia-proposta.md`), promover a proposta a `taxonomia.yaml`, UUIDs de prioridade (P1, P4) |
 | E5.2 | pendente | — | export do histórico (P9) e chave do JEV (P8) para rotular e calibrar os `JEV_LIMIAR_*` |
 | E5.3 | entregue | #38 | segue aberto o valor final de `IDENT_EXIGIR_CPF` (ver E5.7) |
