@@ -26,6 +26,8 @@
 //	POST /tools/infodesk/ticket/consultar      consultar_status_chamado
 //	POST /tools/infodesk/ticket/listar         listar_meus_chamados
 //	POST /tools/infodesk/conversa/transferir   transferir_para_atendente
+//	POST /tools/infodesk/cadastro/preparar     preparar_cadastro_solicitante
+//	POST /tools/infodesk/cadastro/cadastrar    cadastrar_solicitante
 //
 // Protegidas por token compartilhado (header X-Tools-Token).
 package toolsapi
@@ -76,6 +78,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/tools/infodesk/ticket/consultar", h.post(h.handleConsultar))
 	mux.HandleFunc("/tools/infodesk/ticket/listar", h.post(h.handleListar))
 	mux.HandleFunc("/tools/infodesk/conversa/transferir", h.post(h.handleTransferir))
+	mux.HandleFunc("/tools/infodesk/cadastro/preparar", h.post(h.handlePrepararCadastro))
+	mux.HandleFunc("/tools/infodesk/cadastro/cadastrar", h.post(h.handleCadastrar))
 }
 
 // corpoMax é o teto do corpo de qualquer requisição: input não-confiável não

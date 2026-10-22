@@ -26,6 +26,12 @@ Infodesk (E2.3), ao final deste módulo:
   checkpoint e o trace como qualquer mensagem; mascarar isso é do checkpointer/nós
   (fora da zona da E2.3) — TODO(follow-up da E2.3), nota no PR.
 
+- `cadastrar_solicitante` ok → grava `identificacao = {forma: "cadastro",
+  valor_mascarado: <nome abreviado>, requester_id}` (E5.3, ADR 0009): o telefone passou
+  a existir no Infodesk e `exigir_identificado` passa. Não há efeito de
+  `preparar_cadastro_solicitante`: a proposta é lida do histórico pela política
+  (`tool_policy._cadastro_preparado`), não de um campo do estado.
+
 Invariantes para quem registrar um efeito:
 - recebe o estado como leitura e devolve um dict NOVO (nunca muta `state`);
 - nunca devolve `messages` (os `ToolMessage` são do `tools_node`) nem a
@@ -133,10 +139,23 @@ def _efeito_identificacao(nome: str, resultado: Any, state: Mapping[str, Any]) -
     return {"identificacao": {"forma": forma, "valor_mascarado": mascarado}}
 
 
+def _efeito_cadastro(nome: str, resultado: Any, state: Mapping[str, Any]) -> dict[str, Any]:
+    """Cadastro concluído → o cliente passa a estar identificado (forma `cadastro`)."""
+    if not _ok(resultado) or resultado.get("cadastrado") is not True:
+        return {}
+    solicitante = resultado.get("solicitante")
+    abreviado = solicitante.get("nome") if isinstance(solicitante, Mapping) else ""
+    identificacao: dict[str, Any] = {"forma": "cadastro", "valor_mascarado": str(abreviado or "")}
+    if resultado.get("requester_id"):
+        identificacao["requester_id"] = str(resultado["requester_id"])
+    return {"identificacao": identificacao}
+
+
 EFEITOS.update(
     {
         "preparar_abertura_chamado": _efeito_preparar,
         "abrir_chamado": _efeito_abrir,
         "informar_identificacao": _efeito_identificacao,
+        "cadastrar_solicitante": _efeito_cadastro,
     }
 )

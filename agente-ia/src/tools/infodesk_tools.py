@@ -1,4 +1,4 @@
-"""As 6 tools do Infodesk expostas ao modelo (`docs/plano/01-ferramentas.md`, seção A).
+"""As 8 tools do Infodesk expostas ao modelo (`docs/plano/01-ferramentas.md`, seção A).
 
 Regras que valem para todas (`CLAUDE.md`, regras 1–5):
 
@@ -16,7 +16,9 @@ Regras que valem para todas (`CLAUDE.md`, regras 1–5):
   genérico `infodesk_indisponivel` — texto cru de erro nunca chega ao modelo.
 - Efeito colateral em duas fases: `preparar_abertura_chamado` (dry-run) →
   confirmação explícita no turno seguinte (checada por código) →
-  `abrir_chamado` SEM argumentos do modelo. Nenhuma tool repete um POST.
+  `abrir_chamado` SEM argumentos do modelo. Idem o cadastro de solicitante
+  (`preparar_cadastro_solicitante` → `cadastrar_solicitante`, ADR 0009). Nenhuma
+  tool repete um POST.
 - PII: o CPF/contrato nunca é logado (só a forma mascarada) e não volta no
   retorno; vai em claro apenas no corpo para o gateway. Ressalva: o argumento
   que o MODELO passou fica no `AIMessage.tool_calls` do histórico (checkpoint e
@@ -33,6 +35,7 @@ import httpx
 from langchain_core.tools import InjectedToolArg, tool
 
 from src.config import get_settings
+from src.identity.cadastro import linha_unica
 from src.identity.contrato import mascarar_contrato, normalizar_contrato
 from src.identity.cpf import mascarar_cpf, somente_digitos
 from src.tools.validacao import chave_idempotencia, normalizar_numero_chamado
@@ -376,7 +379,104 @@ def transferir_para_atendente(
     return _post("conversa/transferir", payload)
 
 
-#: Ordem do catálogo (`docs/plano/01-ferramentas.md`, A1–A6).
+# ---------------------------------------------------------------------------
+# A8 — cadastro de solicitante (telefone que o lookup não achou; ADR 0009)
+# ---------------------------------------------------------------------------
+
+
+@tool
+def preparar_cadastro_solicitante(
+    nome: str,
+    empresa: str,
+    email: str = "",
+    telefone: Annotated[str, InjectedToolArg] = "",
+    conversation_id: Annotated[str, InjectedToolArg] = "",
+) -> dict[str, Any]:
+    """Ensaio do cadastro do cliente: valida os dados e acha a empresa. NÃO cadastra.
+
+    Use SÓ quando o bloco "Cliente desta conversa" disser que a identificação NÃO
+    foi informada e o cliente ainda não é cadastrado: pergunte o NOME COMPLETO
+    (nome e sobrenome), o NOME DA EMPRESA e, se ele quiser, um e-mail — um dado por
+    vez, explicando que é para criar o cadastro dele. Passe os dados exatamente como
+    o cliente escreveu; nunca complete, corrija nem invente. O telefone é o desta
+    conversa: nunca peça nem passe outro. Depois de preparar, mostre o resumo
+    (nome, empresa e e-mail) e peça um "sim"; só na PRÓXIMA mensagem do cliente
+    `cadastrar_solicitante` pode ser chamado. Se ele corrigir algo, prepare de novo.
+
+    Trate o retorno pelo "motivo":
+    - "campo_invalido": peça de novo o dado que faltou (nome e sobrenome, empresa ou
+      um e-mail válido), com simpatia.
+    - "empresa_nao_encontrada": peça para o cliente conferir o nome da empresa (como
+      está no contrato ou na nota) e prepare de novo com o que ele disser.
+    - "empresa_ambigua": mostre os nomes de "candidatos" e peça para ele dizer qual é
+      a empresa dele; prepare de novo com o nome COMPLETO que ele escolher.
+    - "ja_cadastrado": o telefone já tem cadastro; NÃO cadastre. Peça o CPF ou o número
+      do contrato e registre com `informar_identificacao`.
+    - "cadastro_transferido": a conversa já foi passada para um atendente; não responda
+      mais.
+    - "escopo_insuficiente" ou "infodesk_indisponivel": explique que não dá para fazer o
+      cadastro por aqui agora e ofereça um atendente.
+
+    Args:
+        nome: nome completo do cliente (nome e sobrenome).
+        empresa: nome da empresa do cliente, como ele disse.
+        email: e-mail do cliente, se ele quiser informar (opcional).
+
+    Returns:
+        dict: status (bool); em sucesso proposta (nome, email, empresa e o resumo do
+        que será cadastrado); em recusa erro e motivo.
+    """
+    return _post(
+        "cadastro/preparar",
+        {
+            "telefone": telefone,
+            "conversation_id": conversation_id,
+            "nome": linha_unica(nome),
+            "empresa": linha_unica(empresa),
+            "email": str(email or "").strip(),
+        },
+    )
+
+
+@tool
+def cadastrar_solicitante(
+    proposta: Annotated[dict | None, InjectedToolArg] = None,
+    telefone: Annotated[str, InjectedToolArg] = "",
+    conversation_id: Annotated[str, InjectedToolArg] = "",
+) -> dict[str, Any]:
+    """Cadastra o cliente EXATAMENTE como foi preparado e confirmado. Sem argumentos.
+
+    Só chame depois de `preparar_cadastro_solicitante` numa mensagem anterior E de o
+    cliente ter confirmado com um "sim"/"pode" na mensagem seguinte ao resumo. Nunca
+    chame na mesma rodada em que preparou. O sistema recusa o cadastro se a
+    confirmação não for explícita ou a proposta tiver vencido; nesse caso responda ao
+    que o cliente disse e, se for preciso, prepare de novo.
+
+    Trate o retorno pelo "motivo":
+    - sucesso: diga que o cadastro está feito e siga o atendimento (entender o problema
+      e abrir o chamado). Não repita dado pessoal do cliente.
+    - "sem_proposta": prepare o cadastro de novo e peça a confirmação.
+    - "escopo_insuficiente" ou "infodesk_indisponivel": não foi possível cadastrar por
+      aqui; diga que um atendente vai assumir. Não prometa prazo nem tente de novo.
+
+    Returns:
+        dict: status (bool); em sucesso cadastrado, solicitante e empresa; em recusa
+        erro e motivo.
+    """
+    proposta = dict(proposta or {})
+    if not proposta.get("chave"):
+        return {
+            "status": False,
+            "erro": "não há cadastro preparado; prepare o cadastro e peça a confirmação do cliente antes",
+            "motivo": "sem_proposta",
+        }
+    return _post(
+        "cadastro/cadastrar",
+        {"telefone": telefone, "conversation_id": conversation_id, "proposta": proposta},
+    )
+
+
+#: Ordem do catálogo (`docs/plano/01-ferramentas.md`, A1–A6, A8).
 TOOLS_INFODESK = [
     informar_identificacao,
     preparar_abertura_chamado,
@@ -384,4 +484,6 @@ TOOLS_INFODESK = [
     consultar_status_chamado,
     listar_meus_chamados,
     transferir_para_atendente,
+    preparar_cadastro_solicitante,
+    cadastrar_solicitante,
 ]

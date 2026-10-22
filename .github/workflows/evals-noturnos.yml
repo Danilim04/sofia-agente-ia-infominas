@@ -1,55 +1,195 @@
 # ==============================================================================
-# Evals noturnos — camada 2, não bloqueiam merge (docs/plano/04).
-# JEV real sobre os datasets de classificação e (E4.4) LLM real com juiz.
-# Esqueleto criado em E0.3; os comandos reais entram em E2.4 e E4.4.
-# Secrets: TYPESAFE_API_KEY, OPENROUTER_API_KEY (vazios = passo pulado).
+# Evals noturnos — camada 2, NÃO bloqueiam merge (docs/plano/04). E4.4.
+#
+#   1. classificação com o JEV real      pytest -m jev  +  python -m evals.classificacao --jev --janelas
+#   2. fallback LLM real                 pytest -m llm_real  +  python -m evals.classificacao --llm
+#   3. conversa com LLM real + juiz      python -m evals.juiz   (evals/conversa/juiz/*.yaml, rubrica do 02)
+#   4. regressão > 2 pts vs. baselines   python -m evals.juiz.regressao
+#        → comenta no ÚLTIMO PR MERGEADO e publica o relatório como artefato.
+#
+# Secrets do repositório (Settings → Secrets and variables → Actions):
+#   TYPESAFE_API_KEY    chave do JEV (P8)            → passos 1 e 4 (classificação)
+#   OPENROUTER_API_KEY  LLM da Sofia e do juiz       → passos 2 e 3
+# Variável opcional (Settings → Variables): EVALS_JUIZ_MODEL — modelo do juiz, de
+# preferência diferente do da Sofia (também pode ser dado no workflow_dispatch).
+#
+# Sem um secret, o passo correspondente é PULADO com aviso claro; o job termina verde.
+# Baselines: evals/baseline.json (classificação) e evals/juiz/baseline.json — ambos vazios
+# até a primeira medição real; baseline vazio nunca acusa regressão.
 # ==============================================================================
 name: Evals noturnos
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # 03:00 America/Sao_Paulo
+    - cron: "0 6 * * *" # 03:00 America/Sao_Paulo
   workflow_dispatch:
+    inputs:
+      juiz_model:
+        description: "Modelo do juiz no OpenRouter (vazio = variável EVALS_JUIZ_MODEL, ou o mesmo da Sofia)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
-  issues: write
+  pull-requests: write # comentário no último PR mergeado
+
+concurrency:
+  group: evals-noturnos
+  cancel-in-progress: false
 
 jobs:
-  classificacao:
+  evals:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     defaults: { run: { working-directory: agente-ia } }
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
       - uses: actions/checkout@v5
+
+      - name: Conferir secrets
+        id: chaves
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          jev=false; llm=false; ausentes=""
+          if [ -n "$TYPESAFE_API_KEY" ]; then jev=true; else ausentes="$ausentes TYPESAFE_API_KEY"; fi
+          if [ -n "$OPENROUTER_API_KEY" ]; then llm=true; else ausentes="$ausentes OPENROUTER_API_KEY"; fi
+          {
+            echo "jev=$jev"
+            echo "llm=$llm"
+            if [ "$jev" = true ] || [ "$llm" = true ]; then echo "ativo=true"; else echo "ativo=false"; fi
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "$ausentes" ]; then
+            echo "::warning title=Evals noturnos incompletos::Secrets ausentes:$ausentes. Cadastre em Settings > Secrets and variables > Actions; os passos que dependem deles foram pulados."
+            {
+              echo "### Evals noturnos: secrets ausentes"
+              echo
+              echo "Cadastre no repositório (Settings → Secrets and variables → Actions):"
+              echo
+              [ "$jev" = true ] || echo "- \`TYPESAFE_API_KEY\` — chave do JEV (pendência P8): evals de classificação com JEV real"
+              [ "$llm" = true ] || echo "- \`OPENROUTER_API_KEY\` — LLM da Sofia e do juiz: fallback LLM e conversa julgada"
+              echo
+              echo "Sem eles os passos correspondentes são pulados e o job termina sem falhar."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - uses: actions/setup-python@v6
+        if: steps.chaves.outputs.ativo == 'true'
         with: { python-version: "3.12", cache: pip, cache-dependency-path: "agente-ia/requirements*.txt" }
-      - run: |
+
+      - name: Instalar dependências
+        if: steps.chaves.outputs.ativo == 'true'
+        run: |
           pip install --index-url https://download.pytorch.org/whl/cpu torch
           pip install -r requirements.txt -r requirements-dev.txt
-      - name: classificação com JEV real
-        if: ${{ env.TYPESAFE_API_KEY != '' }}
+
+      # ---- 1. classificação com o JEV real ------------------------------------------------
+      - name: Classificação com JEV real (relatório e janelas 1/3/6/10)
+        if: steps.chaves.outputs.jev == 'true'
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          mkdir -p evals/relatorios
+          set +e
+          python -m evals.classificacao --fonte sintetico --jev --janelas --relatorio evals/relatorios/classificacao-jev.md
+          rc=$?
+          # 1 = regressão contra o baseline: o runner grava o .json ANTES de comparar. Sem o .json,
+          # o exit 1 é exceção não tratada (chave expirada, rede fora…) e falha o job.
+          if [ "$rc" -eq 1 ] && [ -f evals/relatorios/classificacao-jev.json ]; then echo "::warning title=Classificação::regressão contra o baseline (veja o relatório)"; elif [ "$rc" -ne 0 ]; then exit "$rc"; fi
+
+      - name: pytest -m jev (critérios do 02 com o JEV real)
+        if: ${{ !cancelled() && steps.chaves.outputs.jev == 'true' }}
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
-          if [ -f evals/classificacao/__main__.py ] || [ -d evals/classificacao ]; then
-            python -m evals.classificacao --fonte sintetico --jev --relatorio evals/relatorios/jev.md || echo "::warning::evals de classificação falharam (E2.4)"
-          else
-            echo "evals/classificacao ainda não existe (E1.5/E2.4)"
-          fi
-      - name: conversa com LLM real + juiz
-        if: ${{ env.OPENROUTER_API_KEY != '' }}
+          set +e
+          python -m pytest -m jev evals -q -p no:cacheprovider
+          rc=$?
+          # Teste vermelho = critério do 02 não atingido OU o JEV não respondeu: o pytest não distingue,
+          # então o job fica vermelho (não bloqueia merge) e os outros passos continuam (!cancelled()).
+          if [ "$rc" -ne 0 ]; then echo "::error title=pytest -m jev::falhou (critério do 02 não atingido ou JEV indisponível; veja o log)"; exit "$rc"; fi
+
+      # ---- 2. fallback LLM real -----------------------------------------------------------
+      - name: Fallback LLM real (relatório)
+        if: ${{ !cancelled() && steps.chaves.outputs.llm == 'true' }}
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          if [ -d evals/conversa/juiz ]; then
-            python -m evals.juiz --relatorio evals/relatorios/juiz.md || echo "::warning::evals com juiz falharam (E4.4)"
-          else
-            echo "evals/conversa/juiz ainda não existe (E4.4)"
-          fi
+          mkdir -p evals/relatorios
+          set +e
+          python -m evals.classificacao --fonte sintetico --llm --relatorio evals/relatorios/classificacao-llm.md
+          rc=$?
+          # 1 = regressão contra o baseline: o runner grava o .json ANTES de comparar. Sem o .json,
+          # o exit 1 é exceção não tratada (chave expirada, rede fora…) e falha o job.
+          if [ "$rc" -eq 1 ] && [ -f evals/relatorios/classificacao-llm.json ]; then echo "::warning title=Fallback LLM::regressão contra o baseline (veja o relatório)"; elif [ "$rc" -ne 0 ]; then exit "$rc"; fi
+
+      - name: pytest -m llm_real
+        if: ${{ !cancelled() && steps.chaves.outputs.llm == 'true' }}
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set +e
+          python -m pytest -m llm_real evals -q -p no:cacheprovider
+          rc=$?
+          if [ "$rc" -ne 0 ]; then echo "::error title=pytest -m llm_real::falhou (veja o log)"; exit "$rc"; fi
+
+      # ---- 3. conversa com LLM real + juiz ------------------------------------------------
+      - name: Conversa com LLM real julgada pelo juiz
+        if: ${{ !cancelled() && steps.chaves.outputs.llm == 'true' }}
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          JUIZ_MODEL: ${{ inputs.juiz_model || vars.EVALS_JUIZ_MODEL }}
+        run: |
+          mkdir -p evals/relatorios
+          set +e
+          python -m evals.juiz --relatorio evals/relatorios/juiz.md
+          rc=$?
+          # 1 = regressão contra o baseline: o runner grava o .json ANTES de comparar. Sem o .json,
+          # o exit 1 é exceção não tratada (chave expirada, rede fora…) e falha o job.
+          if [ "$rc" -eq 1 ] && [ -f evals/relatorios/juiz.json ]; then echo "::warning title=Juiz::regressão contra o baseline do juiz (veja o relatório)"; elif [ "$rc" -ne 0 ]; then exit "$rc"; fi
+
+      # ---- 4. regressão, resumo, artefato e comentário -----------------------------------
+      - name: Comparar com os baselines (> 2 pts)
+        id: regressao
+        if: ${{ !cancelled() && steps.chaves.outputs.ativo == 'true' }}
+        run: |
+          mkdir -p evals/relatorios
+          python -m evals.juiz.regressao \
+            --classificacao evals/relatorios/classificacao-jev.json \
+            --classificacao evals/relatorios/classificacao-llm.json \
+            --juiz evals/relatorios/juiz.json \
+            --saida evals/relatorios/comentario.md
+
+      - name: Resumo da rodada
+        if: ${{ !cancelled() && steps.chaves.outputs.ativo == 'true' }}
+        run: |
+          for f in evals/relatorios/*.md; do
+            [ -f "$f" ] || continue
+            [ "$(basename "$f")" = comentario.md ] && continue
+            { echo "## $(basename "$f")"; echo; cat "$f"; echo; } >> "$GITHUB_STEP_SUMMARY"
+          done
+
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ !cancelled() && steps.chaves.outputs.ativo == 'true' }}
         with:
           name: relatorios-evals
           path: agente-ia/evals/relatorios/
           if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Comentar no último PR mergeado
+        if: ${{ !cancelled() && steps.regressao.outputs.regressao == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --limit 100 \
+                 --json number,mergedAt --jq 'sort_by(.mergedAt) | last | .number // empty')
+          if [ -z "$pr" ]; then
+            echo "::warning::regressão detectada, mas não há PR mergeado para comentar (veja o artefato relatorios-evals)"
+            exit 0
+          fi
+          gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body-file evals/relatorios/comentario.md \
+            || echo "::warning::não consegui comentar no PR #$pr (permissão pull-requests: write?)"

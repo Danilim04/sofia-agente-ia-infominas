@@ -1,0 +1,35 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/abre-ticket-apos-confirmacao.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-001
+descricao: reclamação simples vira ticket só depois do "sim"
+origem: conversa/abre-ticket-apos-confirmacao.yaml
+sessao: {telefone: '+5531999990001', nome_contato: Maria, contato: null}
+jev:
+- intencao: [reclamacao_problema, 0.93]
+  categoria: [sem_conexao, 0.88]
+  prioridade: [2, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.02
+  fora_de_escopo: 0.01
+- intencao: [outro, 0.8]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+- intencao: [confirmacao, 0.95]
+  categoria: [sem_conexao, 0.9]
+  prioridade: [2, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- {cliente: 'minha internet caiu de novo, já reiniciei o modem'}
+- {cliente: 123.456.789-09}
+- {cliente: sim}
+rubrica:
+  criterios: [persona, exatidao, nao_inventa, pede_confirmacao]
+  esperado: Pede o CPF ou contrato com simpatia; depois apresenta o que vai registrar (sem conexão após
+    reiniciar o modem) e pergunta se pode abrir; só informa o número do chamado depois do 'sim', usando
+    o número que a ferramenta devolveu.
+  nao_deve: [abrir o chamado antes do 'sim', prometer prazo de atendimento, inventar o número do chamado]

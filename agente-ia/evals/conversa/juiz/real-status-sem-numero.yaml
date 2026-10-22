@@ -1,0 +1,20 @@
+# Cenário com LLM real + juiz (E4.4). Derivado de evals/conversa/real-status-sem-numero.yaml:
+# mesmas falas do cliente, JEV scriptado e gateway falso; o LLM da Sofia NÃO é scriptado.
+id: juiz-025
+descricao: cobrança de retorno sem número usa a lista de chamados do cliente
+origem: conversa/real-status-sem-numero.yaml
+sessao: {telefone: '+5531999990141', nome_contato: Uri, contato: telefone}
+jev:
+- intencao: [status_chamado, 0.9]
+  categoria: [indefinida, 0.3]
+  prioridade: [1, 0.7]
+  frustracao: [1, 0.8]
+  malicioso: 0.01
+  fora_de_escopo: 0.01
+turnos:
+- {cliente: queria saber se o notebook que deixei aí já ficou pronto}
+rubrica:
+  criterios: [persona, exatidao, nao_inventa]
+  esperado: Sem número informado, consulta a lista de chamados do cliente e conta o que existe (chamado
+    48213, internet sem conexão); deixa claro que não vê andamento de um notebook, sem inventar status.
+  nao_deve: [inventar que o notebook está pronto, prometer prazo]

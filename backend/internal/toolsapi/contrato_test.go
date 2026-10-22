@@ -209,6 +209,54 @@ func TestContrato_ToolsInfodesk(t *testing.T) {
 		a.idk.listErr = &infodesk.ErroRede{Rota: "/tickets", Err: errors.New("timeout")}
 	}, nil, nil)
 
+	// --- cadastro/preparar e cadastro/cadastrar (A8, ADR 0009) ----------------
+	comCad := func(ajusta func(fc *fakeCad)) func(a *amb) {
+		return func(a *amb) {
+			fc := &fakeCad{fakeIdk: a.idk, clientes: []infodesk.Cliente{{ID: idAcme, Nome: "ACME Ltda"}}}
+			if ajusta != nil {
+				ajusta(fc)
+			}
+			a.h.d.Infodesk = fc
+		}
+	}
+	chaveLivre := map[string]bool{"chave": true}
+	tentar("cadastro/preparar", "ok.json", semMod, comCad(nil), nil, chaveLivre)
+	tentar("cadastro/preparar", "erro-campo_invalido.json", semMod, comCad(nil), func(r map[string]any) { r["nome"] = "Maria" }, nil)
+	tentar("cadastro/preparar", "erro-ja_cadastrado.json", semMod, comCad(func(fc *fakeCad) { fc.lookup = lookupComSolicitantes(t, 1) }), nil, nil)
+	tentar("cadastro/preparar", "erro-empresa_nao_encontrada.json", semMod, comCad(func(fc *fakeCad) { fc.clientes = nil }), nil, nil)
+	tentar("cadastro/preparar", "erro-empresa_ambigua.json", semMod, comCad(func(fc *fakeCad) {
+		fc.clientes = []infodesk.Cliente{{ID: idAcme, Nome: "ACME Ltda"}, {ID: idAcmeBrasil, Nome: "ACME Brasil S.A."}}
+	}), func(r map[string]any) { r["empresa"] = "ACME" }, nil)
+	tentar("cadastro/preparar", "erro-cadastro_transferido.json", semMod, func(a *amb) {
+		comCad(func(fc *fakeCad) { fc.clientes = nil })(a)
+		a.prepararCadastro("Maria Souza", "ACME Ltda", "maria@acme.com.br") // 1ª falha; a 2ª (a do contrato) esgota as tentativas
+	}, nil, nil)
+	tentar("cadastro/preparar", "erro-escopo_insuficiente.json", semMod, comCad(func(fc *fakeCad) {
+		fc.clientesErr = &infodesk.HTTPError{Status: 403, Code: infodesk.CodeForbidden}
+	}), nil, nil)
+	tentar("cadastro/preparar", "erro-infodesk_indisponivel.json", semMod, comCad(func(fc *fakeCad) {
+		fc.lookupErr = &infodesk.HTTPError{Status: 503, Code: infodesk.CodeInternalError}
+	}), nil, nil)
+
+	// `cadastrar`: o request.json do contrato leva uma chave ilustrativa; os
+	// cenários que precisam de proposta trocam pela chave real que o `preparar` gravou.
+	var chaveReal string
+	preparada := func(ajusta func(fc *fakeCad)) func(a *amb) {
+		return func(a *amb) {
+			comCad(ajusta)(a)
+			chaveReal = chaveDaProposta(t, a.prepararCadastro("Maria Souza", "ACME Ltda", "maria@acme.com.br"))
+		}
+	}
+	comChaveReal := func(r map[string]any) { r["proposta"].(map[string]any)["chave"] = chaveReal }
+	tentar("cadastro/cadastrar", "ok.json", semMod, preparada(nil), comChaveReal, nil)
+	tentar("cadastro/cadastrar", "erro-sem_proposta.json", semMod, comCad(nil), nil, nil)
+	tentar("cadastro/cadastrar", "erro-escopo_insuficiente.json", semMod, preparada(func(fc *fakeCad) {
+		fc.criarErr = &infodesk.HTTPError{Status: 403, Code: infodesk.CodeForbidden}
+	}), comChaveReal, nil)
+	tentar("cadastro/cadastrar", "erro-infodesk_indisponivel.json", semMod, preparada(func(fc *fakeCad) {
+		fc.criarErr = &infodesk.HTTPError{Status: 503, Code: infodesk.CodeInternalError}
+	}), comChaveReal, nil)
+
 	// --- conversa/transferir -------------------------------------------------
 	suporte := []func(*Deps){func(d *Deps) { d.Opcoes.DepartamentoHumanoPadrao = idDeptSuporte }}
 	tentar("conversa/transferir", "ok.json", suporte, nil, nil, nil)
@@ -274,6 +322,8 @@ func TestContrato_MotivosDoCatalogo(t *testing.T) {
 		"ticket/consultar":    {"nao_encontrado", "posse_nao_verificada", "infodesk_indisponivel"},
 		"ticket/listar":       {"chamados_indisponiveis"},
 		"conversa/transferir": {"ja_transferida", "infodesk_indisponivel"},
+		"cadastro/preparar":   {"campo_invalido", "ja_cadastrado", "empresa_nao_encontrada", "empresa_ambigua", "cadastro_transferido", "escopo_insuficiente", "infodesk_indisponivel"},
+		"cadastro/cadastrar":  {"sem_proposta", "escopo_insuficiente", "infodesk_indisponivel"},
 	}
 	for ep, motivos := range esperados {
 		for _, m := range motivos {

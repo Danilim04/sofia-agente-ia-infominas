@@ -160,6 +160,73 @@ o último passo de `llm` é sempre um `texto`; `espera` só com chaves de
 ou `bloqueado`) — `test_cenarios.py` falha sem ele. Os fakes vêm de
 `tests/fakes.py` (não copie para cá).
 
+## Evals noturnos (E4.4): JEV real e conversa julgada por LLM
+
+`.github/workflows/evals-noturnos.yml` roda toda noite (03:00 de Brasília) e sob
+demanda (`workflow_dispatch`, com o campo opcional `juiz_model`). Não bloqueia merge.
+
+| passo | comando | precisa de |
+|---|---|---|
+| classificação com o JEV real | `pytest -m jev evals` + `python -m evals.classificacao --fonte sintetico --jev --janelas` | secret `TYPESAFE_API_KEY` (P8) |
+| fallback LLM real | `pytest -m llm_real evals` + `python -m evals.classificacao --fonte sintetico --llm` | secret `OPENROUTER_API_KEY` |
+| conversa com LLM real + juiz | `python -m evals.juiz` | secret `OPENROUTER_API_KEY` |
+| regressão | `python -m evals.juiz.regressao` (compara com `evals/baseline.json` e `evals/juiz/baseline.json`) | — |
+
+Sem um secret, o passo correspondente é pulado com um aviso e o job termina verde;
+o resumo da execução lista o que cadastrar em Settings → Secrets and variables →
+Actions. Variável opcional `EVALS_JUIZ_MODEL`: o modelo do juiz (de preferência
+**diferente** do da Sofia; um modelo julgando a si mesmo tende a ser leniente). O
+relatório sai como artefato `relatorios-evals`; havendo regressão > 2 pts, o
+workflow comenta no **último PR mergeado** (`pull-requests: write`) com a tabela do
+que piorou.
+
+### O juiz (`evals/juiz/`)
+
+- **Cenários**: `conversa/juiz/*.yaml` (26, derivados dos cenários determinísticos e
+  dos reais promovidos — cada um aponta a `origem`). Mesmas falas do cliente, JEV
+  scriptado e gateway falso; **o LLM da Sofia não é scriptado** e roda o grafo real.
+  Em vez de `espera:`, a `rubrica`: `criterios` (os que se aplicam, entre `persona`,
+  `exatidao`, `nao_inventa`, `pede_confirmacao`), `esperado` (o que uma resposta
+  excelente faz) e `nao_deve` (o que derruba a nota; todo cenário tem negativo).
+- **Prompt do juiz**: `juiz/prompt_juiz.md`, versionado (`VERSAO_PROMPT`,
+  `SHA256_PROMPT` em `juiz/prompt.py`; um teste falha se o arquivo mudar sem os dois).
+  A conversa entra como DADO entre `<conversa>`…`</conversa>` (tags de fechamento
+  dentro do texto são removidas) e o prompt manda ignorar instruções vindas dela.
+- **Resposta**: JSON `{"criterios": {"<critério>": {"nota": 0-5, "justificativa": "..."}}}`,
+  lido por `juiz/parser.py` (aceita bloco ```json e texto em volta; recusa nota fora de
+  0–5, não inteira ou critério faltando — o cenário vira "juiz inválido", sem nota
+  inventada; uma retentativa com lembrete de formato).
+- **Métricas** (0–100, maior é melhor): `juiz.<critério>.media` (= nota/5·100),
+  `juiz.geral.media` e `juiz.aprovacao` (% de notas ≥ 4). Cenário com erro de execução
+  ou juiz inválido não entra nas médias e aparece no relatório. O detector de persona
+  por regras (`verificar_persona`) roda junto e lista as violações sem passar pelo juiz.
+- **Baseline**: `evals/juiz/baseline.json`, vazio até a primeira rodada real. Depois de
+  ler o relatório: `python -m evals.juiz --atualizar-baseline --justificativa "..."`
+  (recusado se algum cenário ficou sem nota) e commite no mesmo PR. Mudou o prompt do
+  juiz? Regrave o baseline no mesmo PR (a nota muda com o prompt).
+- **Rodada quebrada ≠ sem regressão**: se nenhum cenário recebeu nota (LLM fora do ar,
+  saldo/chave inválidos), `python -m evals.juiz` sai com código 3 e o job fica
+  vermelho; se só parte recebeu, o relatório e o comentário avisam que as médias são
+  parciais; métrica que está no baseline e não saiu na rodada aparece como **sumiu**.
+  No workflow, código 1 só vira "regressão" (aviso) se o `.json` do relatório existe;
+  qualquer outro erro, e `pytest -m jev`/`-m llm_real` vermelhos, deixam o job vermelho
+  (sem bloquear merge), e os passos seguintes continuam rodando (`!cancelled()`).
+  Baseline gravado com outra versão do prompt do juiz não é comparado (avisa).
+- **Ruído**: o juiz é um LLM. Uma queda isolada de ~2 pts é ruído; queda repetida, ou
+  de um critério inteiro, é regressão. Leia as justificativas das notas < 4.
+
+```bash
+cd agente-ia
+venv/Scripts/python.exe -m evals.juiz --sem-executar          # só valida os 26 cenários (sem chave)
+OPENROUTER_API_KEY=... JUIZ_MODEL=... venv/Scripts/python.exe -m evals.juiz   # rodada real (gasta tokens)
+venv/Scripts/python.exe -m evals.juiz --ids saudacao-nao-aciona-ferramentas   # um cenário
+venv/Scripts/python.exe -m pytest -m evals_pr evals/juiz -q   # parser, regressão, cenários, workflow (sem rede)
+```
+
+Os cenários só têm dado fictício (CPFs de exemplo e telefones `+5531999990xxx`); um
+teste confere com o anonimizador. Nunca traga texto de cliente real para cá sem
+passar por `evals.anonimizar` e revisão humana.
+
 ## Anonimizar o histórico (P9)
 
 ```bash

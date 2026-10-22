@@ -1,0 +1,34 @@
+# Comportamento: empresa que o gateway não acha: a 1ª vez a Sofia pede para conferir o nome; na 2ª o gateway já passou a conversa
+# (CADASTRO_SEM_CLIENTE=transferir, hipótese) e a Sofia não segue. O LLM nunca escolhe cliente.
+# Negativo: nada é cadastrado sem clientId e o chamado não é preparado.
+id: conversa-081
+descricao: empresa não encontrada pede conferência e, na segunda falha, o cadastro vai para um atendente
+sessao: {telefone: "+5531999990081", nome_contato: "Maria", contato: null}
+jev:
+  - {intencao: [outro, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [outro, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "Sou Maria Souza, da empresa Fantasma Telecom"
+    gateway: {cadastro/preparar: erro-empresa_nao_encontrada}
+    llm:
+      - tool: preparar_cadastro_solicitante
+        args: {nome: "Maria Souza", empresa: "Fantasma Telecom"}
+      - texto: "Não encontrei essa empresa no cadastro. Pode conferir o nome como está no contrato ou na nota fiscal?"
+    espera:
+      chama: [preparar_cadastro_solicitante]
+      nao_chama: [cadastrar_solicitante, preparar_abertura_chamado, abrir_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/cadastro/cadastrar]
+      tool_viu_contem: ["empresa_nao_encontrada"]
+      contem: ["conferir"]
+  - cliente: "é Fantasma Telecomunicações Ltda"
+    gateway: {cadastro/preparar: erro-cadastro_transferido}
+    llm:
+      - tool: preparar_cadastro_solicitante
+        args: {nome: "Maria Souza", empresa: "Fantasma Telecomunicações Ltda"}
+      - texto: "Vou te passar para um atendente, que segue com você por aqui."
+    espera:
+      chama: [preparar_cadastro_solicitante]
+      nao_chama: [cadastrar_solicitante, preparar_abertura_chamado, abrir_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/cadastro/cadastrar, /tools/infodesk/ticket/preparar]
+      tool_viu_contem: ["cadastro_transferido"]
+      nao_contem: ["prazo", "cadastrei"]

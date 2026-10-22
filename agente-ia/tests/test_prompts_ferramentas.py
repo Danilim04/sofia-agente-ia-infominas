@@ -17,7 +17,7 @@ def test_prompt_manda_repetir_a_observacao_da_lista():
     assert "observação" in trecho
 
 
-def test_prompt_cita_as_6_tools_do_plano():
+def test_prompt_cita_as_8_tools_do_plano():
     for nome in (
         "informar_identificacao",
         "preparar_abertura_chamado",
@@ -25,6 +25,8 @@ def test_prompt_cita_as_6_tools_do_plano():
         "consultar_status_chamado",
         "listar_meus_chamados",
         "transferir_para_atendente",
+        "preparar_cadastro_solicitante",
+        "cadastrar_solicitante",
     ):
         assert f"`{nome}`" in SYSTEM_PROMPT_AGENTE, nome
 
