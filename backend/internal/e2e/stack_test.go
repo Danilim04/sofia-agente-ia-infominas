@@ -404,3 +404,20 @@ func idDoDepartamento(mockURL, nome string) (string, error) {
 	}
 	return "", fmt.Errorf("o mock não tem o departamento %q (dados.json mudou?)", nome)
 }
+
+// caudaUtil é a cauda sem o ruído de 1 linha por segundo do reconciliador
+// ("evento duplicado ignorado" dos eventos que o webhook já entregou), que
+// empurraria para fora do dump o que explica a falha.
+func (l *bufLog) caudaUtil(n int) string {
+	var linhas []string
+	for _, ln := range strings.Split(strings.TrimRight(l.String(), "\n"), "\n") {
+		if strings.Contains(ln, `"delivery":"reconciliador"`) && strings.Contains(ln, "evento duplicado ignorado") {
+			continue
+		}
+		linhas = append(linhas, ln)
+	}
+	if len(linhas) > n {
+		linhas = linhas[len(linhas)-n:]
+	}
+	return strings.Join(linhas, "\n")
+}

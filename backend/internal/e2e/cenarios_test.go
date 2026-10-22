@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -52,12 +53,35 @@ func exigirHandoffNoDepartamento(t *testing.T, conv conversaMock) {
 	}
 }
 
-// 1) A Sofia prepara e abre o chamado pela conversa (duas fases: o cliente
-// confirma com "sim") e o gateway transfere para um humano com nota interna.
+// exigirCerebroFalso pula o cenário no modo E2E_CEREBRO=real: ele depende do
+// roteiro do cérebro falso (resposta determinística e contagem de chamadas a
+// /chat), que o LLM real não oferece.
+func exigirCerebroFalso(t *testing.T) {
+	t.Helper()
+	if pilha.cerebroR {
+		t.Skip("depende do cérebro falso (roteiro e contagem de /chat); com E2E_CEREBRO=real não se aplica")
+	}
+}
+
+// cenario1Rodou: o cenário 1 precisa de um solicitante CADASTRADO no mock (o
+// lookup por telefone dispensa CPF) e só há dois em dados.json. Depois de uma
+// execução esse telefone tem conversa transferida e chamado no gateway (dedup
+// de 24 h), então uma 2ª passada na mesma stack (-count=N) daria um falso
+// alarme. Uma execução por processo; o resto da suíte aceita -count=N.
+var cenario1Rodou atomic.Bool
+
+// 1) O gateway abre o chamado pedido pela conversa e transfere para um humano
+// com nota interna. O cérebro falso faz as duas chamadas de tool (preparar,
+// depois — ao "sim" do cliente — abrir) como o cérebro real; a regra de
+// confirmação em duas fases é do Python (tool_policy) e NÃO é exercida aqui:
+// o que este cenário prova é o lado do gateway — o ticket só nasce quando
+// `ticket/abrir` é chamado, sai vinculado à conversa, na mesa da taxonomia, com
+// handoff e uma nota interna.
 func TestCenario1_TicketPelaConversaEHandoff(t *testing.T) {
 	cenario(t)
-	if pilha.cerebroR {
-		t.Skip("depende do roteiro do cérebro falso; com E2E_CEREBRO=real a resposta do LLM não é determinística")
+	exigirCerebroFalso(t)
+	if cenario1Rodou.Swap(true) {
+		t.Skip("cenário 1 roda uma vez por processo (reusa o solicitante cadastrado do mock); use -count=1")
 	}
 	c := clienteConhecido(t, telefoneConhecido)
 
@@ -67,7 +91,7 @@ func TestCenario1_TicketPelaConversaEHandoff(t *testing.T) {
 		t.Fatalf("1ª resposta deveria pedir a confirmação do chamado\n%s", descreverConversa(&conv))
 	}
 	if n := len(c.estado().ticketsDaConversa(c.ConversaID)); n != 0 {
-		t.Fatalf("o chamado não pode abrir antes da confirmação (duas fases), mas há %d ticket(s)", n)
+		t.Fatalf("nenhum ticket pode existir antes de `ticket/abrir` ser chamado, mas há %d", n)
 	}
 
 	c.diz("sim")
@@ -119,28 +143,34 @@ func TestCenario1_TicketPelaConversaEHandoff(t *testing.T) {
 
 	// A confirmação com o número deveria chegar ao cliente: o handoff pós-ticket
 	// não pode engolir a resposta do turno (o cliente precisa saber o número).
-	// BUG CONHECIDO: hoje ela é descartada ("resposta descartada: a conversa
-	// deixou de ser da Sofia durante o turno") porque o `abrir` já marcou a
-	// conversa como transferida (engine.responder → botConduz). Fica registrado
-	// aqui, sem derrubar a esteira; E2E_ESTRITO=1 transforma em falha.
-	numero := fmt.Sprintf("%d", tk.Number)
+	// BUG CONHECIDO (BUG-E4.1-1; TODO(E-nova): correção em engine/toolsapi): hoje
+	// ela é descartada ("resposta descartada: a conversa deixou de ser da Sofia
+	// durante o turno") porque o `abrir` já marcou a conversa como transferida
+	// (engine.responder → botConduz). Sem E2E_ESTRITO=1 o teste só TOLERA esse
+	// motivo exato (a linha de log da causa é exigida) e registra no log; com
+	// E2E_ESTRITO=1 vira falha. Quando o produto for corrigido o assert passa a
+	// valer sozinho e o `bugConhecido` pode virar um `esperar` comum.
+	reNumero := regexp.MustCompile(`\b` + fmt.Sprint(tk.Number) + `\b`)
 	bugConhecido(t, "BUG-E4.1-1: a resposta do turno com o número do chamado é descartada pelo handoff pós-ticket",
 		func() bool {
 			ult = c.estado()
 			for _, r := range ult.Conversa.respostasDoBot() {
-				if strings.Contains(r, numero) {
+				if reNumero.MatchString(r) {
 					return true
 				}
 			}
 			return false
-		}, func() string { return descreverConversa(ult.Conversa) })
+		},
+		func() bool { return logTem("resposta descartada", c.ConversaID) },
+		func() string { return descreverConversa(ult.Conversa) })
 }
 
 // bugConhecido espera uma condição que o produto AINDA não cumpre. Sem
 // E2E_ESTRITO=1 o descumprimento só é registrado no log do teste (o assert
-// continua aqui, à vista, e passa a valer assim que o produto for corrigido);
-// com E2E_ESTRITO=1 vira falha.
-func bugConhecido(t *testing.T, bug string, cond func() bool, ver func() string) {
+// continua aqui, à vista) — mas só se `causa` confirmar que é ESTE bug; se a
+// condição falha por outro motivo, é falha de verdade. Com E2E_ESTRITO=1 vira
+// falha sempre.
+func bugConhecido(t *testing.T, bug string, cond, causa func() bool, ver func() string) {
 	t.Helper()
 	fim := time.Now().Add(3 * time.Second)
 	for time.Now().Before(fim) {
@@ -152,6 +182,10 @@ func bugConhecido(t *testing.T, bug string, cond func() bool, ver func() string)
 	}
 	if os.Getenv("E2E_ESTRITO") == "1" {
 		t.Errorf("%s\nobservado: %s", bug, ver())
+		return
+	}
+	if !causa() {
+		t.Errorf("a condição falhou, mas NÃO pelo motivo do bug conhecido (%s)\nobservado: %s", bug, ver())
 		return
 	}
 	t.Logf("BUG CONHECIDO (não falha; E2E_ESTRITO=1 falha): %s\nobservado: %s", bug, ver())
@@ -228,6 +262,7 @@ func TestCenario3_PedidoDeAtendente(t *testing.T) {
 // A 2ª entrega recebe 200 e é ignorada: uma resposta, uma chamada ao cérebro.
 func TestCenario4_DedupDeReentrega(t *testing.T) {
 	cenario(t)
+	exigirCerebroFalso(t)
 	c := novoCliente(t)
 
 	c.diz("oi, tudo bem?")
@@ -260,8 +295,8 @@ func TestCenario4_DedupDeReentrega(t *testing.T) {
 		t.Errorf("o gateway deve responder 200 às duas entregas (a 2ª só ignora), respondeu %d e %d", a.Status, b.Status)
 	}
 	esperar(t, "o gateway logar o evento duplicado", 5*time.Second, func() bool {
-		return logTem("evento duplicado ignorado", a.EventoID)
-	}, func() string { return pilha.gateway.log.cauda(8) })
+		return logTem("evento duplicado ignorado", a.EventoID, b.Entrega) // a 2ª entrega do webhook, não o reconciliador
+	}, func() string { return pilha.gateway.log.caudaUtil(8) })
 
 	time.Sleep(assentamento) // se o duplicado fosse processado, a 2ª resposta apareceria aqui
 	if n := len(pilha.cerebro.chamadasDa(c.ConversaID)); n != 1 {
@@ -339,6 +374,7 @@ func conversaIniciada(t *testing.T, c *cliente, texto string) entregaWebhook {
 // o mesmo corpo, com a assinatura certa, ainda é aceito e processado.
 func TestCenario5_HMACInvalido(t *testing.T) {
 	cenario(t)
+	exigirCerebroFalso(t)
 	c := novoCliente(t)
 	molde := conversaIniciada(t, c, "preciso de ajuda com a minha conta")
 	corpo, id := segundaMensagem(t, molde, "continuo sem conseguir entrar")
@@ -375,6 +411,7 @@ func TestCenario5_HMACInvalido(t *testing.T) {
 // (anti-replay). O evento recusado não é consumido: com timestamp atual passa.
 func TestCenario6_TimestampForaDaJanela(t *testing.T) {
 	cenario(t)
+	exigirCerebroFalso(t)
 	c := novoCliente(t)
 	molde := conversaIniciada(t, c, "oi, queria uma informação sobre o meu plano")
 	corpo, id := segundaMensagem(t, molde, "e qual é o prazo de instalação?")
@@ -408,6 +445,7 @@ func TestCenario6_TimestampForaDaJanela(t *testing.T) {
 // o webhook — sem duplicar quando o webhook também chega.
 func TestCenario7_EventoSoNoFeedRecuperadoPeloReconciliador(t *testing.T) {
 	cenario(t)
+	exigirCerebroFalso(t)
 	c := novoCliente(t)
 	e := capturarMensagem(t, c, "oi, o meu pedido ainda não chegou")
 
@@ -425,7 +463,7 @@ func TestCenario7_EventoSoNoFeedRecuperadoPeloReconciliador(t *testing.T) {
 		}
 	}
 	if !logTem("evento enfileirado", e.EventoID, `"delivery":"reconciliador"`) {
-		t.Errorf("o gateway deveria ter recebido o evento %s pelo reconciliador; log:\n%s", e.EventoID, pilha.gateway.log.cauda(12))
+		t.Errorf("o gateway deveria ter recebido o evento %s pelo reconciliador; log:\n%s", e.EventoID, pilha.gateway.log.caudaUtil(12))
 	}
 
 	// O webhook atrasado finalmente chega: já é conhecido, não responde 2×.

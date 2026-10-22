@@ -11,7 +11,13 @@
 // procura o venv do agente-ia e depois python3/python no PATH. Nenhuma rede
 // externa e nenhuma chave: o cérebro falso substitui LLM e JEV.
 //
-// Com `E2E_CEREBRO=real` (e OPENROUTER_API_KEY) o teste sobe o cérebro Python
-// de verdade no lugar do falso; os cenários que dependem de uma resposta
-// scriptada (ticket pela conversa) são pulados nesse modo.
+// Limites conhecidos:
+//
+//   - o cenário 1 usa um solicitante cadastrado do mock e roda UMA vez por
+//     processo (com -count=N as repetições são puladas, com aviso);
+//   - E2E_ESTRITO=1 transforma em falha o bug conhecido registrado no
+//     cenário 1 (BUG-E4.1-1);
+//   - E2E_CEREBRO=real (+ OPENROUTER_API_KEY) sobe o cérebro Python no lugar do
+//     falso, mas só os cenários 2 e 3 (que não dependem do roteiro) valem nesse
+//     modo; os demais são pulados. O modo real ainda não foi exercitado.
 package e2e

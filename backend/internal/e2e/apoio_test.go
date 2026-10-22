@@ -370,7 +370,7 @@ func cenario(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
 		if t.Failed() {
-			t.Logf("--- log do gateway (últimas linhas) ---\n%s", pilha.gateway.log.cauda(25))
+			t.Logf("--- log do gateway (últimas linhas) ---\n%s", pilha.gateway.log.caudaUtil(25))
 			t.Logf("--- log do mock (últimas linhas) ---\n%s", pilha.mock.log.cauda(10))
 		}
 	})
