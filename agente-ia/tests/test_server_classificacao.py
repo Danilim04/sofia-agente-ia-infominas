@@ -34,6 +34,17 @@ CLASSIFICACAO_CHAVES = {"intencao", "categoria", "prioridade", "confianca", "ori
 ORIGENS_TRANSFERENCIA = {"frustracao", "confianca", "pedido_cliente"}
 
 
+@pytest.fixture(autouse=True)
+def _cerebro_sem_autenticacao_nos_testes_da_rota(monkeypatch):
+    """Estes testes exercitam a rota, não a auth (E4.5b: token vazio recusa tudo)."""
+    from src.config import get_settings
+
+    monkeypatch.setenv("BRAIN_SEM_AUTENTICACAO", "true")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 def _contrato(nome: str) -> dict:
     return json.loads((CONTRATOS / nome).read_text(encoding="utf-8"))
 

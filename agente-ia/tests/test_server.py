@@ -18,6 +18,17 @@ from server import ChatRequest, processar_chat
 from src.agent.nodes import PREFIXO_SESSAO_NO_CONFIG
 
 
+@pytest.fixture(autouse=True)
+def _cerebro_sem_autenticacao_nos_testes_da_rota(monkeypatch):
+    """Estes testes exercitam a rota, não a auth (E4.5b: token vazio recusa tudo)."""
+    from src.config import get_settings
+
+    monkeypatch.setenv("BRAIN_SEM_AUTENTICACAO", "true")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 class _FakeGraph:
     """Grafo mínimo: registra o que recebeu e devolve `valores` fixos."""
 

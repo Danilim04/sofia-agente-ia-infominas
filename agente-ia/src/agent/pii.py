@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 #: Validade do valor em claro no cofre: bem acima do prazo do turno
 #: (`BRAIN_TURNO_PRAZO`), para nunca expirar no meio dele.
-COFRE_TTL_S = 300.0
+COFRE_TTL_S = 900.0
 COFRE_MAX_ENTRADAS = 512
 
 #: 11 dígitos, com ou sem a pontuação do CPF, sem dígito colado nas pontas.
@@ -77,8 +77,10 @@ CHAVES_CADASTRO = {
 }
 
 
-def _mascarar_valor(chave: str | None, valor: Any) -> Any:
-    if chave in CHAVES_CADASTRO and isinstance(valor, str):
+def _mascarar_valor(chave: str | None, valor: Any, *, cadastro: bool = False) -> Any:
+    # `cadastro`: só o NÍVEL DE TOPO dos args de uma tool call. Em estruturas aninhadas
+    # (proposta de chamado: `mesa.nome`, `prioridade.nome`) "nome" é dado do gateway.
+    if cadastro and chave in CHAVES_CADASTRO and isinstance(valor, str):
         return CHAVES_CADASTRO[chave] if valor.strip() else valor
     if (
         chave in ("cpf", "contrato")
@@ -109,7 +111,7 @@ def mascarar_estrutura_de_texto(valor: Any) -> Any:
 
 def mascarar_args(args: Mapping[str, Any] | None) -> dict[str, Any]:
     """Args de uma tool call sem CPF/contrato em claro."""
-    return {k: _mascarar_valor(k, v) for k, v in (args or {}).items()}
+    return {k: _mascarar_valor(k, v, cadastro=True) for k, v in (args or {}).items()}
 
 
 def _mascarar_json(bruto: Any) -> Any:
@@ -151,8 +153,18 @@ def mascarar_contatos_no_texto(texto: str) -> str:
     return mascarar_pii(mascarar_cpfs_no_texto(texto), (), apresentacao=True)
 
 
+#: Conectivos de nome ("Maria dos Santos"): mascará-los apagaria a palavra do texto inteiro.
+_CONECTIVOS_DE_NOME = frozenset({"dos", "das", "del", "von", "van", "com", "para"})
+
+
 def tirar_nomes_conhecidos(texto: str, nomes: Iterable[str]) -> str:
-    return mascarar_pii(texto, tuple(n for n in nomes if n and n.strip()), apresentacao=False)
+    """Nomes conhecidos do contato trocados por `<NOME>` no texto do cliente."""
+    limpos = tuple(
+        " ".join(p for p in n.split() if p.lower() not in _CONECTIVOS_DE_NOME)
+        for n in nomes
+        if n and n.strip()
+    )
+    return mascarar_pii(texto, limpos, apresentacao=False)
 
 
 def _mascarar_conteudo(conteudo: Any, *, contatos: bool = False) -> Any:
@@ -336,13 +348,28 @@ def reidratar(mensagens: Iterable[BaseMessage]) -> list[BaseMessage]:
 
 
 def descartar(mensagens: Iterable[BaseMessage]) -> None:
-    """Fim do turno: apaga do cofre o que essas mensagens deixaram lá."""
+    """Fim do turno: apaga do cofre o que tem CPF/contrato em claro.
+
+    O resto (nome, e-mail, telefone digitados no cadastro) fica até o TTL: o cliente
+    entrega esses dados um por mensagem e o modelo precisa relê-los nos turnos
+    seguintes (o checkpoint só tem os placeholders). Tudo em memória do processo.
+    """
     for m in mensagens:
         if not m.id:
             continue
-        _COFRE.remover(_chave_texto(m.id))
+        original = _COFRE.obter(_chave_texto(m.id))
+        if isinstance(original, str) and _CPF_EM_TEXTO.search(original):
+            _COFRE.remover(_chave_texto(m.id))
         for i in range(len(getattr(m, "tool_calls", None) or [])):
-            _COFRE.remover(_chave_args(m.id, i))
+            args = _COFRE.obter(_chave_args(m.id, i))
+            if isinstance(args, Mapping) and ("cpf" in args or "contrato" in args):
+                _COFRE.remover(_chave_args(m.id, i))
+
+
+def lembrar_original(mensagem: BaseMessage, texto_original: str) -> None:
+    """Guarda no cofre o texto de uma mensagem do cliente que acaba de ser reescrita."""
+    if mensagem.id and _COFRE.obter(_chave_texto(mensagem.id)) is None:
+        _COFRE.guardar(_chave_texto(mensagem.id), texto_original)
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +388,8 @@ def _mascarar_estrutura(valor: Any, nomes: tuple[str, ...] = ()) -> Any:
         if nomes and isinstance(m, HumanMessage) and isinstance(m.content, str):
             limpo = tirar_nomes_conhecidos(m.content, nomes)
             if limpo != m.content:
+                # o disco recebe a versão limpa; o modelo do turno seguinte ainda lê o original
+                lembrar_original(m, m.content)
                 m = m.model_copy(update={"content": limpo})
         return m
     if isinstance(valor, dict):

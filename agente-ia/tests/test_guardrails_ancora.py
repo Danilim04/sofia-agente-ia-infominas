@@ -157,3 +157,75 @@ def test_detectores_tipados_e_numeros():
         "4821",
         "5555",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Achados da revisão do PR 44
+# ---------------------------------------------------------------------------
+
+# I2: formas que passavam mesmo com `preparar` ok no turno (ou sem nenhuma tool)
+FRASES_SEM_ANCORA_2 = [
+    ("Chamado aberto com sucesso!", [PREPARAR_OK]),
+    ("Pronto, seu chamado está aberto e a equipe já foi avisada.", [PREPARAR_OK]),
+    ("Já abri pra você.", [PREPARAR_OK]),
+    ("Abri uma solicitação para a equipe técnica.", [PREPARAR_OK]),
+    ("O número do seu chamado é 48213.", [PREPARAR_OK]),
+    ("Seu protocolo é 99887.", [PREPARAR_OK]),
+    ("Te transferi para um atendente.", []),
+    ("Já te passei para um atendente.", [PREPARAR_OK]),
+    ("Te encaminhei para um atendente.", []),
+    ("Um atendente já foi acionado.", []),
+    ("Transferência concluída.", [PREPARAR_OK]),
+    ("Pronto, você já está cadastrado!", [PREPARAR_OK]),
+]
+
+
+@pytest.mark.parametrize(("frase", "tools"), FRASES_SEM_ANCORA_2)
+def test_mais_formas_de_afirmar_sem_a_tool_do_efeito_sao_trocadas(frase, tools):
+    assert _guardrail(frase, *tools) == RESPOSTA_ACAO_SEM_FERRAMENTA, frase
+
+
+@pytest.mark.parametrize(
+    "resposta",
+    [
+        "Seu chamado foi aberto ontem às 14h e está em análise.",
+        "Seu chamado foi criado em 20/10 e segue em andamento.",
+        "O chamado 4821 foi aberto ontem e está em análise.",
+    ],
+)
+def test_status_via_consulta_nao_precisa_repetir_o_numero(resposta):
+    """Caso mais comum da consulta: a resposta pode não citar o número."""
+    assert _guardrail(resposta, CONSULTAR_OK) == resposta
+    assert _guardrail(resposta, LISTAR_OK) == resposta
+
+
+def test_chamado_de_dois_digitos_consultado_nao_e_barrado():
+    consulta = _tm("consultar_status_chamado", {"status": True, "numero": "42"})
+    assert (
+        _guardrail("O chamado 42 foi aberto ontem.", consulta) == "O chamado 42 foi aberto ontem."
+    )
+
+
+def test_status_sem_consulta_nenhuma_continua_barrado():
+    assert _guardrail("Seu chamado foi aberto ontem e está em análise.") == (
+        RESPOSTA_ACAO_SEM_FERRAMENTA
+    )
+
+
+def test_cliente_ja_identificado_pode_ouvir_que_esta_cadastrado():
+    msgs = [HumanMessage(content="oi"), AIMessage(content="Você já está cadastrado, Maria.")]
+    ident = {"forma": "cadastro", "valor_mascarado": "Maria S."}
+    com = nodes.output_guardrail_node(
+        {"messages": msgs, "fontes_usadas": [], "identificacao": ident}
+    )
+    sem = nodes.output_guardrail_node({"messages": msgs, "fontes_usadas": []})
+    assert com == {}
+    assert sem["messages"][0].content == RESPOSTA_ACAO_SEM_FERRAMENTA
+
+
+def test_numero_anunciado_tambem_precisa_vir_de_uma_tool():
+    assert numeros_de_chamado_citados("O número do seu chamado é 48213. Seu protocolo: 99887") == [
+        "48213",
+        "99887",
+    ]
+    assert _guardrail("O número do seu chamado é 99999.", ABRIR_OK) == RESPOSTA_ACAO_SEM_FERRAMENTA

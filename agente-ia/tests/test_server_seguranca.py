@@ -58,8 +58,19 @@ def test_401_nao_diz_qual_parte_falhou(monkeypatch, cliente):
     assert TOKEN not in r.text
 
 
-def test_sem_token_configurado_o_cerebro_fica_aberto_como_antes(monkeypatch, cliente):
+def test_sem_token_configurado_o_cerebro_recusa_fail_closed(monkeypatch, cliente):
+    """Um INFODESK_TOOLS_TOKEN esquecido não deixa o cérebro aberto (E4.5b, I7)."""
     _com_token(monkeypatch, "")
+    monkeypatch.delenv("BRAIN_SEM_AUTENTICACAO", raising=False)
+    get_settings.cache_clear()
+    assert cliente.post("/chat", json=CORPO).status_code == 401
+    assert cliente.post("/encerrar-episodio", json={"conversation_id": "c-1"}).status_code == 401
+
+
+def test_brain_sem_autenticacao_e_a_saida_explicita_de_dev(monkeypatch, cliente):
+    _com_token(monkeypatch, "")
+    monkeypatch.setenv("BRAIN_SEM_AUTENTICACAO", "true")
+    get_settings.cache_clear()
     assert cliente.post("/chat", json=CORPO).status_code == 200
 
 
@@ -69,7 +80,8 @@ def test_health_e_classificar_nao_exigem_o_header_do_gateway(monkeypatch, client
 
 
 def test_mensagem_e_nome_acima_do_limite_viram_422(monkeypatch, cliente):
-    _com_token(monkeypatch, "")
+    _com_token(monkeypatch, TOKEN)
+    cliente.headers.update({"X-Brain-Token": TOKEN})
     grande = {**CORPO, "mensagem": "a" * (server.MENSAGEM_MAX_CHARS + 1)}
     assert cliente.post("/chat", json=grande).status_code == 422
     nome = {**CORPO, "nome_contato": "n" * (server.NOME_CONTATO_MAX_CHARS + 1)}

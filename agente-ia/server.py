@@ -123,15 +123,20 @@ def exigir_token_do_gateway(
 ) -> None:
     """Dependência de /chat e /encerrar-episodio: só o gateway chama.
 
-    Com o segredo configurado (`INFODESK_TOOLS_TOKEN`) o header é obrigatório e
-    comparado em tempo constante — fail-closed: ausente ou errado é 401, sem dizer
-    qual. Sem segredo configurado (dev local, testes) o cérebro fica aberto, como
-    antes, e avisa no log uma vez por processo.
+    O header é obrigatório e comparado em tempo constante — fail-closed: ausente ou
+    errado é 401, sem dizer qual. Segredo NÃO configurado também é 401, a menos que
+    `BRAIN_SEM_AUTENTICACAO=true` (dev local, avisa no log uma vez por processo): um
+    `INFODESK_TOOLS_TOKEN` esquecido em produção não pode deixar o cérebro aberto a
+    quem personifique qualquer telefone.
     """
-    esperado = get_settings().infodesk_tools_token
+    cfg = get_settings()
+    esperado = cfg.infodesk_tools_token
     if not esperado:
-        _avisar_sem_token_uma_vez()
-        return
+        if cfg.brain_sem_autenticacao:
+            _avisar_sem_token_uma_vez()
+            return
+        logger.error("brain_sem_token INFODESK_TOOLS_TOKEN vazio — pedido recusado")
+        raise HTTPException(status_code=401, detail="não autorizado")
     recebido = x_brain_token or ""
     if not hmac.compare_digest(recebido.encode(), esperado.encode()):
         logger.warning("brain_token_recusado presente=%s", bool(x_brain_token))
@@ -145,8 +150,8 @@ def _avisar_sem_token_uma_vez() -> None:
     if not _AVISOU_SEM_TOKEN:
         _AVISOU_SEM_TOKEN.append(True)
         logger.warning(
-            "brain_sem_token INFODESK_TOOLS_TOKEN vazio — /chat e /encerrar-episodio ficam "
-            "abertos (aceitável só em dev local)"
+            "brain_sem_autenticacao BRAIN_SEM_AUTENTICACAO=true — /chat e /encerrar-episodio "
+            "ficam abertos (aceitável só em dev local)"
         )
 
 

@@ -47,6 +47,7 @@ from langchain_core.tools import BaseTool
 
 from src.agent.pii import (
     descartar,
+    lembrar_original,
     mascarar_args,
     mascarar_estrutura_de_texto,
     proteger_mensagem,
@@ -561,9 +562,9 @@ def _formatar_contato(
     )
     dado = contato if contato else identificacao
     if dado:
-        forma = str(dado.get("forma") or "")
+        forma = _nome_para_prompt(dado.get("forma"))
         rotulo = _FORMAS_IDENTIFICACAO.get(forma, forma or "dado")
-        mascarado = dado.get("valor_mascarado") or "informado"
+        mascarado = _nome_para_prompt(dado.get("valor_mascarado")) or "informado"
         linhas.append(f"- identificação: {rotulo} {mascarado} (já validada pelo sistema)")
         nome_cadastro = _nome_para_prompt(dado.get("nome_cadastro"))
         if nome_cadastro:
@@ -1007,6 +1008,7 @@ def make_tools_node(tools: list[BaseTool]) -> Callable[[AgentState], dict]:
                     texto = _texto_de(m.content)
                     limpo = tirar_nomes_conhecidos(texto, nomes_do_cadastro)
                     if limpo != texto:
+                        lembrar_original(m, texto)  # o modelo ainda precisa relê-lo
                         reescritas.append(m.model_copy(update={"content": limpo}))
         return {
             **efeitos_do_turno,
@@ -1074,7 +1076,7 @@ def _turno_executou_ferramenta(messages: Iterable[BaseMessage] | None) -> bool:
 
 #: Tools de leitura cujo resultado pode legitimamente dizer "o chamado N foi aberto em…".
 _TOOLS_DE_CONSULTA = frozenset({"consultar_status_chamado", "listar_meus_chamados"})
-_DIGITOS_RE = re.compile(r"\d{3,}")
+_DIGITOS_RE = re.compile(r"\d{2,}")
 
 #: Que tool(s) ancora(m) cada tipo de afirmação de ação. Os testes que usam tools de
 #: teste (`tests/fakes.py`) acrescentam os nomes delas via monkeypatch.
@@ -1091,7 +1093,10 @@ def _numeros_em(texto: str) -> set[str]:
 
 
 def _afirmacao_sem_ancora(
-    resposta: str, messages: list[BaseMessage], acoes: Iterable[Mapping[str, Any]] | None
+    resposta: str,
+    messages: list[BaseMessage],
+    acoes: Iterable[Mapping[str, Any]] | None,
+    identificado: bool = False,
 ) -> str | None:
     """Motivo (para o log) se a resposta afirma uma ação que NENHUMA tool do efeito executou.
 
@@ -1102,26 +1107,34 @@ def _afirmacao_sem_ancora(
     concluído" exige `cadastrar_solicitante` ok. Além disso, todo número de chamado
     citado tem de constar em algum ToolMessage da conversa ou numa mensagem do
     cliente — número inventado nunca sai. Determinístico: o LLM não é base confiável.
+
+    Mais permissões, ancoradas em fato: uma consulta ok ancora "foi aberto ontem" sem
+    repetir número; quem já está identificado (lookup ou cadastro) pode ouvir "você já
+    está cadastrado". Abertura de turno ANTERIOR não ancora (decisão registrada no PR).
     """
     do_turno = _do_turno(messages)
     oks = [m for m in do_turno if isinstance(m, ToolMessage) and _resultado_de_tool_ok(m)]
     nomes = {m.name for m in oks}
     tipadas = afirmacoes_tipadas(resposta)
 
-    if TIPO_ABERTURA in tipadas and not nomes & ANCORAS[TIPO_ABERTURA]:
+    citados_na_resposta = set(numeros_de_chamado_citados(resposta))
+    abertura_ancorada = bool(nomes & ANCORAS[TIPO_ABERTURA])
+    if TIPO_ABERTURA in tipadas and not abertura_ancorada:
         return f"abertura sem abrir_chamado: {tipadas[TIPO_ABERTURA]}"
-    if TIPO_CHAMADO_ABERTO in tipadas and not nomes & ANCORAS[TIPO_CHAMADO_ABERTO]:
-        em_consulta = set(numeros_de_chamado_citados(resposta))
+    if TIPO_CHAMADO_ABERTO in tipadas and not abertura_ancorada:
         vistos_em_consulta: set[str] = set()
-        for m in oks:
-            if m.name in _TOOLS_DE_CONSULTA:
-                vistos_em_consulta |= _numeros_em(_texto_de(m.content))
-        if not (em_consulta and em_consulta <= vistos_em_consulta):
+        consultou = False
+        for tm in oks:
+            if tm.name in _TOOLS_DE_CONSULTA:
+                consultou = True
+                vistos_em_consulta |= _numeros_em(_texto_de(tm.content))
+        # consulta ok: "seu chamado foi aberto ontem" (sem número) ou com o número consultado
+        if not (consultou and citados_na_resposta <= vistos_em_consulta):
             return f"chamado aberto sem abrir_chamado: {tipadas[TIPO_CHAMADO_ABERTO]}"
     if TIPO_TRANSFERENCIA in tipadas and not nomes & ANCORAS[TIPO_TRANSFERENCIA]:
         if not any(a.get("tipo") == "transferir" for a in acoes or []):
             return f"transferência sem tool nem ação: {tipadas[TIPO_TRANSFERENCIA]}"
-    if TIPO_CADASTRO in tipadas and not nomes & ANCORAS[TIPO_CADASTRO]:
+    if TIPO_CADASTRO in tipadas and not (nomes & ANCORAS[TIPO_CADASTRO] or identificado):
         return f"cadastro sem cadastrar_solicitante: {tipadas[TIPO_CADASTRO]}"
 
     citados = numeros_de_chamado_citados(resposta)
@@ -1173,7 +1186,12 @@ def output_guardrail_node(state: AgentState) -> dict:
         logger.warning("output_guardrail_vazamento_interno len=%d", len(novo))
         logger.debug("output_guardrail_resposta_original %r", novo)
         novo = RESPOSTA_ERRO_INTERNO
-    elif motivo := _afirmacao_sem_ancora(novo, messages, state.get("acoes")):
+    elif motivo := _afirmacao_sem_ancora(
+        novo,
+        messages,
+        state.get("acoes"),
+        identificado=bool(state.get("contato") or state.get("identificacao")),
+    ):
         logger.warning("output_guardrail_acao_sem_ancora motivo=%s len=%d", motivo, len(novo))
         logger.debug("output_guardrail_resposta_original %r", novo)
         novo = RESPOSTA_ACAO_SEM_FERRAMENTA

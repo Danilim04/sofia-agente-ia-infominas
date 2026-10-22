@@ -352,6 +352,12 @@ _PARTICIPIO_ABERTURA = r"(?:abert[oa]s?|criad[oa]s?|gerad[oa]s?|registrad[oa]s?|
 #: 4821 aberto"); só com "foi/ficou" ("foi aberto") ou com os verbos de criação vale.
 _PARTICIPIO_CRIACAO = r"(?:criad[oa]s?|gerad[oa]s?|registrad[oa]s?|cadastrad[oa]s?)"
 
+#: "o número do seu chamado é 48213" · "seu protocolo é 99887" · "protocolo: 99887"
+_ANUNCIO_DE_NUMERO = (
+    r"\b(?:(?:o\s+)?numero\s+d[oa]\s+(?:seu\s+|sua\s+)?(?:chamado|ticket|protocolo)|"
+    r"(?:seu|o)\s+(?:protocolo|ticket|chamado))(?:\s+e\b|\s*:)\s*(?:n[o°º.]*\s*)?(\d{2,})\b"
+)
+
 _AFIRMACOES_TIPADAS_RE: dict[str, tuple[re.Pattern[str], ...]] = {
     TIPO_ABERTURA: (
         re.compile(
@@ -359,6 +365,11 @@ _AFIRMACOES_TIPADAS_RE: dict[str, tuple[re.Pattern[str], ...]] = {
             r"(?:aqui\s+)?(?:o\s+|um\s+|seu\s+|o\s+seu\s+|esse\s+|este\s+)?"
             + _SUBST_CHAMADO
             + r"\b"
+        ),
+        # "já abri pra você" · "abri uma solicitação para a equipe"
+        re.compile(r"\b(?:ja\s+)?(?:abri|criei|gerei)\s+(?:pra|para)\s+(?:voce|vc)\b"),
+        re.compile(
+            r"\b(?:ja\s+)?(?:abri|criei|gerei)\s+(?:uma|a)\s+(?:solicitacao|ocorrencia|demanda)\b"
         ),
     ),
     TIPO_CHAMADO_ABERTO: (
@@ -377,6 +388,11 @@ _AFIRMACOES_TIPADAS_RE: dict[str, tuple[re.Pattern[str], ...]] = {
             + _PARTICIPIO_ABERTURA
             + r"\b"
         ),
+        # "chamado aberto com sucesso" · "seu chamado está aberto e a equipe já foi avisada"
+        re.compile(r"\b(?:chamado|ticket)\s+(?:aberto|criado|registrado)\s+com\s+sucesso\b"),
+        re.compile(r"\b(?:chamado|ticket)\s+esta\s+aberto\s+e\s+a\s+equipe\b"),
+        # "o número do seu chamado é 48213" · "seu protocolo é 99887"
+        re.compile(_ANUNCIO_DE_NUMERO),
         # "foi aberto o chamado 4821"
         re.compile(
             r"\bfoi\s+"
@@ -393,12 +409,16 @@ _AFIRMACOES_TIPADAS_RE: dict[str, tuple[re.Pattern[str], ...]] = {
             r"seu\s+atendimento)\b"
         ),
         re.compile(r"\b(?:estou|estamos)\s+(?:te\s+|lhe\s+)?(?:transferindo|passando)\b"),
+        re.compile(r"\bte\s+(?:transferi|passei|encaminhei)\b"),
+        re.compile(r"\b(?:um\s+)?atendente\s+(?:ja\s+)?foi\s+(?:acionad|chamad|avisad)[oa]\b"),
+        re.compile(r"\btransferencia\s+(?:ja\s+)?(?:concluida|realizada|feita)\b"),
         re.compile(
             r"\b(?:voce|conversa|atendimento)\s+(?:ja\s+)?foi\s+(?:transferid|encaminhad|passad)[oa]s?\b"
         ),
     ),
     TIPO_CADASTRO: (
         re.compile(r"\b(?:ja\s+)?(?:te\s+)?(?:cadastrei|cadastramos)\b"),
+        re.compile(r"\b(?:voce\s+)?(?:ja\s+)?(?:esta|foi)\s+cadastrad[oa]\b"),
         re.compile(
             r"\bcadastro\s+(?:ja\s+)?(?:(?:foi|esta|ficou)\s+)?(?:devidamente\s+)?"
             r"(?:concluid|feito|realizad|finalizad|criad|efetuad|registrad)[oa]s?\b"
@@ -408,8 +428,9 @@ _AFIRMACOES_TIPADAS_RE: dict[str, tuple[re.Pattern[str], ...]] = {
 
 #: "chamado 4821", "ticket nº 4821", "protocolo #4821", "chamado número 4821"
 _NUMERO_CITADO_RE = re.compile(
-    r"\b" + _SUBST_CHAMADO + r"s?\s*(?:n[o°º.]*\s*|numero\s*|\#\s*)?(\d{3,})\b"
+    r"\b" + _SUBST_CHAMADO + r"s?\s*(?:n[o°º.]*\s*|numero\s*|\#\s*)?(\d{2,})\b"
 )
+_NUMERO_ANUNCIADO_RE = re.compile(_ANUNCIO_DE_NUMERO)
 
 
 def afirmacoes_tipadas(texto: str | None) -> dict[str, list[str]]:
@@ -430,9 +451,11 @@ def numeros_de_chamado_citados(texto: str | None) -> list[str]:
     if not texto:
         return []
     vistos: list[str] = []
-    for m in _NUMERO_CITADO_RE.finditer(_alvo(texto)):
-        if m.group(1) not in vistos:
-            vistos.append(m.group(1))
+    alvo = _alvo(texto)
+    for regex in (_NUMERO_CITADO_RE, _NUMERO_ANUNCIADO_RE):
+        for m in regex.finditer(alvo):
+            if m.group(1) not in vistos:
+                vistos.append(m.group(1))
     return vistos
 
 
