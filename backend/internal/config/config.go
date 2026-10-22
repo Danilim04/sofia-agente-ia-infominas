@@ -138,12 +138,20 @@ type Config struct {
 	// só estes números falam com ela; os demais vão direto para um atendente, sem
 	// mensagem ao cliente. Ver testadores.go.
 	TestadoresTelefones []string
+
+	// WebhookSemAutenticacao (WEBHOOK_SEM_AUTENTICACAO, default false): deixa o
+	// gateway subir SEM INFODESK_WEBHOOK_SECRET (webhook sem HMAC). Só dev.
+	// ProducaoAberta (SOFIA_PRODUCAO_ABERTA, default false): opt-in explícito para
+	// atender todo cliente (TESTADORES_TELEFONES vazia). Ver seguranca.go.
+	WebhookSemAutenticacao bool
+	ProducaoAberta         bool
 }
 
 // Avisos lista o que, na configuração carregada, funciona mas merece atenção
 // no boot (o chamador loga cada um em WARN).
 func (c *Config) Avisos() []string {
 	var out []string
+	out = append(out, c.avisosDeSeguranca()...)
 	if c.ToolsAPIToken != "" && c.IdentHashSal == "" {
 		out = append(out, "IDENT_HASH_SAL vazio: o sal dos hashes de CPF/contrato cai no TOOLS_API_TOKEN; "+
 			"rotacionar o TOOLS_API_TOKEN invalida os hashes já gravados (defina um IDENT_HASH_SAL próprio em produção)")
@@ -202,6 +210,8 @@ func Load() (*Config, error) {
 		{&cfg.TransferirAposTicket, "TRANSFERIR_APOS_TICKET", true},
 		{&cfg.DedupConsultaInfodesk, "DEDUP_CONSULTA_INFODESK", true},
 		{&cfg.StrictTaxonomia, "STRICT_TAXONOMIA", false},
+		{&cfg.WebhookSemAutenticacao, "WEBHOOK_SEM_AUTENTICACAO", false},
+		{&cfg.ProducaoAberta, "SOFIA_PRODUCAO_ABERTA", false},
 	}
 	for _, b := range booleanos {
 		v, err := lerBool(b.env, b.def)
@@ -305,6 +315,9 @@ func Load() (*Config, error) {
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("variáveis obrigatórias ausentes: %s", strings.Join(missing, ", "))
+	}
+	if err := cfg.validarSeguranca(); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil

@@ -1,0 +1,93 @@
+package config
+
+import (
+	"fmt"
+	"net/url"
+	"strings"
+)
+
+// Fail-closed da configuração de segurança (E4.5, revisão de segurança v1):
+// o gateway recusa subir com o webhook aberto, com segredos fracos ou em
+// "produção aberta" sem querer. A exceção é o modo dev (ModoDev), que existe
+// para o harness local e o E2E contra o mock-infodesk.
+
+// SegredoMinimo é o tamanho mínimo (caracteres) de TOOLS_API_TOKEN e de
+// INFODESK_WEBHOOK_SECRET fora do modo dev. 32 caracteres aleatórios são
+// 128+ bits em hex; o Infodesk gera o `whsec_…` com folga acima disso.
+const SegredoMinimo = 32
+
+// Modos do atendimento (campo `piloto.modo` do /health).
+const (
+	ModoPiloto = "piloto" // TESTADORES_TELEFONES preenchida: só os testadores falam com a Sofia
+	ModoAberto = "aberto" // lista vazia: todo cliente fala com a Sofia
+)
+
+// ModoDev diz se o gateway roda contra um Infodesk local (mock) ou com a
+// autenticação do webhook desligada de forma explícita: nada disso alcança
+// cliente real. Só neste modo valem segredos curtos e a lista de testadores
+// vazia sem SOFIA_PRODUCAO_ABERTA.
+func (c *Config) ModoDev() bool {
+	return c.WebhookSemAutenticacao || baseURLLocal(c.InfodeskBaseURL)
+}
+
+// baseURLLocal: o host da URL é loopback (localhost, 127.0.0.0/8, ::1 ou
+// *.localhost).
+func baseURLLocal(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "localhost" || strings.HasSuffix(h, ".localhost") || h == "::1" || h == "127.0.0.1" || strings.HasPrefix(h, "127.")
+}
+
+// Modo devolve o modo do atendimento (ModoPiloto ou ModoAberto).
+func (c *Config) Modo() string {
+	if c.TestadoresAtivo() {
+		return ModoPiloto
+	}
+	return ModoAberto
+}
+
+// validarSeguranca aplica as recusas de boot. As mensagens dizem o que fazer e
+// nunca repetem o valor do segredo.
+func (c *Config) validarSeguranca() error {
+	dev := c.ModoDev()
+	if c.InfodeskWebhookSecret == "" && !c.WebhookSemAutenticacao {
+		return fmt.Errorf("INFODESK_WEBHOOK_SECRET vazio: o webhook ficaria aberto a qualquer um. " +
+			"Defina o segredo (HMAC) do webhook do Infodesk; só em dev, WEBHOOK_SEM_AUTENTICACAO=true")
+	}
+	if !dev {
+		if c.InfodeskWebhookSecret != "" && len(c.InfodeskWebhookSecret) < SegredoMinimo {
+			return fmt.Errorf("INFODESK_WEBHOOK_SECRET curto demais (%d caracteres): o mínimo é %d fora do modo dev", len(c.InfodeskWebhookSecret), SegredoMinimo)
+		}
+		if c.ToolsAPIToken != "" && len(c.ToolsAPIToken) < SegredoMinimo {
+			return fmt.Errorf("TOOLS_API_TOKEN curto demais (%d caracteres): o mínimo é %d fora do modo dev", len(c.ToolsAPIToken), SegredoMinimo)
+		}
+	}
+	if !c.TestadoresAtivo() && !c.ProducaoAberta && !dev {
+		return fmt.Errorf("TESTADORES_TELEFONES vazia: com ela vazia TODO cliente que escrever cai na Sofia, em silêncio. " +
+			"Preencha a lista (homologação) ou, para abrir de propósito, SOFIA_PRODUCAO_ABERTA=true")
+	}
+	return nil
+}
+
+// avisosDeSeguranca são os WARN de boot dos modos que funcionam mas expõem
+// risco (chamado por Avisos).
+func (c *Config) avisosDeSeguranca() []string {
+	var out []string
+	if c.InfodeskWebhookSecret == "" {
+		out = append(out, "WEBHOOK_SEM_AUTENTICACAO=true: o webhook NÃO verifica a assinatura (HMAC); qualquer um que alcance o gateway injeta mensagens. Só dev")
+	}
+	if c.ModoDev() {
+		if c.InfodeskWebhookSecret != "" && len(c.InfodeskWebhookSecret) < SegredoMinimo {
+			out = append(out, fmt.Sprintf("modo dev: INFODESK_WEBHOOK_SECRET com %d caracteres (mínimo de %d fora do dev)", len(c.InfodeskWebhookSecret), SegredoMinimo))
+		}
+		if c.ToolsAPIToken != "" && len(c.ToolsAPIToken) < SegredoMinimo {
+			out = append(out, fmt.Sprintf("modo dev: TOOLS_API_TOKEN com %d caracteres (mínimo de %d fora do dev)", len(c.ToolsAPIToken), SegredoMinimo))
+		}
+	} else if !c.TestadoresAtivo() {
+		out = append(out, "PRODUÇÃO ABERTA (SOFIA_PRODUCAO_ABERTA=true, TESTADORES_TELEFONES vazia): TODO cliente que escrever fala com a Sofia")
+	}
+	return out
+}

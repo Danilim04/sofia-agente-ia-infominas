@@ -62,7 +62,7 @@ Sempre **200** enquanto o processo atende (o healthcheck do compose mede "está 
   "uptime_s": 3600,
   "referencia":    {"carregada": true, "ultima_leitura_ok": "…", "ultimo_erro_em": null},
   "taxonomia":     {"habilitada": true, "carregada": true, "valida": true, "placeholder": true, "problemas": 0},
-  "piloto":        {"ativo": false, "numeros": 0},
+  "piloto":        {"ativo": false, "modo": "aberto", "numeros": 0},
   "reconciliador": {"ativo": true, "ultimo_seq": 120, "ultimo_seq_webhook": 125,
                     "feed": {"estado": "sem_escopo", "ultima_leitura_ok": null, "ultimo_erro_em": "…", "ultimo_erro": "HTTP 403 FORBIDDEN"}}
 }
@@ -78,7 +78,7 @@ Sem segredo, URL, nome nem telefone: só flags, contagens, instantes e a **class
 | `taxonomia.inferida` | o boot não carregou e a referência foi lida depois: `carregada=true`, mas ninguém conferiu as divergências (`valida=false`, motivo `taxonomia_nao_verificada`). Reinicie o gateway ou veja o alerta `taxonomia_invalida` |
 | `taxonomia.placeholder` | `config/taxonomia.yaml` ainda é a hipótese de trabalho (P1): não é degradação, é aviso |
 | `taxonomia.problemas` | divergências vistas no carregamento do boot (nomes de mesa/departamento/prioridade que o Infodesk não tem) |
-| `piloto.ativo` / `piloto.numeros` | a lista de testadores (`TESTADORES_TELEFONES`) está ligada e quantos números únicos tem; **nunca** os números. Não degrada o status: é uma escolha. Ver a seção 7 |
+| `piloto.modo` / `piloto.ativo` / `piloto.numeros` | `modo` = `piloto` (lista de testadores ligada) ou `aberto` (todo cliente fala com a Sofia);  a lista de testadores (`TESTADORES_TELEFONES`) está ligada e quantos números únicos tem; **nunca** os números. Não degrada o status: é uma escolha. Ver a seção 7 |
 | `reconciliador.ativo` | `RECONCILIA_ATIVO` |
 | `reconciliador.ultimo_seq` / `ultimo_seq_webhook` | cursor do feed processado pelo reconciliador × maior `seq` visto pelo webhook. Parado com tráfego = feed/ciclo travado |
 | `reconciliador.feed.estado` | `ok`, `sem_leitura` (ainda não leu neste processo), `sem_escopo` (403), `falhando` (rede/5xx) |
@@ -150,6 +150,7 @@ Cada caso: **sintoma → onde olhar → causa provável → o que fazer**.
 | `reconciliador_feed_falhando` | reconciliador | o feed falha há várias execuções seguidas |
 | `ticket_pendente_falhou` / `ticket_pendente_nao_checado` | reconciliador | ticket pendente passou do TTL sem aparecer / sem como conferir |
 | `taxonomia_invalida` | toolsapi / boot | divergência, categoria sem mapa ou referência fora no boot |
+| `producao_aberta` | boot | o gateway subiu sem lista de testadores (`SOFIA_PRODUCAO_ABERTA=true`): todo cliente fala com a Sofia (seção 7) |
 
 O mesmo `tipo` + conversa não repete dentro de 5 minutos. Destino: log `sofia_alerta` (sempre) e `ALERTA_WEBHOOK_URL` (opcional; `{"text": …}`, compatível com Slack/Discord/n8n). Título e texto são mascarados contra PII antes de sair.
 
@@ -174,7 +175,7 @@ O Infodesk não tem ambiente de homologação e a flag **"Conduz o atendimento"*
 2. **Só depois** ligue "Conduz o atendimento" na chave `sofia-agente-ia` (Configurações gerais › Integrações).
 3. Teste com um número da lista (a Sofia responde) e confirme com um número de fora que a conversa vai à fila com a nota, sem mensagem ao cliente.
 
-**Como desligar** (abrir para todos): deixe `TESTADORES_TELEFONES` vazia e reinicie o gateway; `piloto.ativo` volta a `false`. Para sair do modo bot externo de vez, desligue a flag "Conduz o atendimento" na chave: as conversas voltam ao fluxo normal do Desk (as já em curso com a Sofia seguem até o handoff/encerramento).
+**Como desligar** (abrir para todos): deixe `TESTADORES_TELEFONES` vazia **e defina `SOFIA_PRODUCAO_ABERTA=true`** (sem isso o boot falha com mensagem clara: a produção aberta é um opt-in explícito) e reinicie o gateway; `piloto.modo` vira `aberto`, o boot loga o WARN `PRODUÇÃO ABERTA…` e emite o alerta `producao_aberta`. Em dev (Infodesk local, o mock) o opt-in não é exigido. Para sair do modo bot externo de vez, desligue a flag "Conduz o atendimento" na chave: as conversas voltam ao fluxo normal do Desk (as já em curso com a Sofia seguem até o handoff/encerramento).
 
 > **Risco:** com a flag **ligada** e a lista **vazia**, **todos os clientes** caem na Sofia, sem filtro, e os atendentes só são avisados no handoff. Nunca ligue a flag antes de preencher a lista (passo 1 antes do 2) e nunca esvazie a lista com a flag ligada sem querer abrir para todos.
 
@@ -182,3 +183,15 @@ O Infodesk não tem ambiente de homologação e a flag **"Conduz o atendimento"*
 
 - **Conversa reaberta** (mesmo `id`, volta ao bot externo depois de `finished` ou de nova sessão): cada episódio de um número de fora faz um novo handoff silencioso.
 - **`DEPARTAMENTO_HUMANO_PADRAO` vazio** com a lista ligada não derruba o boot (só avisa): os clientes de fora vão para a distribuição automática do Infodesk, sem departamento. Preencha antes de ligar.
+
+## 8. Fail-closed do boot (segredos e modo aberto)
+
+O gateway **recusa subir** (`config inválida`, sem repetir o valor do segredo) quando:
+
+| Situação | O que fazer |
+|---|---|
+| `INFODESK_WEBHOOK_SECRET` vazio | defina o `whsec_…` do webhook. Só em dev: `WEBHOOK_SEM_AUTENTICACAO=true` (o boot avisa que o webhook fica sem HMAC) |
+| `INFODESK_WEBHOOK_SECRET` ou `TOOLS_API_TOKEN` com menos de 32 caracteres | gere um maior (`openssl rand -hex 32`). `TOOLS_API_TOKEN` vazio = API de tools desligada, não é erro |
+| `TESTADORES_TELEFONES` vazia (ou só vírgulas) sem `SOFIA_PRODUCAO_ABERTA=true` | preencha a lista (homologação) ou abra de propósito com `SOFIA_PRODUCAO_ABERTA=true` |
+
+**Modo dev** = `INFODESK_BASE_URL` com host loopback (`localhost`, `127.0.0.1`, `::1`, `*.localhost`: o mock-infodesk do harness e do E2E) ou `WEBHOOK_SEM_AUTENTICACAO=true`. Nele valem segredos curtos e a lista vazia sem o opt-in, com WARN no boot. `scripts/start-all.sh` já passa `INFODESK_WEBHOOK_SECRET` e `TOOLS_API_TOKEN` (curtos: `segredo-mock`, `dev-token`) e aponta para o mock, então segue funcionando sem mudança.

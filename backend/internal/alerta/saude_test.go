@@ -198,7 +198,7 @@ func TestSaudeJSONTemSoAsChavesDocumentadas(t *testing.T) {
 		"referencia":    "carregada ultima_leitura_ok ultimo_erro ultimo_erro_em",
 		"taxonomia":     "carregada habilitada inferida placeholder problemas valida",
 		"reconciliador": "ativo feed ultimo_seq ultimo_seq_webhook",
-		"piloto":        "ativo numeros",
+		"piloto":        "ativo modo numeros",
 	}
 	for k, v := range quer {
 		if got := chaves(m[k].(map[string]any)); got != v {
@@ -253,12 +253,12 @@ func TestSondaNilEhSegura(t *testing.T) {
 func TestSaudePilotoLigadoEDesligado(t *testing.T) {
 	s, _, _ := saudeSaudavel()
 	r := s.Relatorio(context.Background())
-	if r.Piloto.Ativo || r.Piloto.Numeros != 0 {
+	if r.Piloto.Ativo || r.Piloto.Numeros != 0 || r.Piloto.Modo != ModoAberto {
 		t.Fatalf("desligado por padrão: %+v", r.Piloto)
 	}
 	s.Testadores = 3
 	r = s.Relatorio(context.Background())
-	if !r.Piloto.Ativo || r.Piloto.Numeros != 3 || r.Status != "ok" {
+	if !r.Piloto.Ativo || r.Piloto.Numeros != 3 || r.Piloto.Modo != ModoPiloto || r.Status != "ok" {
 		t.Fatalf("ligado com 3: %+v status=%s", r.Piloto, r.Status)
 	}
 }

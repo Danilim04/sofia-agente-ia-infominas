@@ -96,10 +96,14 @@ func run() int {
 	// Infodesk (taxonomia) e do feed /events (reconciliador).
 	sondaReferencia, sondaFeed, fotoTax := alerta.NovaSonda(nil), alerta.NovaSonda(nil), &fotoTaxonomia{}
 	log.Info("chave do Infodesk validada", "key_id", me.KeyID, "nome_chave", nomeChave, "escopos", len(me.Scopes))
-
-	if cfg.InfodeskWebhookSecret == "" && cfg.WebhookToken == "" {
-		log.Warn("webhook SEM autenticação: defina INFODESK_WEBHOOK_SECRET (HMAC) ou WEBHOOK_TOKEN (?token=...)")
+	// Produção aberta (lista de testadores vazia + SOFIA_PRODUCAO_ABERTA): o opt-in
+	// foi explícito, mas quem acompanha o alerta precisa saber que TODO cliente fala
+	// com a Sofia (E4.5, I6). Em dev (Infodesk local) não alerta.
+	if cfg.Modo() == config.ModoAberto && !cfg.ModoDev() {
+		eng.Vigia().Aviso(alerta.TipoProducaoAberta, "Sofia em PRODUÇÃO ABERTA",
+			"O gateway subiu sem lista de testadores (SOFIA_PRODUCAO_ABERTA=true): todo cliente que escrever fala com a Sofia. Se isto não era a intenção, preencha TESTADORES_TELEFONES e reinicie.", "")
 	}
+
 	// O token NÃO vai ao log (segredo): a URL logada mostra só onde ele entra.
 	log.Info("configure este URL no webhook do Infodesk", "url", webhookURL(cfg, true), "brain", cfg.BrainBaseURL)
 	srv := webhook.NewServer(webhook.Options{

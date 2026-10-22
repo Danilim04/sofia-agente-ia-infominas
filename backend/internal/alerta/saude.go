@@ -145,11 +145,19 @@ type respostaTaxonomia struct {
 	Inferida bool `json:"inferida"`
 }
 
+// Modos do atendimento no /health (piloto.modo).
+const (
+	ModoPiloto = "piloto"
+	ModoAberto = "aberto"
+)
+
 // respostaPiloto diz se só os testadores falam com a Sofia (E3.9) e quantos são.
 // Nunca lista os números. Não degrada o status: é uma escolha, não uma falha.
 type respostaPiloto struct {
-	Ativo   bool `json:"ativo"`
-	Numeros int  `json:"numeros"`
+	// Modo: "piloto" (lista de testadores ligada) ou "aberto" (todo cliente fala com a Sofia).
+	Modo    string `json:"modo"`
+	Ativo   bool   `json:"ativo"`
+	Numeros int    `json:"numeros"`
 }
 
 type respostaFeed struct {
@@ -237,7 +245,10 @@ func (s *Saude) Relatorio(ctx context.Context) RespostaSaude {
 		}
 	}
 
-	r.Piloto = respostaPiloto{Ativo: s.Testadores > 0, Numeros: s.Testadores}
+	r.Piloto = respostaPiloto{Modo: ModoAberto, Ativo: s.Testadores > 0, Numeros: s.Testadores}
+	if s.Testadores > 0 {
+		r.Piloto.Modo = ModoPiloto
+	}
 
 	feed := s.Feed.foto()
 	estado := feed.estado
