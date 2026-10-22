@@ -191,13 +191,14 @@ func TestSaudeJSONTemSoAsChavesDocumentadas(t *testing.T) {
 	if err := json.Unmarshal(corpo, &m); err != nil {
 		t.Fatal(err)
 	}
-	if got, quer := chaves(m), "motivos quando reconciliador referencia status taxonomia uptime_s"; got != quer {
+	if got, quer := chaves(m), "motivos piloto quando reconciliador referencia status taxonomia uptime_s"; got != quer {
 		t.Fatalf("chaves de topo = %q, quer %q", got, quer)
 	}
 	quer := map[string]string{
 		"referencia":    "carregada ultima_leitura_ok ultimo_erro ultimo_erro_em",
 		"taxonomia":     "carregada habilitada inferida placeholder problemas valida",
 		"reconciliador": "ativo feed ultimo_seq ultimo_seq_webhook",
+		"piloto":        "ativo numeros",
 	}
 	for k, v := range quer {
 		if got := chaves(m[k].(map[string]any)); got != v {
@@ -244,5 +245,20 @@ func TestSondaNilEhSegura(t *testing.T) {
 	s.Falha("x", "y")
 	if s.Carregada() {
 		t.Fatal("sonda nil não está carregada")
+	}
+}
+
+// A lista de testadores (E3.9) aparece só como ligada/contagem; desligada por
+// padrão, e ligá-la não degrada o status (é uma escolha, não uma falha).
+func TestSaudePilotoLigadoEDesligado(t *testing.T) {
+	s, _, _ := saudeSaudavel()
+	r := s.Relatorio(context.Background())
+	if r.Piloto.Ativo || r.Piloto.Numeros != 0 {
+		t.Fatalf("desligado por padrão: %+v", r.Piloto)
+	}
+	s.Testadores = 3
+	r = s.Relatorio(context.Background())
+	if !r.Piloto.Ativo || r.Piloto.Numeros != 3 || r.Status != "ok" {
+		t.Fatalf("ligado com 3: %+v status=%s", r.Piloto, r.Status)
 	}
 }

@@ -62,6 +62,7 @@ Sempre **200** enquanto o processo atende (o healthcheck do compose mede "está 
   "uptime_s": 3600,
   "referencia":    {"carregada": true, "ultima_leitura_ok": "…", "ultimo_erro_em": null},
   "taxonomia":     {"habilitada": true, "carregada": true, "valida": true, "placeholder": true, "problemas": 0},
+  "piloto":        {"ativo": false, "numeros": 0},
   "reconciliador": {"ativo": true, "ultimo_seq": 120, "ultimo_seq_webhook": 125,
                     "feed": {"estado": "sem_escopo", "ultima_leitura_ok": null, "ultimo_erro_em": "…", "ultimo_erro": "HTTP 403 FORBIDDEN"}}
 }
@@ -77,6 +78,7 @@ Sem segredo, URL, nome nem telefone: só flags, contagens, instantes e a **class
 | `taxonomia.inferida` | o boot não carregou e a referência foi lida depois: `carregada=true`, mas ninguém conferiu as divergências (`valida=false`, motivo `taxonomia_nao_verificada`). Reinicie o gateway ou veja o alerta `taxonomia_invalida` |
 | `taxonomia.placeholder` | `config/taxonomia.yaml` ainda é a hipótese de trabalho (P1): não é degradação, é aviso |
 | `taxonomia.problemas` | divergências vistas no carregamento do boot (nomes de mesa/departamento/prioridade que o Infodesk não tem) |
+| `piloto.ativo` / `piloto.numeros` | a lista de testadores (`TESTADORES_TELEFONES`) está ligada e quantos números únicos tem; **nunca** os números. Não degrada o status: é uma escolha. Ver a seção 7 |
 | `reconciliador.ativo` | `RECONCILIA_ATIVO` |
 | `reconciliador.ultimo_seq` / `ultimo_seq_webhook` | cursor do feed processado pelo reconciliador × maior `seq` visto pelo webhook. Parado com tráfego = feed/ciclo travado |
 | `reconciliador.feed.estado` | `ok`, `sem_leitura` (ainda não leu neste processo), `sem_escopo` (403), `falhando` (rede/5xx) |
@@ -158,3 +160,25 @@ O mesmo `tipo` + conversa não repete dentro de 5 minutos. Destino: log `sofia_a
 - **`agent/nodes.py` loga os valores dos args das tools em INFO** (`agent_tool_calls`), contra o que o catálogo promete para `tool_exec`. Fora da zona: trocar por `sorted(args)`. Até lá, só a máscara do formatter protege (um nº de contrato curto, < 9 dígitos, passa por ela).
 - **A métrica `jev_indisponivel` conta pelo log** do roteador (nome do evento), por isso exige `LOG_LEVEL` ≤ WARNING. Chamar `metricas.contar("jev_indisponivel")` direto no roteador tiraria essa dependência.
 - **Sem servidor de métricas** (Prometheus): os contadores vivem em memória e no log `sofia_metrica`.
+
+## 7. Lista de testadores (homologação em produção)
+
+O Infodesk não tem ambiente de homologação e a flag **"Conduz o atendimento"** da chave vale para a **organização inteira** (`docs/infodesk/08` e `10` §4): ligada, toda conversa nova de WhatsApp individual nasce com `handledBy = EXTERNAL_BOT` e os atendentes **não são avisados** até o handoff. A lista de testadores deixa só um grupo de números falar com a Sofia enquanto isso.
+
+**Como funciona.** Com `TESTADORES_TELEFONES` preenchida, uma `message.received` que passa no filtro de turno e vem de número **fora** da lista não vai ao cérebro: o gateway faz **handoff imediato** para `DEPARTAMENTO_HUMANO_PADRAO`, **sem enviar nenhuma mensagem ao cliente**, com a nota por código `Sofia → humano · motivo: fora do grupo de teste da Sofia`, e marca a conversa como `transferida`. Uma vez por episódio (rajada = um handoff só; as mensagens seguintes encontram a conversa muda). O handoff que falhar ganha a marca de "não confirmado" e o reconciliador o repete (seção 4). Fora do piloto **não** é falha: com o handoff ok, não gera ocorrência `SOF-…`, nem log ERROR `sofia_falha`, nem alerta (a trilha é o evento `transferencia` com `origem=fora_do_piloto` e o INFO `fora_do_piloto` com o telefone mascarado). Se o Infodesk recusar o handoff, valem os alertas `handoff_falhou`/`handoff_nao_confirmado` (um por conversa, a cada 5 min) e a repetição da seção 4. Qualquer outro caminho que transfira um número de fora (o vigia `BOT_TIMEOUT_HANDOFF`, por exemplo) vira essa mesma transferência silenciosa.
+
+**Telefones.** E.164, separados por vírgula, comparados como o lookup do Infodesk: com ou sem `+55` e com ou sem o 9º dígito dos celulares são o mesmo número (`+5531990000000`, `31990000000` e `553190000000` casam). Com `+55` o número tem de estar completo (12 ou 13 dígitos) e zero de tronco (`031…`) é recusado: número truncado não pode virar o de outra pessoa. Evento sem telefone legível, com a lista ligada, conta como fora (na dúvida, humano). Item que não é telefone derruba o boot (`config inválida … TESTADORES_TELEFONES`).
+
+**Como ligar**
+1. Preencha `TESTADORES_TELEFONES=+5531990000000,+5511988887777` e `DEPARTAMENTO_HUMANO_PADRAO` (sem ele o handoff vai à distribuição automática) no `.env` do gateway e **reinicie o gateway**. O boot loga um WARN `TESTADORES_TELEFONES LIGADA com N número(s)…`; confira `GET /health` → `piloto: {"ativo": true, "numeros": N}`.
+2. **Só depois** ligue "Conduz o atendimento" na chave `sofia-agente-ia` (Configurações gerais › Integrações).
+3. Teste com um número da lista (a Sofia responde) e confirme com um número de fora que a conversa vai à fila com a nota, sem mensagem ao cliente.
+
+**Como desligar** (abrir para todos): deixe `TESTADORES_TELEFONES` vazia e reinicie o gateway; `piloto.ativo` volta a `false`. Para sair do modo bot externo de vez, desligue a flag "Conduz o atendimento" na chave: as conversas voltam ao fluxo normal do Desk (as já em curso com a Sofia seguem até o handoff/encerramento).
+
+> **Risco:** com a flag **ligada** e a lista **vazia**, **todos os clientes** caem na Sofia, sem filtro, e os atendentes só são avisados no handoff. Nunca ligue a flag antes de preencher a lista (passo 1 antes do 2) e nunca esvazie a lista com a flag ligada sem querer abrir para todos.
+
+**Limites.** A lista é lida no boot (mudar exige reiniciar). Conversa que já estava com a Sofia (estado `bot`) quando a lista foi ligada passa pelo mesmo filtro na próxima mensagem. O filtro está na engine (`processarLote`), então vale para o webhook e para os eventos recuperados pelo feed. Além disso:
+
+- **Conversa reaberta** (mesmo `id`, volta ao bot externo depois de `finished` ou de nova sessão): cada episódio de um número de fora faz um novo handoff silencioso.
+- **`DEPARTAMENTO_HUMANO_PADRAO` vazio** com a lista ligada não derruba o boot (só avisa): os clientes de fora vão para a distribuição automática do Infodesk, sem departamento. Preencha antes de ligar.

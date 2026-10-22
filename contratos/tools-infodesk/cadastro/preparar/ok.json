@@ -1,0 +1,10 @@
+{
+  "status": true,
+  "proposta": {
+    "empresa": {
+      "nome": "ACME Ltda"
+    },
+    "telefone_mascarado": "****0001",
+    "chave": "47065c9a-a6eda48e-147b5417-34fc27a1-115a34e2-7bccd140-f6b7eb85-50b28a4f"
+  }
+}

@@ -8,12 +8,19 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // Valores de IDENT_LOOKUP_AMBIGUO.
 const IdentAmbiguoPedirCPF = "pedir_cpf"
+
+// Valores de CADASTRO_SEM_CLIENTE (ADR 0009; hipótese, TODO(decisão do produto)).
+const (
+	CadastroSemClienteTransferir = "transferir" // handoff com nota por código
+	CadastroSemClienteOferecer   = "oferecer"   // só orienta o cliente a falar com um atendente
+)
 
 // Config agrega todos os parâmetros de execução do gateway.
 type Config struct {
@@ -114,6 +121,9 @@ type Config struct {
 	TicketDedupJanela     time.Duration // TICKET_DEDUP_JANELA (24h): mesma categoria + telefone nesta janela = chamado já aberto
 	DedupConsultaInfodesk bool          // DEDUP_CONSULTA_INFODESK (true): consulta tickets abertos do telefone no Infodesk (07 T5)
 	IdentContratoRE       string        // IDENT_CONTRATO_RE (^\d{4,12}$): formato aceito de número de contrato
+	// Cadastro de solicitante (E5.3, ADR 0009). Hipóteses sem decisão do produto.
+	CadastroSemCliente    string // CADASTRO_SEM_CLIENTE (transferir|oferecer): empresa não achada/ambígua após as tentativas
+	CadastroMaxTentativas int    // CADASTRO_MAX_TENTATIVAS (2): falhas de empresa antes de desistir
 	// IdentHashSal: sal do hash do CPF/contrato (IDENT_HASH_SAL). Vazio = usa o
 	// TOOLS_API_TOKEN, e rotacionar o token invalida os hashes já gravados.
 	IdentHashSal string
@@ -122,6 +132,12 @@ type Config struct {
 	// taxonomia; vazio = procura nos caminhos padrão (taxonomia.CaminhoDoAmbiente).
 	StrictTaxonomia bool
 	TaxonomiaPath   string
+
+	// TestadoresTelefones (TESTADORES_TELEFONES, E3.9): lista de telefones E.164
+	// separados por vírgula. Vazia = desligada (todo mundo fala com a Sofia). Ligada,
+	// só estes números falam com ela; os demais vão direto para um atendente, sem
+	// mensagem ao cliente. Ver testadores.go.
+	TestadoresTelefones []string
 }
 
 // Avisos lista o que, na configuração carregada, funciona mas merece atenção
@@ -131,6 +147,15 @@ func (c *Config) Avisos() []string {
 	if c.ToolsAPIToken != "" && c.IdentHashSal == "" {
 		out = append(out, "IDENT_HASH_SAL vazio: o sal dos hashes de CPF/contrato cai no TOOLS_API_TOKEN; "+
 			"rotacionar o TOOLS_API_TOKEN invalida os hashes já gravados (defina um IDENT_HASH_SAL próprio em produção)")
+	}
+	if c.TestadoresAtivo() {
+		out = append(out, fmt.Sprintf("TESTADORES_TELEFONES LIGADA com %d número(s): SÓ eles falam com a Sofia; todo outro cliente que "+
+			"escrever é passado direto a um atendente, sem resposta automática. Para a produção aberta, deixe a variável vazia",
+			len(c.Testadores())))
+		if c.DepartamentoHumanoPadrao == "" {
+			out = append(out, "TESTADORES_TELEFONES ligada com DEPARTAMENTO_HUMANO_PADRAO vazio: os clientes de fora do grupo "+
+				"vão para a distribuição automática do Infodesk, sem departamento")
+		}
 	}
 	return out
 }
@@ -160,6 +185,7 @@ func Load() (*Config, error) {
 		IdentLookupAmbiguo:       strings.ToLower(strings.TrimSpace(getenv("IDENT_LOOKUP_AMBIGUO", IdentAmbiguoPedirCPF))),
 		IdentContratoRE:          getenv("IDENT_CONTRATO_RE", `^\d{4,12}$`),
 		IdentHashSal:             os.Getenv("IDENT_HASH_SAL"),
+		CadastroSemCliente:       strings.ToLower(strings.TrimSpace(getenv("CADASTRO_SEM_CLIENTE", CadastroSemClienteTransferir))),
 		TaxonomiaPath:            strings.TrimSpace(getenv("TAXONOMIA_PATH", "")),
 	}
 
@@ -210,6 +236,11 @@ func Load() (*Config, error) {
 		}
 		*d.dst = v
 	}
+	testadores, err := parseTestadores(os.Getenv("TESTADORES_TELEFONES"))
+	if err != nil {
+		return nil, err
+	}
+	cfg.TestadoresTelefones = testadores
 	if _, err := regexp.Compile(cfg.IdentContratoRE); err != nil {
 		return nil, fmt.Errorf("IDENT_CONTRATO_RE inválido: %w", err)
 	}
@@ -236,6 +267,18 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("%s inválido: %w", d.env, err)
 		}
 		*d.dst = v
+	}
+
+	if cfg.CadastroSemCliente != CadastroSemClienteTransferir && cfg.CadastroSemCliente != CadastroSemClienteOferecer {
+		return nil, fmt.Errorf("CADASTRO_SEM_CLIENTE inválido (%q): use %q ou %q", cfg.CadastroSemCliente, CadastroSemClienteTransferir, CadastroSemClienteOferecer)
+	}
+	cfg.CadastroMaxTentativas = 2
+	if v, ok := os.LookupEnv("CADASTRO_MAX_TENTATIVAS"); ok && strings.TrimSpace(v) != "" {
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || n < 1 || n > 10 {
+			return nil, fmt.Errorf("CADASTRO_MAX_TENTATIVAS inválido (%q): use um inteiro de 1 a 10", v)
+		}
+		cfg.CadastroMaxTentativas = n
 	}
 
 	// Ordem dos prazos (E3.7): o teto do turno conta desde a primeira mensagem da

@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "este telefone já tem cadastro; não cadastre de novo e peça o CPF ou o número do contrato para identificar o cliente",
+  "motivo": "ja_cadastrado"
+}

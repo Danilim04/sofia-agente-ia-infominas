@@ -1,0 +1,42 @@
+# Comportamento: o dêitico "esse" não confirma o cadastro; só "sim/pode" no turno seguinte ao resumo cadastra.
+# Negativo: mesmo que o LLM tente cadastrar, a política recusa e o gateway não recebe o cadastro.
+id: conversa-084
+descricao: esse não cadastra e o sim do turno seguinte cadastra
+sessao: {telefone: "+5531999990084", nome_contato: "Maria", contato: null}
+jev:
+  - {intencao: [outro, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [outro, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [confirmacao, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "Maria Souza, da ACME Ltda, maria@acme.com.br"
+    llm:
+      - tool: preparar_cadastro_solicitante
+        args: {nome: "Maria Souza", empresa: "ACME Ltda", email: "maria@acme.com.br"}
+      - texto: "Vou cadastrar Maria Souza, da ACME Ltda, e-mail maria@acme.com.br. Posso cadastrar?"
+    espera:
+      chama: [preparar_cadastro_solicitante]
+      nao_chama: [cadastrar_solicitante]
+      contem: ["Posso cadastrar"]
+  - cliente: "esse"
+    llm:
+      - tool: cadastrar_solicitante
+        args: {}
+      - tool: preparar_cadastro_solicitante
+        args: {nome: "Maria Souza", empresa: "ACME Ltda", email: "maria@acme.com.br"}
+      - texto: "Só para eu não cadastrar nada errado: posso cadastrar Maria Souza, da ACME Ltda?"
+    espera:
+      chama: [preparar_cadastro_solicitante]
+      nao_chama: [cadastrar_solicitante, abrir_chamado]
+      gateway_nao_recebeu: [/tools/infodesk/cadastro/cadastrar]
+      tool_viu_contem: ["confirmação explícita"]
+      estado_nao_contem: ["requester_id"]
+  - cliente: "sim"
+    llm:
+      - tool: cadastrar_solicitante
+        args: {}
+      - texto: "Cadastro feito, Maria! Me conta o que está acontecendo."
+    espera:
+      chama: [cadastrar_solicitante]
+      nao_chama: [abrir_chamado]
+      gateway_vezes: {/tools/infodesk/cadastro/cadastrar: 1}
+      estado: {identificacao: {forma: cadastro}}

@@ -756,3 +756,77 @@ func TestStoreHandoffPendente(t *testing.T) {
 		})
 	}
 }
+
+// TestStoreCadastroPropostaIdempotenciaETentativas (E5.3, ADR 0009): a proposta
+// é renovada enquanto for `proposta`, uma linha `feito` nunca muda e o contador
+// de tentativas de empresa soma e zera — nos dois backends.
+func TestStoreCadastroPropostaIdempotenciaETentativas(t *testing.T) {
+	for nome, st := range backends(t) {
+		t.Run(nome, func(t *testing.T) {
+			ctx := context.Background()
+			chave := unico("cad")
+			conv := unico("conv-cad")
+
+			if c, err := st.ObterCadastro(ctx, chave); err != nil || c != nil {
+				t.Fatalf("antes: esperava nil, veio %+v (err=%v)", c, err)
+			}
+			c, err := st.GravarCadastroProposta(ctx, &Cadastro{
+				Chave: chave, ConversationID: conv, Telefone: "+5531999990001",
+				Nome: "Maria Souza", Email: "maria@acme.com.br", ClienteID: "k1", ClienteNome: "ACME Ltda",
+			})
+			if err != nil || c == nil || c.Status != CadastroProposta || c.ClienteID != "k1" || c.Criado || c.RequesterID != "" {
+				t.Fatalf("1ª gravação: %+v err=%v", c, err)
+			}
+			primeira := c.CreatedAt
+
+			// Regravar enquanto é proposta renova os dados e o relógio da validade.
+			time.Sleep(5 * time.Millisecond)
+			c, err = st.GravarCadastroProposta(ctx, &Cadastro{
+				Chave: chave, ConversationID: conv, Telefone: "+5531999990001",
+				Nome: "Maria Souza", Email: "maria@acme.com.br", ClienteID: "k1", ClienteNome: "ACME Ltda (renovado)",
+			})
+			if err != nil || c.ClienteNome != "ACME Ltda (renovado)" || !c.CreatedAt.After(primeira) {
+				t.Fatalf("renovação: %+v err=%v", c, err)
+			}
+
+			if err := st.ConcluirCadastro(ctx, chave, "r1", true); err != nil {
+				t.Fatalf("concluir: %v", err)
+			}
+			c, _ = st.ObterCadastro(ctx, chave)
+			if c.Status != CadastroFeito || c.RequesterID != "r1" || !c.Criado {
+				t.Fatalf("depois de concluir: %+v", c)
+			}
+			// `feito` é imutável: regravar a proposta não desfaz nem troca o cliente.
+			c, err = st.GravarCadastroProposta(ctx, &Cadastro{Chave: chave, ConversationID: conv, Nome: "Outro Nome", ClienteID: "k2"})
+			if err != nil || c.Status != CadastroFeito || c.ClienteID != "k1" || c.Nome != "Maria Souza" || c.RequesterID != "r1" {
+				t.Fatalf("linha feito foi alterada: %+v err=%v", c, err)
+			}
+			if err := st.ConcluirCadastro(ctx, unico("nao-existe"), "r1", false); err == nil {
+				t.Error("concluir cadastro inexistente deveria falhar")
+			}
+			if err := st.ConcluirCadastro(ctx, chave, "", false); err == nil {
+				t.Error("concluir sem requester_id deveria falhar")
+			}
+			if _, err := st.GravarCadastroProposta(ctx, &Cadastro{ConversationID: conv}); err == nil {
+				t.Error("proposta sem chave deveria falhar")
+			}
+
+			for i := 1; i <= 3; i++ {
+				n, err := st.IncrementarTentativasCadastro(ctx, conv)
+				if err != nil || n != i {
+					t.Fatalf("tentativa %d: n=%d err=%v", i, n, err)
+				}
+			}
+			if err := st.ZerarTentativasCadastro(ctx, conv); err != nil {
+				t.Fatalf("zerar: %v", err)
+			}
+			if n, err := st.IncrementarTentativasCadastro(ctx, conv); err != nil || n != 1 {
+				t.Fatalf("depois de zerar: n=%d err=%v", n, err)
+			}
+			// outra conversa não compartilha o contador
+			if n, _ := st.IncrementarTentativasCadastro(ctx, conv+"-b"); n != 1 {
+				t.Errorf("contador vazou entre conversas: %d", n)
+			}
+		})
+	}
+}

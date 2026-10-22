@@ -1,0 +1,12 @@
+{
+  "status": true,
+  "cadastrado": true,
+  "criado": true,
+  "solicitante": {
+    "nome": "Maria S."
+  },
+  "empresa": {
+    "nome": "ACME Ltda"
+  },
+  "requester_id": "r1000000-0000-4000-8000-000000000001"
+}

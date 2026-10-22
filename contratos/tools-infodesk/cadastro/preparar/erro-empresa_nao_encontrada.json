@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "não encontrei essa empresa no cadastro; peça para o cliente conferir o nome da empresa e mandar de novo",
+  "motivo": "empresa_nao_encontrada"
+}

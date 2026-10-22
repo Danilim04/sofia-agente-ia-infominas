@@ -113,6 +113,16 @@ type Opcoes struct {
 	// departamento que o caminho único da engine usa no handoff; aqui só serve
 	// para o NOME dele na resposta de `transferir`.
 	DepartamentoHumanoPadrao string
+	// IdentExigirCPF (IDENT_EXIGIR_CPF): com true o cadastro não basta para
+	// identificar (a forma do contato fica vazia e o CPF continua exigido).
+	// TODO(N3): decisão do produto.
+	IdentExigirCPF bool
+	// CadastroSemCliente (CADASTRO_SEM_CLIENTE, default "transferir") e
+	// CadastroMaxTentativas (CADASTRO_MAX_TENTATIVAS, default 2): o que fazer
+	// quando a empresa do cliente não é achada/é ambígua depois de N tentativas
+	// (ADR 0009). TODO(decisão do produto).
+	CadastroSemCliente    string
+	CadastroMaxTentativas int
 
 	contratoRE *regexp.Regexp
 }
@@ -137,6 +147,12 @@ func (o Opcoes) comPadroes() Opcoes {
 	}
 	if o.IdentTTL <= 0 {
 		o.IdentTTL = 24 * time.Hour
+	}
+	if o.CadastroSemCliente == "" {
+		o.CadastroSemCliente = config.CadastroSemClienteTransferir
+	}
+	if o.CadastroMaxTentativas <= 0 {
+		o.CadastroMaxTentativas = 2
 	}
 	if o.IdentContratoRE == "" {
 		o.IdentContratoRE = `^\d{4,12}$`
@@ -163,5 +179,8 @@ func OpcoesDeConfig(cfg *config.Config) Opcoes {
 		IdentSal:                 cfg.IdentHashSal,
 		IdentTTL:                 cfg.IdentTTL,
 		DepartamentoHumanoPadrao: cfg.DepartamentoHumanoPadrao,
+		IdentExigirCPF:           cfg.IdentExigirCPF,
+		CadastroSemCliente:       cfg.CadastroSemCliente,
+		CadastroMaxTentativas:    cfg.CadastroMaxTentativas,
 	}
 }

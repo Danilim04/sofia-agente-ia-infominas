@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "nome, empresa ou e-mail inválidos; peça o nome completo (nome e sobrenome), o nome da empresa e, se o cliente quiser informar, um e-mail válido",
+  "motivo": "campo_invalido"
+}

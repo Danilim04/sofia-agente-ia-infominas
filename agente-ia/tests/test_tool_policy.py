@@ -48,7 +48,7 @@ def test_politicas_de_producao_cobrem_exatamente_as_tools_expostas():
     from src.agent.graph import get_default_tools
 
     assert set(tool_policy.POLITICAS) == {t.name for t in get_default_tools()}
-    assert len(tool_policy.POLITICAS) == 6
+    assert len(tool_policy.POLITICAS) == 8
 
 
 def test_tool_sem_politica_passa_intocada():
@@ -665,11 +665,12 @@ def test_listar_nao_tem_args_nem_precondicao():
 # ===========================================================================
 
 
-def test_efeitos_registrados_sao_os_das_tres_tools_com_estado():
+def test_efeitos_registrados_sao_os_das_quatro_tools_com_estado():
     assert set(efeitos.EFEITOS) == {
         "informar_identificacao",
         "preparar_abertura_chamado",
         "abrir_chamado",
+        "cadastrar_solicitante",
     }
 
 

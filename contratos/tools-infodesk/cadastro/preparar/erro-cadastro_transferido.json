@@ -1,0 +1,5 @@
+{
+  "status": false,
+  "erro": "não foi possível localizar a empresa e a conversa já foi passada para um atendente; não responda mais",
+  "motivo": "cadastro_transferido"
+}
