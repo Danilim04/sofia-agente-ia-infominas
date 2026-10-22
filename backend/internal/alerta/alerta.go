@@ -1,7 +1,7 @@
 // Package alerta decide QUANDO avisar o responsável pelo bot (ZC-7) e entrega
 // o aviso por um Notificador. O canal definitivo (WhatsApp, e-mail, webhook
 // de chat...) ainda não foi decidido: a implementação padrão é o log
-// estruturado `sofia_alerta` + um webhook HTTP opcional (ALERTA_WEBHOOK_URL,
+// estruturado `sofia_alerta` (EventoSofiaAlerta) + um webhook HTTP opcional (ALERTA_WEBHOOK_URL,
 // vazio por padrão — mesmo contrato `{"text": ...}` do SYNC_ALERTA_WEBHOOK).
 package alerta
 
@@ -50,7 +50,10 @@ type Notificador interface {
 	Notificar(ctx context.Context, a Alerta)
 }
 
-// Log escreve o alerta como log estruturado `sofia_alerta` (sempre ligado).
+// Log escreve o alerta como log estruturado `sofia_alerta` (sempre ligado;
+// campos em CamposDoEvento). Título e texto passam por MascararPII: o contrato
+// é não levarem PII, e esta é a rede de segurança para texto montado de erro
+// externo.
 type Log struct{ L *slog.Logger }
 
 func (n Log) Notificar(_ context.Context, a Alerta) {
@@ -58,7 +61,7 @@ func (n Log) Notificar(_ context.Context, a Alerta) {
 	if l == nil {
 		l = slog.Default()
 	}
-	l.Error("sofia_alerta", "tipo", a.Tipo, "titulo", a.Titulo, "texto", a.Texto,
+	l.Error(EventoSofiaAlerta, "tipo", a.Tipo, "titulo", MascararPII(a.Titulo), "texto", MascararPII(a.Texto),
 		"id_ocorrencia", a.IDOcorrencia, "conversation_id", a.ConversationID, "link", a.Link)
 }
 
@@ -80,9 +83,9 @@ func (n Webhook) Notificar(ctx context.Context, a Alerta) {
 		cli = &http.Client{Timeout: 5 * time.Second}
 	}
 	corpo, _ := json.Marshal(map[string]any{
-		"text":            fmt.Sprintf("[Sofia] %s\n%s", a.Titulo, a.Texto),
+		"text":            fmt.Sprintf("[Sofia] %s\n%s", MascararPII(a.Titulo), MascararPII(a.Texto)),
 		"tipo":            a.Tipo,
-		"titulo":          a.Titulo,
+		"titulo":          MascararPII(a.Titulo),
 		"id_ocorrencia":   a.IDOcorrencia,
 		"conversation_id": a.ConversationID,
 		"link":            a.Link,

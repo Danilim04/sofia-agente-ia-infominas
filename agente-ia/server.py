@@ -63,7 +63,15 @@ from src.agent.graph import build_graph
 from src.agent.llm import get_classifier_llm
 from src.classificacao import Mensagem, ServicoClassificacao, criar_servico_padrao
 from src.config import get_settings
-from src.observability.tracing import get_tracing_handler
+from src.observability import eventos
+from src.observability.metricas import instalar_contador
+from src.observability.pii import (
+    instalar_mascara_pii,
+    mascarar_telefone,
+    mascarar_texto,
+    registrar_nomes,
+)
+from src.observability.tracing import TracoDoTurno, get_tracing_handler
 
 
 def _setup_logging() -> None:
@@ -83,6 +91,11 @@ def _setup_logging() -> None:
     )
     # Garante o nível mesmo que uvicorn reconfigure só os loggers dele.
     logging.getLogger("src").setLevel(level)
+    # PII (CPF, telefone, nome) mascarada em TODA mensagem de log, em qualquer nível
+    # (E4.3): rede de segurança para o que um módulo esquecer de mascarar.
+    instalar_mascara_pii()
+    # Métrica `jev_indisponivel` (contador + log `sofia_metrica`).
+    instalar_contador()
 
 
 _setup_logging()
@@ -158,10 +171,7 @@ def _mascarar(valor: str) -> str:
 
     Usado para não enviar PII (telefone/CPF) em claro ao log nem ao tracing externo.
     """
-    v = (valor or "").strip()
-    if len(v) <= 3:
-        return "*" * len(v)
-    return "*" * (len(v) - 3) + v[-3:]
+    return mascarar_telefone(valor)
 
 
 def _extrair_reply(valores: dict) -> str:
@@ -183,24 +193,26 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
     `nome_contato`/`contato` entram no estado e vão ao system prompt como DADO
     (ver `nodes._formatar_contato`).
     """
-    # PII mascarada nos logs (LGPD): telefone nunca em claro; o nome do contato
-    # e o conteúdo da mensagem só aparecem em DEBUG.
-    logger.info(
-        "chat_request conversation_id=%s canal=%s telefone=%s identificado=%s "
-        "estado_conversa=%s len_mensagem=%d",
-        req.conversation_id,
-        req.canal,
-        _mascarar(req.telefone or ""),
-        bool(req.contato),
-        req.estado_conversa,
-        len(req.mensagem or ""),
+    # PII fora do log (LGPD, E4.3): telefone mascarado; a mensagem do cliente NÃO
+    # entra em log em claro em nível nenhum — só o tamanho (INFO) e a versão
+    # mascarada (DEBUG); o nome do contato nunca entra.
+    registrar_nomes(req.conversation_id, (req.nome_contato,))
+    eventos.registrar(
+        logger,
+        eventos.CHAT_REQUEST,
+        conversation_id=req.conversation_id,
+        canal=req.canal,
+        telefone=_mascarar(req.telefone or ""),
+        identificado=bool(req.contato),
+        estado_conversa=req.estado_conversa,
+        len_mensagem=len(req.mensagem or ""),
     )
-    logger.debug(
-        "chat_request_mensagem conversation_id=%s nome_contato=%r mensagem=%r",
-        req.conversation_id,
-        req.nome_contato,
-        req.mensagem,
-    )
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "chat_request_mensagem conversation_id=%s mensagem_mascarada=%s",
+            req.conversation_id,
+            mascarar_texto(req.mensagem, (req.nome_contato or "",)),
+        )
     if req.estado_conversa != "bot":
         # Defesa: o gateway não deveria mandar turno de conversa transferida;
         # se mandar, o cérebro responde normalmente e o gateway decide.
@@ -211,18 +223,13 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
         )
 
     config: dict[str, Any] = {"configurable": {"thread_id": req.conversation_id}}
-    # Tracing opcional (Langfuse): agrupa o turno pela conversa e registra
-    # custo/latência/tool_calls. Off quando as chaves não estão configuradas.
+    # Tracing opcional (Langfuse): o trace raiz (`TracoDoTurno`) agrupa o turno
+    # pela conversa, leva o telefone mascarado e, depois do grafo, as tags
+    # intencao/categoria/origem; o handler aninha custo/latência/tool_calls.
+    # Off quando as chaves não estão configuradas.
     handler = get_tracing_handler()
     if handler is not None:
-        metadata: dict[str, Any] = {
-            "langfuse_session_id": req.conversation_id,
-            "langfuse_tags": [req.canal],
-        }
-        if req.telefone:
-            metadata["langfuse_user_id"] = _mascarar(req.telefone)
         config["callbacks"] = [handler]
-        config["metadata"] = metadata
         config["run_name"] = "chat"
 
     inputs: dict[str, Any] = {
@@ -237,12 +244,16 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
         inputs["telefone"] = req.telefone
 
     try:
-        # Prazo do turno MENOR que o BRAIN_TIMEOUT/TURNO_TETO do gateway: o
-        # cérebro desiste primeiro e devolve falha transitória classificada.
-        valores = await asyncio.wait_for(
-            graph.ainvoke(inputs, config=config),
-            timeout=get_settings().brain_turno_prazo,
-        )
+        with TracoDoTurno(
+            conversation_id=req.conversation_id, canal=req.canal, telefone=req.telefone
+        ) as traco:
+            # Prazo do turno MENOR que o BRAIN_TIMEOUT/TURNO_TETO do gateway: o
+            # cérebro desiste primeiro e devolve falha transitória classificada.
+            valores = await asyncio.wait_for(
+                graph.ainvoke(inputs, config=config),
+                timeout=get_settings().brain_turno_prazo,
+            )
+            traco.marcar_classificacao(valores.get("classificacao"))
     except TimeoutError as exc:
         return _falha_do_turno(req, exc, classe=CLASSE_TRANSITORIA, causa=CAUSA_PRAZO_TURNO)
     except Exception as exc:
@@ -260,11 +271,20 @@ async def processar_chat(graph: Any, req: ChatRequest) -> ChatResponse:
         resposta.fontes,
         [a.get("origem") for a in resposta.acoes],
     )
-    logger.debug(
-        "chat_response_full conversation_id=%s reply=%r",
-        req.conversation_id,
-        resposta.reply,
-    )
+    for acao in resposta.acoes:
+        if acao.get("tipo") == "transferir":
+            eventos.registrar(
+                logger,
+                eventos.TRANSFERENCIA,
+                conversation_id=req.conversation_id,
+                origem=acao.get("origem"),
+            )
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "chat_response_full conversation_id=%s reply_mascarada=%s",
+            req.conversation_id,
+            mascarar_texto(resposta.reply, (req.nome_contato or "",)),
+        )
     return resposta
 
 
