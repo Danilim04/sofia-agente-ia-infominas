@@ -18,8 +18,8 @@ O gateway escreve **JSON** (`slog`, stdout); o cérebro escreve **linhas** `nome
 | `classificacao` | cérebro | INFO | `intencao`, `categoria`, `origem` (`jev`/`llm`/`esclarecimento`/`indefinida`), `prioridade`, `frustracao`, `jev` (o JEV respondeu?), `esclarecer`, `acoes` | o roteador decidiu o turno |
 | `tool_exec` | cérebro | INFO | `nome`, `args` (só os **nomes** dos argumentos) | o agente chamou uma tool. Valores só em DEBUG (`tool_exec_args`), mascarados. **Exceção:** `agent_tool_calls` (`agent/nodes.py`) ainda loga os valores dos args em INFO; só a máscara do formatter os protege (ver seção 6) |
 | `transferencia` | cérebro | INFO | `conversation_id`, `origem` (`frustracao`/`confianca`/`pedido_cliente`) | o cérebro **pediu** a transferência (ação devolvida ao gateway) |
-| `transferencia` | gateway | INFO | `id_ocorrencia`, `conversation_id`, `origem`, `departamento` | o handoff foi **executado**. **Contrato pronto (`alerta.LogTransferencia`), ainda não emitido com este nome:** hoje a mensagem é `conversa transferida para atendimento humano` (seção 6) |
-| `ticket_aberto` | gateway | INFO | `numero`, `conversation_id`, `categoria`, `mesa`, `reconciliado` | o ticket existe no Infodesk (`reconciliado=true`: foi achado pela listagem, não pelo POST). **Hoje o campo da conversa se chama `conversa`, não `conversation_id`** (`alerta.LogTicketAberto` é o contrato; seção 6) |
+| `transferencia` | gateway | INFO | `id_ocorrencia`, `conversation_id`, `origem`, `departamento` | o handoff foi **executado** (`engine/transferencia.go` → `alerta.LogTransferencia`) |
+| `ticket_aberto` | gateway | INFO | `numero`, `conversation_id`, `categoria`, `mesa`, `reconciliado` | o ticket existe no Infodesk (`reconciliado=true`: foi achado pela listagem, não pelo POST). `toolsapi/abrir.go` → `alerta.LogTicketAberto` |
 | `sofia_alerta` | gateway | ERROR | `tipo`, `titulo`, `texto`, `id_ocorrencia`, `conversation_id`, `link` | um alerta saiu (tabela da seção 4). `titulo` e `texto` passam por `alerta.MascararPII` |
 | `sofia_falha` | gateway | ERROR | `id_ocorrencia`, `conversation_id`, `origem`, `classe`, `causa`, `detalhe` | uma transferência por falha foi registrada; o `id_ocorrencia` (`SOF-AAAAMMDD-HHMM-NN`) é o mesmo no cérebro (`chat_erro`) e na tabela `falhas` |
 | `jev_indisponivel` | cérebro | WARNING | `erro` (só o tipo da exceção) | o JEV falhou neste turno; o roteador seguiu em fail-soft |
@@ -153,7 +153,7 @@ O mesmo `tipo` + conversa não repete dentro de 5 minutos. Destino: log `sofia_a
 
 ## 6. Limites conhecidos (follow-ups)
 
-- **Nomes de evento do gateway fora da zona da E4.3.** `ticket_aberto` (em `toolsapi/abrir.go`) usa o campo `conversa` em vez de `conversation_id`, e a transferência do `engine` (`transferencia.go`) loga a mensagem `conversa transferida para atendimento humano`, não `transferencia`. O contrato e os helpers estão prontos em `alerta.LogTicketAberto`/`alerta.LogTransferencia`; falta cada dono trocar a chamada (uma linha em cada).
+- **`sofia_metrica` do gateway** (`engine/estado.go`) ainda escreve a string na mão; falta usar `alerta.EventoMetrica`.
 - **`taxonomia.*` do `/health` é a foto do boot** (o pacote `taxonomia` não expõe estado vivo). Se o boot não carregou mas a referência foi lida depois, `carregada` passa a `true` com `inferida=true` e `valida=false`; as divergências dessa carga só aparecem no alerta `taxonomia_invalida`. Um `Taxonomia.Estado()` tornaria isso vivo.
 - **`agent/nodes.py` loga os valores dos args das tools em INFO** (`agent_tool_calls`), contra o que o catálogo promete para `tool_exec`. Fora da zona: trocar por `sorted(args)`. Até lá, só a máscara do formatter protege (um nº de contrato curto, < 9 dígitos, passa por ela).
 - **A métrica `jev_indisponivel` conta pelo log** do roteador (nome do evento), por isso exige `LOG_LEVEL` ≤ WARNING. Chamar `metricas.contar("jev_indisponivel")` direto no roteador tiraria essa dependência.
