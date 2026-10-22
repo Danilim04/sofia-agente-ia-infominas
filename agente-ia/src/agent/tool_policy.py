@@ -385,8 +385,10 @@ def _cadastro_preparado(state: Mapping[str, Any]) -> tuple[dict[str, Any], int] 
         if nome not in (_TOOL_PREPARAR_CADASTRO, _TOOL_CADASTRAR):
             continue
         dado = _json_do_tool_message(mensagem)
-        if dado is None or dado.get("recusado_pela_politica") or not isinstance(
-            dado.get("status"), bool
+        if (
+            dado is None
+            or dado.get("recusado_pela_politica")
+            or not isinstance(dado.get("status"), bool)
         ):
             continue
         if nome == _TOOL_CADASTRAR:

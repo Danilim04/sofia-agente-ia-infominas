@@ -293,7 +293,7 @@ def test_preparar_injeta_o_telefone_da_sessao_e_ignora_o_do_llm():
     ],
 )
 def test_preparar_recusa_campo_invalido_sem_executar(campo, valor, trecho):
-    args, erro = aplicar_politica(
+    _args, erro = aplicar_politica(
         PREPARAR, {**ARGS_OK, campo: valor}, _estado(HumanMessage(content="oi"))
     )
     assert erro and trecho in erro
