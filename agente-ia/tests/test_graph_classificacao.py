@@ -131,7 +131,8 @@ def test_categoria_e_pegajosa_entre_turnos_da_mesma_conversa():
     t3 = _turno(grafo, "e a fatura veio estranha")
     assert t1["classificacao"]["categoria"] == "sem_conexao"
     assert t2["classificacao"]["categoria"] == "sem_conexao"
-    assert t2["classificacao"]["intencao"] == "confirmacao"
+    # E3.10: o estado guarda a intenção que FIXOU a categoria vigente (um "sim" a preserva)
+    assert t2["classificacao"]["intencao"] == "reclamacao_problema"
     assert t2["classificacao"]["prioridade"] == "alta"
     assert t3["classificacao"]["categoria"] == "sem_conexao"
 

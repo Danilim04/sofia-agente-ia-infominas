@@ -192,3 +192,112 @@ def test_pedido_de_atendente_depois_do_boleto_mantem_a_categoria_na_acao():
     )
     assert [a.origem for a in c2.acoes] == ["pedido_cliente"]
     assert c2.categoria == "financeiro"  # herdada: o handoff vai ao departamento certo
+
+
+# ---------------------------------------------------------------------------
+# Revisão E3.10: "categoria do chamado" (reclamação) × "categoria do pedido" (informação)
+# ---------------------------------------------------------------------------
+
+
+def _fixa_informacao(categoria: str = "financeiro") -> Classificacao:
+    return _rodar(
+        "manda o boleto",
+        FakeJEV(padrao=resp_jev(intencao=("outro", 0.9), categoria=(categoria, 0.9))),
+    )
+
+
+def _fixa_reclamacao(categoria: str = "internet_rede") -> Classificacao:
+    return _rodar("meu link caiu", FakeJEV(padrao=resp_jev(categoria=(categoria, 0.9))))
+
+
+def test_reclamacao_incerta_nao_herda_a_categoria_de_um_pedido_de_informacao():  # repro A
+    c1 = _fixa_informacao()
+    c2 = _rodar(
+        "minha internet caiu",
+        FakeJEV(padrao=resp_jev(categoria=("internet_rede", 0.2))),
+        anterior=c1,
+    )
+    assert (c2.categoria, c2.origem, c2.precisa_esclarecer) == (
+        "indefinida",
+        "esclarecimento",
+        True,
+    )
+
+
+def test_reclamacao_com_jev_fora_nao_herda_a_categoria_de_um_pedido_de_informacao():  # repro B
+    c1 = _fixa_informacao()
+    fb = FakeFallbackLLM(padrao=ResultadoFallback("reclamacao_problema", "indefinida"))
+    c2 = _rodar(
+        "minha internet caiu", FakeJEV(padrao=RuntimeError("503")), fallback=fb, anterior=c1
+    )
+    assert (c2.categoria, c2.origem, c2.precisa_esclarecer) == (
+        "indefinida",
+        "esclarecimento",
+        True,
+    )
+
+
+def test_jev_e_fallback_fora_nao_alteram_a_classificacao_anterior():
+    # Sem JEV nem fallback a intenção é desconhecida ("outro"): nada a reclassificar,
+    # o episódio segue com o que já estava fixado (não inventa categoria nem pergunta).
+    c1 = _fixa_informacao()
+    c2 = _rodar("minha internet caiu", FakeJEV(padrao=RuntimeError("503")), anterior=c1)
+    assert c2.categoria == "financeiro" and c2.precisa_esclarecer is False
+
+
+@pytest.mark.parametrize("intencao", ["outro", "duvida_informacao"])
+def test_informacao_nunca_troca_a_fila_de_uma_reclamacao_aberta(intencao):  # repro C
+    c1 = _fixa_reclamacao()
+    jev = FakeJEV(padrao=resp_jev(intencao=(intencao, 0.95), categoria=("financeiro", 0.99)))
+    c2 = _rodar("e o boleto?", jev, anterior=c1)
+    assert c2.categoria == "internet_rede"
+    # nem com "correção explícita": quem corrige a fila é a própria reclamação
+    c3 = _rodar("na verdade o problema é o boleto", jev, anterior=c1)
+    assert c3.categoria == "internet_rede"
+    # e um "ok" depois também não devolve nada ao pedido de informação
+    ok = FakeJEV(padrao=resp_jev(intencao=("confirmacao", 0.95), categoria=("indefinida", 0.9)))
+    assert _rodar("ok, valeu", ok, anterior=c2).categoria == "internet_rede"
+
+
+def test_categoria_informativa_continua_nao_travando_depois_de_um_ok():  # repro D
+    c1 = _fixa_informacao()
+    ok = FakeJEV(padrao=resp_jev(intencao=("confirmacao", 0.95), categoria=("indefinida", 0.9)))
+    c2 = _rodar("ok", ok, anterior=c1)
+    assert c2.categoria == "financeiro"
+    # o "ok" preservou a intenção que fixou a categoria (vai no estado, 5 chaves do contrato)
+    assert c2.para_estado()["intencao"] == "outro"
+    assert set(c2.para_estado()) == {"intencao", "categoria", "prioridade", "confianca", "origem"}
+    anterior = Classificacao.de_estado(c2.para_estado())
+    c3 = _rodar(
+        "agora minha internet caiu",
+        FakeJEV(padrao=resp_jev(categoria=("internet_rede", 0.7))),
+        anterior=anterior,
+    )
+    assert (c3.categoria, c3.origem) == ("internet_rede", "jev")  # 0.7 < 0.85 e ainda assim troca
+
+
+def test_estado_sem_intencao_gravada_e_tratado_como_reclamacao_pegajosa():
+    anterior = Classificacao.de_estado(
+        {"categoria": "internet_rede", "prioridade": "alta", "confianca": 0.9, "origem": "jev"}
+    )
+    jev = FakeJEV(padrao=resp_jev(intencao=("outro", 0.9), categoria=("financeiro", 0.99)))
+    assert _rodar("e o boleto?", jev, anterior=anterior).categoria == "internet_rede"
+
+
+def test_prioridade_da_reclamacao_aberta_nao_cai_com_pedido_de_informacao_mesmo_sem_a_flag():
+    c1 = _rodar(
+        "tudo parado aqui",
+        FakeJEV(padrao=resp_jev(categoria=("internet_rede", 0.9), prioridade=(3, 0.9))),
+    )
+    assert c1.prioridade == "urgente"
+    jev = FakeJEV(
+        padrao=resp_jev(intencao=("outro", 0.9), categoria=("financeiro", 0.9), prioridade=(0, 0.9))
+    )
+    c2 = _rodar("e quanto custa o plano?", jev, anterior=c1, JEV_PRIORIDADE_SO_SOBE=False)
+    assert (c2.categoria, c2.prioridade) == ("internet_rede", "urgente")
+
+
+def test_conjunto_invalido_no_ambiente_falha_ao_carregar_a_config(monkeypatch):
+    monkeypatch.setenv("JEV_INTENCOES_COM_CATEGORIA", "reclamacao_problema,inventada")
+    with pytest.raises(ValueError, match="JEV_INTENCOES_COM_CATEGORIA"):
+        ConfigClassificacao(_env_file=None)  # type: ignore[call-arg]

@@ -569,3 +569,13 @@ def test_prioridade_so_sobe_pode_ser_desligada():
     jev = FakeJEV(padrao=resp_jev(categoria=("lentidao", 0.9), prioridade=(0, 0.9)))
     c = _rodar("tá, obrigado", jev=jev, anterior=anterior, JEV_PRIORIDADE_SO_SOBE=False)
     assert c.prioridade == "baixa"
+
+
+@pytest.mark.parametrize("intencao", ["outro", "duvida_informacao"])
+def test_pedido_de_informacao_com_confianca_altissima_nao_troca_a_fila_aberta(intencao):
+    # versão forte (E2.2 → E3.10): o 0.99 e o "outro" do teste original continuam cobertos
+    anterior = _fixa("sem_conexao")
+    jev = FakeJEV(padrao=resp_jev(intencao=(intencao, 0.95), categoria=("cobranca", 0.99)))
+    assert _rodar("x", jev=jev, anterior=anterior).categoria == "sem_conexao"
+    corrigindo = _rodar("na verdade o problema é a cobrança", jev=jev, anterior=anterior)
+    assert corrigindo.categoria == "sem_conexao"

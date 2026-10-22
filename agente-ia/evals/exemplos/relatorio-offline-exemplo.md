@@ -2,7 +2,7 @@
 
 > **Exemplo offline com fakes, não é medição real. Os números medem o encanamento do runner (roteador + JEV/fallback simulados), nunca o desempenho do JEV (P8).**
 
-- **gerado_em**: 2026-10-22T07:44:09+00:00
+- **gerado_em**: 2026-10-22T07:58:34+00:00
 - **dataset**: sintetico.jsonl (237 casos)
 - **modo**: offline
 - **JEV**: JEVSimulado (FakeJEV lexical)

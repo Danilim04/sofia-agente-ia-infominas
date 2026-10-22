@@ -108,12 +108,19 @@ Regras adicionais:
 - **Categoria é "pegajosa"** dentro do episódio: uma vez fixada com
   `origem: jev|llm`, só muda se o cliente corrigir explicitamente ou se uma
   nova classificação vier com confiança ≥ 0.85 e categoria diferente (evita
-  trocar de fila a cada turno). Exceção (E3.10): uma categoria fixada num turno
-  **de informação** (`outro`/`duvida_informacao`) não trava a seguinte — a
-  reclamação que vier depois define a fila do chamado, e dois pedidos de
-  informação seguidos se corrigem sozinhos. O estado só guarda a intenção do
-  último turno; depois de um "ok" no meio, a categoria informativa volta a ser
-  pegajosa (conservador).
+  trocar de fila a cada turno). Separação (E3.10) entre a **categoria do chamado**
+  (fixada numa reclamação) e a **categoria do pedido** (fixada em `outro`/
+  `duvida_informacao`, só para o handoff): (1) uma categoria de pedido **não trava**
+  a seguinte — a reclamação que vier depois define a fila do chamado (e, se for
+  incerta, cai em esclarecimento/`indefinida`, nunca herda a do pedido), e dois
+  pedidos seguidos se corrigem sozinhos; (2) um pedido de informação **nunca troca**
+  a fila de uma reclamação aberta (nem com confiança ≥ 0.85 ou correção explícita:
+  quem corrige a fila é a própria reclamação) e herda também a prioridade dela — o
+  handoff dessa conversa vai à fila da reclamação (conservador). Para o roteador
+  saber de que turno veio a categoria vigente, `state.classificacao.intencao`
+  guarda a **intenção que fixou a categoria** (turnos herdados — "ok", status,
+  saudação — a preservam); a intenção do turno vai nos sinais do turno. O Contrato A
+  segue com as mesmas 5 chaves.
 - **Categoria fora de reclamação (E3.10).** Antes, só a reclamação fixava
   categoria; um pedido de boleto ou de preço chegava à transferência como
   `indefinida` e ia ao `DEPARTAMENTO_HUMANO_PADRAO`, não ao departamento da
