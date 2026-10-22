@@ -18,7 +18,7 @@ que uma etapa do plano escolher algo que não estava decidido em
 | [0005](0005-idempotencia-de-ticket-local.md) | Idempotência e dedup de tickets no gateway (chave própria) + reconciliação por `GET /tickets?phone=` | aceita (2026-10-19); revisada (2026-10-20) |
 | [0006](0006-contratos-versionados.md) | Contratos JSON versionados em `contratos/` (fonte de verdade dos testes dos dois lados) | aceita (2026-10-20) |
 | [0007](0007-handoff-caminho-unico-para-humano.md) | `POST /conversations/:id/handoff` é o caminho único de transferência para humano; `/department`, `/assign`, `/bot` fora da v1 | aceita (2026-10-20) |
-| 0008 | Revisão de segurança v1 (E4.5) | a escrever (número reservado) |
+| [0008](0008-revisao-seguranca-v1.md) | Revisão de segurança v1 (E4.5): 2 bloqueantes e 7 importantes com a correção de cada um; telefone em claro aceito no gateway; fail-closed entre componentes | aceita (2026-10-22) |
 | [0009](0009-cadastro-de-solicitante-pela-sofia.md) | Cadastro de solicitante pela Sofia (`POST /requesters` em duas fases; escopo `contacts:write`) | aceita (2026-10-22) |
 | [0010](0010-mesa-unica-e-conversa-aberta.md) | Mesa única "Abertura de Ticket", conversa aberta depois do ticket, Comercial/Financeiro por departamento | aceita (2026-10-22) |
 
