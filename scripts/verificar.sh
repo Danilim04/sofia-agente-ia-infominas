@@ -112,7 +112,8 @@ go_completo() {
     etapa "go test -cover (sem -race)" "$B" go test -cover ./...
   fi
   if grep -rq 'go:build e2e' "$B/internal" 2>/dev/null; then
-    etapa "e2e (tag e2e)" "$B" go test -tags e2e ./internal/e2e/...
+    # sobe mock + gateway + cérebro falso por conta própria (precisa de go e Python 3.12+); -count=1: nunca do cache
+    etapa "e2e (tag e2e)" "$B" go test -tags e2e -count=1 ./internal/e2e/...
   fi
 }
 

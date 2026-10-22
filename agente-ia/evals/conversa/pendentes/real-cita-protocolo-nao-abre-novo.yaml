@@ -1,4 +1,5 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Cliente cita o número do chamado ao reclamar: nunca vira chamado novo.
+# Destrava: Q1 — aprovar as categorias de config/taxonomia.proposta.yaml e promovê-la a taxonomia.yaml; depois `git mv` para evals/conversa/.
 id: conversa-142
 descricao: reclamar citando um chamado existente não prepara chamado novo (política em código)
 sessao:
@@ -7,7 +8,7 @@ sessao:
   contato: telefone
 jev:
 - intencao: [reclamacao_problema, 0.93]
-  categoria: [sem_conexao, 0.86]
+  categoria: [internet_rede, 0.86]
   prioridade: [2, 0.7]
   frustracao: [2, 0.8]
   malicioso: 0.02

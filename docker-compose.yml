@@ -1,23 +1,27 @@
 # ==============================================================================
-# Stack do bot (base) — cérebro Python (Contrato A) + gateway Go (Chatwoot)
-# + Postgres/pgvector (RAG do cérebro E estado do gateway).
+# Stack da Sofia: gateway Go (webhook do Infodesk) + cérebro Python (Contrato A)
+# + Postgres/pgvector (RAG do cérebro e estado do gateway).
 #
-# Dev local:   docker compose up --build   (portas em localhost, build local)
+#   Infodesk ──webhook──► gateway :8080 ──POST /chat──► brain :8001
+#                           │   ▲                          │
+#                           │   └──── /tools/infodesk/* ◄──┘
+#                           └──────► pgvector (schema `gateway` + tabelas rag_*)
+#
+# Dev local:   cp .env.example .env  (preencha) && docker compose up --build
 # Produção:    COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml no .env
-#              (imagens pinadas por tag, sem build, rede do Chatwoot — ver
-#              docker-compose.prod.yml e deploy/deploy-remote.sh)
+#              (restart, teto de logs, sem portas desnecessárias) — passo a passo
+#              em deploy/README.md. Hospedagem ainda indefinida (P10).
 #
-# O .env único na raiz alimenta os serviços (ver .env.example). O que é
-# "fiação" entre containers (URLs internas, paths) mora AQUI em environment:
-# — vence o .env e não depende de ninguém preencher certo.
+# O .env único da raiz alimenta os dois serviços (tabela de variáveis no topo
+# do .env.example). A "fiação" entre containers (URLs internas, caminhos) mora
+# AQUI em `environment:` — vence o .env e não depende de ninguém preencher certo.
 # ==============================================================================
 name: sofia-bot
 
 services:
-  # Postgres + pgvector: índice do RAG (tabelas rag_* — Contrato B, ver
-  # docs/zapin/plano-migracao-pgvector.md) e persistência do gateway (schema `gateway`:
-  # dedup, estado do gate de identidade, cache telefone→perfil). É ESTADO de
-  # produção: o volume pgvector-data precisa de backup.
+  # Postgres + pgvector: índice do RAG (tabelas rag_*) e persistência do gateway
+  # (schema `gateway`: dedup, conversas, tickets, cursor do reconciliador).
+  # É ESTADO de produção: o volume pgvector-data precisa de backup.
   pgvector:
     image: pgvector/pgvector:pg16
     environment:
@@ -27,7 +31,7 @@ services:
     volumes:
       - pgvector-data:/var/lib/postgresql/data
     ports:
-      # dev: `python -m src.rag.sync` / `verificar` rodando fora do docker
+      # dev: `python -m src.rag.sync` rodando fora do docker (o prod remove).
       - '127.0.0.1:5432:5432'
     healthcheck:
       # -h 127.0.0.1: o servidor temporário do init só escuta no socket unix;
@@ -48,16 +52,27 @@ services:
         required: false
     environment:
       CHROMA_PERSIST_DIR: /app/chroma_db
-      DOCS_DIR: /app/docs
+      DOCS_DIR: /app/docs/base
       # Histórico de conversa persistente (checkpointer SQLite do LangGraph) —
       # sem o volume, um restart do brain apagaria a memória das conversas.
       CHECKPOINT_DB_PATH: /data/checkpoints.db
-      # Tools de chamado (SAC) que o cérebro chama no gateway.
-      SAC_TOOLS_BASE_URL: http://gateway:8080
-      # Índice pgvector (escrita do sync sempre; leitura só com VECTOR_BACKEND=pgvector).
+      # Tools do Infodesk: o cérebro só fala com o gateway, nunca com o Infodesk.
+      # O token é o MESMO TOOLS_API_TOKEN do gateway (X-Tools-Token).
+      INFODESK_TOOLS_BASE_URL: http://gateway:8080
+      INFODESK_TOOLS_TOKEN: ${TOOLS_API_TOKEN:-}
+      # No compose o índice do RAG é SEMPRE o pgvector: a imagem não embute índice
+      # Chroma, então o default `chroma` deixaria o RAG vazio em silêncio.
+      VECTOR_BACKEND: pgvector
       PGVECTOR_URL: postgresql://rag:${PGVECTOR_PASSWORD:-}@pgvector:5432/rag
+      # Taxonomia compartilhada com o gateway (volume abaixo).
+      TAXONOMIA_PATH: /config/taxonomia.yaml
     volumes:
       - brain-data:/data
+      # Modelo de embeddings (Hugging Face) baixado uma vez, não a cada rebuild/sync.
+      - hf-cache:/app/.hf
+      # config/ compartilhado: a MESMA taxonomia nos dois serviços (hoje o
+      # placeholder de agente-ia/config; a real entra na E5.1 / P1). Somente leitura.
+      - ${CONFIG_DIR:-./agente-ia/config}:/config:ro
     ports:
       - '127.0.0.1:8001:8001'
     depends_on:
@@ -68,7 +83,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      # o import da app compila o grafo e abre o Chroma — dá um fôlego
+      # o import da app compila o grafo e carrega a taxonomia — dá um fôlego
       start_period: 40s
 
   gateway:
@@ -84,12 +99,19 @@ services:
       PG_URL: postgresql://rag:${PGVECTOR_PASSWORD:-}@pgvector:5432/rag
       # SQLite só é usado quando PG_URL está vazio (dev sem Postgres).
       DB_PATH: /data/gateway.db
+      TAXONOMIA_PATH: /config/taxonomia.yaml
     volumes:
       - gateway-data:/data
+      - ${CONFIG_DIR:-./agente-ia/config}:/config:ro
     ports:
+      # Quem termina o HTTPS (proxy da Infominas, P10) fala com esta porta.
       - '127.0.0.1:8080:8080'
     depends_on:
       pgvector:
+        condition: service_healthy
+      # O webhook pode chegar assim que o gateway sobe; sem o cérebro de pé o
+      # primeiro turno cairia em transferência.
+      brain:
         condition: service_healthy
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8080/health']
@@ -102,3 +124,4 @@ volumes:
   pgvector-data:
   gateway-data:
   brain-data:
+  hf-cache:

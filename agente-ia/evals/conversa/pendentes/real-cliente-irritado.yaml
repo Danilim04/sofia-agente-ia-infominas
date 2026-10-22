@@ -1,4 +1,5 @@
 # Cenário real (parafraseado do histórico do Infodesk; sem dados reais). Cliente muito irritado: empatia curta e transferência por código (frustração ≥ 3).
+# Destrava: Q1 — aprovar as categorias de config/taxonomia.proposta.yaml e promovê-la a taxonomia.yaml; depois `git mv` para evals/conversa/.
 id: conversa-132
 descricao: frustração alta dispara transferência e a Sofia não promete prazo
 sessao:
@@ -7,7 +8,7 @@ sessao:
   contato: telefone
 jev:
 - intencao: [reclamacao_problema, 0.9]
-  categoria: [sem_conexao, 0.85]
+  categoria: [internet_rede, 0.85]
   prioridade: [3, 0.8]
   frustracao: [3, 0.9]
   malicioso: 0.02
@@ -21,4 +22,4 @@ turnos:
     nao_chama: [abrir_chamado]
     nao_contem: [prazo, encaminhei, repassei]
     classificacao:
-      categoria: sem_conexao
+      categoria: internet_rede
