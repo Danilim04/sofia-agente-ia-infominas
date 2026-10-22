@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"bot-infominas/internal/config"
+	"bot-infominas/internal/engine"
 	"bot-infominas/internal/infodesk"
 	"bot-infominas/internal/store"
 )
@@ -140,7 +143,7 @@ func motivoDe(out map[string]any) string { m, _ := out["motivo"].(string); retur
 
 func TestValidarNome(t *testing.T) {
 	for entrada, ok := range map[string]bool{
-		"Maria Souza": true, "  maria   souza  ": true, "João da Silva": true, "Ana-Paula D'Ávila": true, "Dr. José Neto": true,
+		"Maria Souza": true, "  maria   souza  ": true, "João da Silva": true, "Ana-Paula D'Ávila": true, "Ana D’Ávila": true, "Dr. José Neto": true,
 		"Maria": false, "": false, "   ": false, "Maria 123": false, "maria@acme.com Souza": false, "1 2": false,
 		"- -": false, "Maria\nSouza": true /* controle vira espaço */, strings.Repeat("a", 70) + " " + strings.Repeat("b", 70): false,
 	} {
@@ -167,7 +170,7 @@ func TestValidarEmail(t *testing.T) {
 }
 
 func TestValidarEmpresa(t *testing.T) {
-	for entrada, ok := range map[string]bool{"ACME Ltda": true, "": false, "  ": false, strings.Repeat("x", 121): false} {
+	for entrada, ok := range map[string]bool{"ACME Ltda": true, "ACME": true, "a": false, "ab c": false, "Silva": true, "": false, "  ": false, "- - -": false, strings.Repeat("x", 121): false} {
 		if _, valido := validarEmpresa(entrada); valido != ok {
 			t.Errorf("validarEmpresa(%d chars) = %v, esperava %v", len(entrada), valido, ok)
 		}
@@ -215,9 +218,19 @@ func TestPrepararCadastro_OkGravaPropostaEUsaOTelefoneDaSessao(t *testing.T) {
 	})
 	chave := chaveDaProposta(t, out)
 	p := out["proposta"].(map[string]any)
-	if p["nome"] != "Maria Souza" || p["email"] != "Maria@Acme.com.br" || p["telefone_mascarado"] != "****0001" ||
-		p["empresa"].(map[string]any)["nome"] != "ACME Ltda" {
+	if p["telefone_mascarado"] != "****0001" || p["empresa"].(map[string]any)["nome"] != "ACME Ltda" {
 		t.Errorf("proposta = %+v", p)
+	}
+	// Nome e e-mail não voltam no ToolMessage (checkpoint/trace mascaram por chave, não por texto).
+	if _, tem := p["nome"]; tem {
+		t.Error("a proposta não devolve o nome do cliente")
+	}
+	if _, tem := p["email"]; tem {
+		t.Error("a proposta não devolve o e-mail do cliente")
+	}
+	linhaGravada, _ := a.st.ObterCadastro(context.Background(), chave)
+	if linhaGravada == nil || linhaGravada.Nome != "Maria Souza" || linhaGravada.Email != "Maria@Acme.com.br" {
+		t.Errorf("a linha gravada guarda nome e e-mail para o POST: %+v", linhaGravada)
 	}
 	for k := range p {
 		if strings.Contains(strings.ToLower(k), "client") || k == "cliente_id" {
@@ -615,5 +628,91 @@ func TestCadastro_RotasExigemTokenEPost(t *testing.T) {
 		if code, _ := do(t, a.h, http.MethodGet, rota, tokenTeste, ""); code != http.StatusMethodNotAllowed {
 			t.Errorf("%s com GET: HTTP %d, esperava 405", caminho, code)
 		}
+	}
+}
+
+// A máscara de CPF do cérebro (src/agent/pii.py) troca qualquer corrida de 11
+// dígitos por "***.***.789-**": a chave em hex puro seria corrompida em ~4% dos
+// casos e o `cadastrar` falharia para sempre. Em grupos de 8, nunca há 9 seguidos.
+func TestChaveCadastro_NuncaTemNoveDigitosSeguidos(t *testing.T) {
+	reGrupos := regexp.MustCompile(`^[0-9a-f]{8}(-[0-9a-f]{8}){7}$`)
+	reNove := regexp.MustCompile(`\d{9}`)
+	for i := 0; i < 5000; i++ {
+		c := chaveCadastro(convTeste, telTeste, fmt.Sprintf("cliente-%d", i), "Maria Souza", fmt.Sprintf("m%d@acme.com", i))
+		if !reGrupos.MatchString(c) {
+			t.Fatalf("formato inesperado: %s", c)
+		}
+		if reNove.MatchString(c) {
+			t.Fatalf("a chave tem 9 dígitos seguidos (a regex de CPF casaria): %s", c)
+		}
+	}
+}
+
+// failSalvarContato falha a primeira gravação de contato (o POST já foi aceito).
+type failSalvarContato struct {
+	store.Store
+	falhas int
+}
+
+func (f *failSalvarContato) SalvarContato(ctx context.Context, c *store.Contato) error {
+	if f.falhas > 0 {
+		f.falhas--
+		return errors.New("disco cheio")
+	}
+	return f.Store.SalvarContato(ctx, c)
+}
+
+// Se o Infodesk cadastrou mas o contato não foi gravado, o retry (ramo `feito`)
+// repara o contato — e continua sem fazer novo POST.
+func TestCadastrar_RetryReparaOContatoSemNovoPOST(t *testing.T) {
+	a, fc := novoAmbCad(t)
+	chave := chaveDaProposta(t, a.prepararCadastro("Maria Souza", "ACME Ltda", ""))
+	a.h.d.Store = &failSalvarContato{Store: a.st, falhas: 1}
+
+	if out := a.cadastrar(chave); motivoDe(out) != "infodesk_indisponivel" {
+		t.Fatalf("1ª chamada deveria falhar ao gravar o contato: %+v", out)
+	}
+	if c, _ := a.st.ObterContato(context.Background(), telTeste, time.Now()); c != nil {
+		t.Fatalf("o contato não devia existir ainda: %+v", c)
+	}
+	if out := a.cadastrar(chave); out["status"] != true || out["requester_id"] != idSolicitante {
+		t.Fatalf("retry: %+v", out)
+	}
+	c, _ := a.st.ObterContato(context.Background(), telTeste, time.Now())
+	if c == nil || c.RequesterID != idSolicitante || c.Forma != store.FormaTelefone {
+		t.Errorf("o retry devia gravar o contato: %+v", c)
+	}
+	if fc.totalCriados() != 1 {
+		t.Errorf("POST /requesters = %d vezes, esperava 1", fc.totalCriados())
+	}
+}
+
+// ctxTransf registra o contexto com que o handoff foi pedido.
+type ctxTransf struct {
+	*fakeTransf
+	prazo time.Duration
+	temDL bool
+}
+
+func (c *ctxTransf) TransferirParaHumano(ctx context.Context, conv string, t engine.Transferencia) string {
+	dl, ok := ctx.Deadline()
+	c.temDL = ok
+	if ok {
+		c.prazo = time.Until(dl)
+	}
+	return c.fakeTransf.TransferirParaHumano(ctx, conv, t)
+}
+
+// O handoff da empresa não resolvida roda em contexto próprio (desligado do da
+// requisição, com o prazo de posTeto): se o cérebro desistir de esperar, ele conclui.
+func TestPrepararCadastro_HandoffUsaContextoProprioComPrazo(t *testing.T) {
+	a, fc := novoAmbCad(t)
+	fc.clientes = nil
+	ct := &ctxTransf{fakeTransf: a.tr}
+	a.h.d.Transferidor = ct
+	a.prepararCadastro("Maria Souza", "Fantasma Telecom", "")
+	a.prepararCadastro("Maria Souza", "Fantasma Telecom", "")
+	if len(a.tr.chamadas) != 1 || !ct.temDL || ct.prazo <= 0 || ct.prazo > posTeto {
+		t.Fatalf("transferências=%d deadline=%v prazo=%v (esperado ≤ %v)", len(a.tr.chamadas), ct.temDL, ct.prazo, posTeto)
 	}
 }

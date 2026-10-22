@@ -93,7 +93,7 @@ func validarNome(s string) (string, bool) {
 			switch {
 			case unicode.IsLetter(r):
 				letras++
-			case r == '\'' || r == '-' || r == '.':
+			case r == '\'' || r == '’' || r == '-' || r == '.':
 			default:
 				return "", false
 			}
@@ -122,11 +122,16 @@ func validarEmail(s string) (string, bool) {
 	return e, true
 }
 
-// validarEmpresa: não vazia, uma linha, com teto. Texto do cliente — vai à
-// busca (query), nunca é usado como id.
+// empresaMin é o mínimo de letras/dígitos do nome da empresa: impede usar o
+// cadastro para listar a carteira de clientes digitando "a", "s", "Silva"...
+// (revisão da E5.3). TODO(decisão do produto): valor definitivo.
+const empresaMin = 4
+
+// validarEmpresa: uma linha, entre empresaMin letras/dígitos e empresaMax
+// caracteres. Texto do cliente — vai à busca (query), nunca é usado como id.
 func validarEmpresa(s string) (string, bool) {
 	e, truncou := sanitizarTexto(s, empresaMax, true)
-	return e, e != "" && !truncou
+	return e, !truncou && len([]rune(strings.ReplaceAll(normalizarEmpresa(e), " ", ""))) >= empresaMin
 }
 
 var semAcento = strings.NewReplacer(
@@ -180,12 +185,20 @@ func escolherCliente(cands []infodesk.Cliente, digitado string) (infodesk.Client
 }
 
 // chaveCadastro = sha256(conversation_id + telefone + cliente_id + nome
-// normalizado + e-mail em minúsculas) em hex. Calculada SÓ pelo gateway; o
-// cérebro apenas a repassa dentro da proposta.
+// normalizado + e-mail em minúsculas) em hex, em 8 grupos de 8 caracteres
+// separados por "-". Calculada SÓ pelo gateway; o cérebro apenas a repassa. O
+// formato agrupado não é estética: a máscara de CPF do cérebro (src/agent/pii.py)
+// troca qualquer corrida de 11 dígitos por "***.***.789-**", o que corromperia ~4%
+// das chaves em hex puro. Grupos de 8 nunca têm 9 dígitos seguidos, que a regex exige.
 func chaveCadastro(convID, telefone, clienteID, nome, email string) string {
 	norm := strings.ToLower(strings.Join(strings.Fields(nome), " "))
 	sum := sha256.Sum256([]byte(convID + telefone + clienteID + norm + strings.ToLower(email)))
-	return hex.EncodeToString(sum[:])
+	h := hex.EncodeToString(sum[:])
+	grupos := make([]string, 0, len(h)/8)
+	for i := 0; i < len(h); i += 8 {
+		grupos = append(grupos, h[i:i+8])
+	}
+	return strings.Join(grupos, "-")
 }
 
 // abreviarNome: "Maria Souza" → "Maria S." (só o nome abreviado sai do gateway).
@@ -318,8 +331,11 @@ func (h *Handler) handlePrepararCadastro(w http.ResponseWriter, r *http.Request)
 	h.log.Info("cadastro preparado", "conversation_id", conv, "telefone", mascararTelefone(tel), "candidatos", len(validos))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": true,
+		// Sem nome nem e-mail: o modelo já os tem (passou-os no preparo) e o
+		// ToolMessage vai para o checkpoint e o trace, que mascaram por chave, não
+		// por texto. A empresa é a que o GATEWAY escolheu: o resumo ao cliente usa ela.
 		"proposta": map[string]any{
-			"nome": linha.Nome, "email": linha.Email, "empresa": map[string]any{"nome": linha.ClienteNome},
+			"empresa":            map[string]any{"nome": linha.ClienteNome},
 			"telefone_mascarado": mascararTelefone(tel), "chave": linha.Chave,
 		},
 	})
@@ -343,7 +359,11 @@ func (h *Handler) empresaNaoResolvida(ctx context.Context, w http.ResponseWriter
 		// TODO(decisão do produto): o que fazer com empresa inexistente. Hipótese:
 		// transferir (CADASTRO_SEM_CLIENTE); nunca cadastra sem clientId.
 		if h.op.CadastroSemCliente == config.CadastroSemClienteTransferir && h.d.Transferidor != nil {
-			id := h.d.Transferidor.TransferirParaHumano(ctx, conv, engine.Transferencia{
+			// Contexto próprio (como em abrir.go): se o cérebro desistir de esperar, o
+			// handoff ainda precisa terminar de ser registrado.
+			tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), posTeto)
+			defer cancel()
+			id := h.d.Transferidor.TransferirParaHumano(tctx, conv, engine.Transferencia{
 				Origem:   engine.OrigemAcao,
 				Causa:    "cadastro: empresa do cliente não encontrada no Infodesk",
 				Detalhe:  "CADASTRO_SEM_CLIENTE=transferir após " + strconv.Itoa(n) + " tentativas (" + motivo + ")",
@@ -426,6 +446,13 @@ func (h *Handler) handleCadastrar(w http.ResponseWriter, r *http.Request) {
 	if linha.Status == store.CadastroFeito {
 		// Já concluído (retry, ou "sim" repetido): devolve o resultado, sem novo POST.
 		h.log.Info("cadastrar: já concluído; devolvendo o resultado guardado", "conversation_id", conv)
+		// Se a primeira chamada concluiu no Infodesk mas não gravou o contato, este é o
+		// retry que repara (a gravação é idempotente).
+		if err := h.salvarContatoCadastrado(ctx, tel, linha); err != nil {
+			h.log.Error("cadastrar: gravar contato", "conversation_id", conv, "err", err)
+			responderRecusa(w, "infodesk_indisponivel", txtCadFalhouAoCadastro)
+			return
+		}
 		h.respostaCadastro(w, linha)
 		return
 	}
@@ -461,7 +488,7 @@ func (h *Handler) handleCadastrar(w http.ResponseWriter, r *http.Request) {
 		responderRecusa(w, "infodesk_indisponivel", txtCadFalhouAoCadastro)
 		return
 	}
-	h.log.Info("solicitante_cadastrado", "conversa", conv, "criado", criado.Created)
+	h.log.Info("solicitante_cadastrado", "conversation_id", conv, "criado", criado.Created)
 	h.respostaCadastro(w, linha)
 }
 

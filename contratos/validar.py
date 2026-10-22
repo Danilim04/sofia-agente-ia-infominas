@@ -140,16 +140,10 @@ ANINHADO: dict[str, dict[str, set[str]]] = {
         },
     },
     "cadastro/preparar": {
-        "ok.proposta": {"nome", "email", "empresa", "telefone_mascarado", "chave"},
+        "ok.proposta": {"empresa", "telefone_mascarado", "chave"},
     },
     "cadastro/cadastrar": {
-        "request.proposta": {
-            "nome",
-            "email",
-            "empresa",
-            "telefone_mascarado",
-            "chave",
-        },
+        "request.proposta": {"empresa", "telefone_mascarado", "chave"},
         "ok.solicitante": {"nome"},
         "ok.empresa": {"nome"},
     },

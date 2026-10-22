@@ -10,6 +10,7 @@ prepara o chamado. Sem rede: o gateway é `tests/fakes.py::FakeGateway`.
 from __future__ import annotations
 
 import json
+import re
 
 import httpx
 import pytest
@@ -57,6 +58,7 @@ def _motivos(caminho: str) -> list[str]:
         ("  maria   souza  ", True),
         ("João da Silva", True),
         ("Ana-Paula D'Ávila", True),
+        ("Ana D’Ávila", True),  # apóstrofo tipográfico do teclado do celular
         ("Dr. José Neto", True),
         ("Maria\nSouza", True),  # controle vira espaço
         ("Maria", False),
@@ -96,7 +98,18 @@ def test_email_valido(email, valido):
 
 @pytest.mark.parametrize(
     ("empresa", "valida"),
-    [("ACME Ltda", True), ("", False), ("   ", False), (None, False), ("x" * 121, False)],
+    [
+        ("ACME Ltda", True),
+        ("ACME", True),
+        ("Silva", True),
+        ("abc", False),
+        ("a b c", False),
+        ("- - -", False),
+        ("", False),
+        ("   ", False),
+        (None, False),
+        ("x" * 121, False),
+    ],
 )
 def test_empresa_valida(empresa, valida):
     assert empresa_valida(empresa) is valida
@@ -679,3 +692,38 @@ def test_e2e_so_confirmacao_explicita_cadastra(monkeypatch, resposta):
     recusa = [m for m in out2["messages"] if isinstance(m, ToolMessage)][-1]
     assert "recusado_pela_politica" in recusa.content and "confirmação explícita" in recusa.content
     assert not out2.get("identificacao")
+
+
+# ---------------------------------------------------------------------------
+# A máscara de CPF do histórico não pode corromper a chave da proposta (revisão E5.3)
+# ---------------------------------------------------------------------------
+
+
+def _proposta_pelo_protetor(chave: str) -> dict | None:
+    """Passa o ToolMessage do `preparar` pela MESMA máscara que o redutor do grafo aplica."""
+    from src.agent.pii import proteger_mensagem
+
+    ok = contrato_tools("cadastro/preparar", "ok")
+    ok["proposta"]["chave"] = chave
+    mensagem = proteger_mensagem(_tool_msg(PREPARAR, ok))
+    estado = _estado(HumanMessage(content="oi"), _ai(PREPARAR), mensagem)
+    return tool_policy._proposta_cadastro_da_sessao(estado)
+
+
+def test_chave_do_contrato_nao_tem_nove_digitos_seguidos():
+    chave = contrato_tools("cadastro/preparar", "ok")["proposta"]["chave"]
+    assert re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{8}){7}", chave)
+    assert not re.search(r"\d{9}", chave)
+
+
+def test_chave_agrupada_com_onze_digitos_sobrevive_a_mascara_de_cpf():
+    # 11 dígitos no total (a regex de CPF casaria em hex puro), mas em grupos de 8
+    chave = "ab123456-78901cdd-d1111111-22222222-33333333-44444444-55555555-66666666"
+    assert _proposta_pelo_protetor(chave)["chave"] == chave
+
+
+def test_chave_em_hex_puro_seria_corrompida_pela_mascara():
+    """Documenta por que o gateway agrupa a chave: em hex puro ~4% se perderiam."""
+    puro = "ab12345678901cddd" + "1" * 47
+    corrompida = _proposta_pelo_protetor(puro)["chave"]
+    assert corrompida != puro and "***" in corrompida

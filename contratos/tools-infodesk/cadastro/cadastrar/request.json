@@ -2,12 +2,10 @@
   "telefone": "+5531999990001",
   "conversation_id": "6f1c2a3e-9b4d-4e7a-8c21-5d3f0a9b7e10",
   "proposta": {
-    "nome": "Maria Souza",
-    "email": "maria@acme.com.br",
     "empresa": {
       "nome": "ACME Ltda"
     },
     "telefone_mascarado": "****0001",
-    "chave": "47065c9aa6eda48e147b541734fc27a1115a34e27bccd140f6b7eb8550b28a4f"
+    "chave": "47065c9a-a6eda48e-147b5417-34fc27a1-115a34e2-7bccd140-f6b7eb85-50b28a4f"
   }
 }

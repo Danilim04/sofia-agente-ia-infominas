@@ -6,7 +6,7 @@ tool normaliza, e o gateway Go as repete (`backend/internal/toolsapi/cadastro.go
 
 - nome: duas palavras ou mais, só letras (com acento) e ``'`` ``-`` ``.``;
 - e-mail: opcional; ``^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$``, até 254 caracteres;
-- empresa: não vazia, uma linha, até 120 caracteres. É TEXTO de busca: quem escolhe
+- empresa: uma linha, 4 a 120 caracteres (letras/dígitos ≥ 4). É TEXTO de busca: quem escolhe
   o cliente (``clientId``) é o gateway, entre os candidatos da busca.
 """
 
@@ -18,6 +18,7 @@ from typing import Any
 
 NOME_MAX = 120
 EMPRESA_MAX = 120
+EMPRESA_MIN = 4  # letras/dígitos; espelha `empresaMin` do gateway
 EMAIL_MAX = 254
 
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -41,7 +42,7 @@ def nome_valido(valor: Any) -> bool:
     for palavra in palavras:
         if not any(c.isalpha() for c in palavra):
             return False
-        if any(not (c.isalpha() or c in "'-.") for c in palavra):
+        if any(not (c.isalpha() or c in "'’-.") for c in palavra):
             return False
     return True
 
@@ -57,5 +58,7 @@ def email_valido(valor: Any) -> bool:
 
 
 def empresa_valida(valor: Any) -> bool:
+    """Uma linha, ≥ `EMPRESA_MIN` letras/dígitos (impede listar a carteira digitando "a"), ≤ 120."""
     empresa = linha_unica(valor)
-    return bool(empresa) and len(empresa) <= EMPRESA_MAX
+    letras_e_digitos = sum(c.isalnum() for c in empresa)
+    return letras_e_digitos >= EMPRESA_MIN and len(empresa) <= EMPRESA_MAX

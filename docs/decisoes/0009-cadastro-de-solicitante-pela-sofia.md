@@ -41,6 +41,7 @@ por código; `oferecer` só orienta) e `CADASTRO_MAX_TENTATIVAS`. **Nunca** cada
 - Cliente novo abre chamado sem CPF; o nome/empresa são declarados, não verificados: risco aceito.
 - O ticket herda `requesterId`/`clientId` da conversa (T11) e chega com vínculo.
 - Nova superfície de escrita: coberta por política, testes de recusa e evals `cadastro-*`.
+- Risco aceito, mitigado: a busca de empresa exige ≥ 4 letras/dígitos e só mostra nomes em `empresa_ambigua`; um número desconhecido ainda pode sondar a carteira (limite de tentativas por conversa). `TODO(decisão do produto)`.
 
 ## Alternativas descartadas
 

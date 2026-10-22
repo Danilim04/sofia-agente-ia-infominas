@@ -26,6 +26,6 @@ turnos:
     espera:
       chama: [cadastrar_solicitante]
       nao_chama: [abrir_chamado]
-      gateway_json: {endpoint: /tools/infodesk/cadastro/cadastrar, campos: {telefone: "+5531999990085", conversation_id: conv-conversa-085, proposta.chave: "47065c9aa6eda48e147b541734fc27a1115a34e27bccd140f6b7eb8550b28a4f"}}
+      gateway_json: {endpoint: /tools/infodesk/cadastro/cadastrar, campos: {telefone: "+5531999990085", conversation_id: conv-conversa-085, proposta.chave: "47065c9a-a6eda48e-147b5417-34fc27a1-115a34e2-7bccd140-f6b7eb85-50b28a4f"}}
       estado_nao_contem: ["97777", "forjado", "forjada"]
       nao_contem: ["97777"]
