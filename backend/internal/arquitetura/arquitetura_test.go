@@ -15,6 +15,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -145,21 +146,23 @@ func legadoPermitido(t *testing.T, prefixo string) bool {
 // resto do arquivo: o teste Python varre este fonte.
 func TestArquitetura_DeployEInfraSemLegado(t *testing.T) {
 	termos := []string{"chat" + "woot", "azap" + "fy", "azap" + "docs", "mon" + "go"}
-	repo := filepath.Join(raizDoModulo(t), "..")
+	// os.Root: a leitura fica presa à raiz do repositório (um symlink em
+	// deploy/ ou infra/ não leva para fora dela).
+	raiz, err := os.OpenRoot(filepath.Join(raizDoModulo(t), ".."))
+	if err != nil {
+		t.Fatalf("abrindo a raiz do repositório: %v", err)
+	}
+	defer raiz.Close()
+	fsRepo := raiz.FS()
 	for _, base := range []string{"deploy", "infra"} {
-		err := filepath.WalkDir(filepath.Join(repo, base), func(caminho string, d os.DirEntry, err error) error {
+		err := fs.WalkDir(fsRepo, base, func(rel string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return err
 			}
-			rel, err := filepath.Rel(repo, caminho)
-			if err != nil {
-				return err
-			}
-			rel = filepath.ToSlash(rel)
 			if legadoPermitido(t, rel) {
 				return nil
 			}
-			conteudo, err := os.ReadFile(caminho)
+			conteudo, err := fs.ReadFile(fsRepo, rel)
 			if err != nil {
 				return err
 			}
