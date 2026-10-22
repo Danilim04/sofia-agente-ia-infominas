@@ -94,7 +94,7 @@ func TestEngineReal_TransferirFazHandoffComNotaPorCodigo(t *testing.T) {
 	}
 }
 
-func TestEngineReal_AbrirTransferePosTicketSemAvisoDuplicado(t *testing.T) {
+func TestEngineReal_AbrirTransferePosTicketConfirmandoONumeroUmaVez(t *testing.T) {
 	a, tr := comEngineReal(t)
 	a.conversa(convTeste, telTeste)
 	a.identificadoPorCPF()
@@ -102,8 +102,8 @@ func TestEngineReal_AbrirTransferePosTicketSemAvisoDuplicado(t *testing.T) {
 	if out["status"] != true || out["transferido"] != true {
 		t.Fatalf("abrir: %+v", out)
 	}
-	if len(tr.mensagens) != 0 {
-		t.Fatalf("o LLM comunica o número; o gateway não manda aviso extra: %v", tr.mensagens)
+	if len(tr.mensagens) != 1 || tr.mensagens[0] != engine.MsgChamadoAberto(48213) {
+		t.Fatalf("o gateway confirma o número do chamado, uma vez, antes do handoff (o cérebro é descartado depois dele): %v", tr.mensagens)
 	}
 	if len(tr.handoffs) != 1 || !strings.Contains(tr.handoffs[0].nota, "chamado #48213") {
 		t.Fatalf("a nota do handoff leva o número do chamado (gravado na conversa ANTES): %+v", tr.handoffs)

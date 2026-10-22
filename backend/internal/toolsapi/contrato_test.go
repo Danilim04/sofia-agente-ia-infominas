@@ -123,6 +123,9 @@ func TestContrato_ToolsInfodesk(t *testing.T) {
 			if mut != nil {
 				mut(req)
 			}
+			if p, ok := req["proposta"].(map[string]any); ok && endpoint == "ticket/abrir" {
+				a.selar(p) // o `preparar` do cenário: o abrir só executa proposta selada (M8)
+			}
 			code, got := a.post(endpoint, req)
 			if code != http200 {
 				t.Fatalf("HTTP %d (erro de negócio é sempre 200)", code)

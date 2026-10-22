@@ -96,7 +96,12 @@ type Config struct {
 	DebounceTeto   time.Duration // espera máxima acumulada antes de processar mesmo sem silêncio
 	EventoIdadeMax time.Duration // mensagens mais velhas que isso são descartadas (F10); 0 = sem corte
 	ReplyMaxChars  int           // tamanho-alvo de cada mensagem enviada ao WhatsApp (F12); 0 = sem quebra
-	BolhaPausa     time.Duration // pausa entre bolhas consecutivas do mesmo turno (ritmo humano); 0 = sem pausa
+	// LoteMaxChars (LOTE_MAX_CHARS, 4000): o texto coalescido de uma rajada é cortado
+	// neste tamanho antes do cérebro. TurnosPorHoraMax (TURNOS_POR_HORA_MAX, 60):
+	// turnos por telefone por hora; acima, a conversa vai a um atendente (E4.5, M4).
+	LoteMaxChars     int
+	TurnosPorHoraMax int
+	BolhaPausa       time.Duration // pausa entre bolhas consecutivas do mesmo turno (ritmo humano); 0 = sem pausa
 
 	// ToolsAPIToken: segredo compartilhado cérebro↔gateway (X-Tools-Token).
 	// Vazio = a API /tools/infodesk/* não é exposta.
@@ -138,12 +143,20 @@ type Config struct {
 	// só estes números falam com ela; os demais vão direto para um atendente, sem
 	// mensagem ao cliente. Ver testadores.go.
 	TestadoresTelefones []string
+
+	// WebhookSemAutenticacao (WEBHOOK_SEM_AUTENTICACAO, default false): deixa o
+	// gateway subir SEM INFODESK_WEBHOOK_SECRET (webhook sem HMAC). Só dev.
+	// ProducaoAberta (SOFIA_PRODUCAO_ABERTA, default false): opt-in explícito para
+	// atender todo cliente (TESTADORES_TELEFONES vazia). Ver seguranca.go.
+	WebhookSemAutenticacao bool
+	ProducaoAberta         bool
 }
 
 // Avisos lista o que, na configuração carregada, funciona mas merece atenção
 // no boot (o chamador loga cada um em WARN).
 func (c *Config) Avisos() []string {
 	var out []string
+	out = append(out, c.avisosDeSeguranca()...)
 	if c.ToolsAPIToken != "" && c.IdentHashSal == "" {
 		out = append(out, "IDENT_HASH_SAL vazio: o sal dos hashes de CPF/contrato cai no TOOLS_API_TOKEN; "+
 			"rotacionar o TOOLS_API_TOKEN invalida os hashes já gravados (defina um IDENT_HASH_SAL próprio em produção)")
@@ -202,6 +215,8 @@ func Load() (*Config, error) {
 		{&cfg.TransferirAposTicket, "TRANSFERIR_APOS_TICKET", true},
 		{&cfg.DedupConsultaInfodesk, "DEDUP_CONSULTA_INFODESK", true},
 		{&cfg.StrictTaxonomia, "STRICT_TAXONOMIA", false},
+		{&cfg.WebhookSemAutenticacao, "WEBHOOK_SEM_AUTENTICACAO", false},
+		{&cfg.ProducaoAberta, "SOFIA_PRODUCAO_ABERTA", false},
 	}
 	for _, b := range booleanos {
 		v, err := lerBool(b.env, b.def)
@@ -235,6 +250,13 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("%s inválido (%s): precisa ser maior que zero", d.env, strings.TrimSpace(getenv(d.env, d.def)))
 		}
 		*d.dst = v
+	}
+	var errLimite error
+	if cfg.LoteMaxChars, errLimite = lerInteiroPositivo("LOTE_MAX_CHARS", 4000); errLimite != nil {
+		return nil, errLimite
+	}
+	if cfg.TurnosPorHoraMax, errLimite = lerInteiroPositivo("TURNOS_POR_HORA_MAX", 60); errLimite != nil {
+		return nil, errLimite
 	}
 	testadores, err := parseTestadores(os.Getenv("TESTADORES_TELEFONES"))
 	if err != nil {
@@ -305,6 +327,9 @@ func Load() (*Config, error) {
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("variáveis obrigatórias ausentes: %s", strings.Join(missing, ", "))
+	}
+	if err := cfg.validarSeguranca(); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil

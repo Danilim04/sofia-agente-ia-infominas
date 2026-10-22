@@ -403,6 +403,12 @@ CREATE INDEX IF NOT EXISTS tickets_numero ON gw.tickets (numero);
 CREATE INDEX IF NOT EXISTS tickets_conversa ON gw.tickets (conversation_id);
 CREATE INDEX IF NOT EXISTS tickets_telefone ON gw.tickets (telefone);
 
+CREATE TABLE IF NOT EXISTS gw.propostas_ticket (
+    conversation_id TEXT PRIMARY KEY,
+    hash            TEXT NOT NULL DEFAULT '',
+    created_at      BIGINT NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS gw.cadastros (
     chave           TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL DEFAULT '',
@@ -618,7 +624,7 @@ func (o *ops) ConcluirCadastro(ctx context.Context, chave, requesterID string, c
 		return errors.New("store: cadastro concluído sem requester_id")
 	}
 	res, err := o.db.ExecContext(ctx, o.rebind(
-		`UPDATE gw.cadastros SET status = ?, requester_id = ?, criado = ?, updated_at = ? WHERE chave = ?`),
+		`UPDATE gw.cadastros SET status = ?, requester_id = ?, criado = ?, nome = '', email = '', updated_at = ? WHERE chave = ?`),
 		CadastroFeito, requesterID, boolInt(criado), time.Now().UnixMilli(), chave)
 	if err != nil {
 		return err
@@ -629,21 +635,68 @@ func (o *ops) ConcluirCadastro(ctx context.Context, chave, requesterID string, c
 	return nil
 }
 
-func (o *ops) IncrementarTentativasCadastro(ctx context.Context, convID string) (int, error) {
-	agora := time.Now().UnixMilli()
+func (o *ops) ExpirarCadastros(ctx context.Context, antes time.Time) (int, error) {
+	res, err := o.db.ExecContext(ctx, o.rebind(`DELETE FROM gw.cadastros WHERE status = ? AND created_at < ?`),
+		CadastroProposta, antes.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := o.db.ExecContext(ctx, o.rebind(
+		`UPDATE gw.cadastros SET nome = '', email = '' WHERE status = ? AND (nome <> '' OR email <> '')`), CadastroFeito); err != nil {
+		return int(n), err
+	}
+	return int(n), nil
+}
+
+// A coluna `conversation_id` de cadastro_tentativas guarda a chave de QUEM
+// tenta (hoje o hash do telefone; antes da E4.5, o id da conversa).
+func (o *ops) IncrementarTentativasCadastro(ctx context.Context, chave string) (int, error) {
+	agora := time.Now()
 	if _, err := o.db.ExecContext(ctx, o.rebind(
 		`INSERT INTO gw.cadastro_tentativas (conversation_id, tentativas, updated_at) VALUES (?, 0, ?)
-		 ON CONFLICT (conversation_id) DO NOTHING`), convID, agora); err != nil {
+		 ON CONFLICT (conversation_id) DO NOTHING`), chave, agora.UnixMilli()); err != nil {
 		return 0, err
 	}
 	var n int
 	err := o.db.QueryRowContext(ctx, o.rebind(
-		`UPDATE gw.cadastro_tentativas SET tentativas = tentativas + 1, updated_at = ?
-		  WHERE conversation_id = ? RETURNING tentativas`), agora, convID).Scan(&n)
+		`UPDATE gw.cadastro_tentativas
+		    SET tentativas = CASE WHEN updated_at < ? THEN 1 ELSE tentativas + 1 END, updated_at = ?
+		  WHERE conversation_id = ? RETURNING tentativas`),
+		agora.Add(-TentativasCadastroJanela).UnixMilli(), agora.UnixMilli(), chave).Scan(&n)
 	return n, err
 }
 
-func (o *ops) ZerarTentativasCadastro(ctx context.Context, convID string) error {
-	_, err := o.db.ExecContext(ctx, o.rebind(`DELETE FROM gw.cadastro_tentativas WHERE conversation_id = ?`), convID)
+func (o *ops) ZerarTentativasCadastro(ctx context.Context, chave string) error {
+	_, err := o.db.ExecContext(ctx, o.rebind(`DELETE FROM gw.cadastro_tentativas WHERE conversation_id = ?`), chave)
 	return err
+}
+
+// ---------------------------------------------------------------------------
+// Proposta de ticket preparada (E4.5, M8)
+// ---------------------------------------------------------------------------
+
+func (o *ops) GravarPropostaTicket(ctx context.Context, convID, hash string, criadaEm time.Time) error {
+	_, err := o.db.ExecContext(ctx, o.rebind(
+		`INSERT INTO gw.propostas_ticket (conversation_id, hash, created_at) VALUES (?, ?, ?)
+		 ON CONFLICT (conversation_id) DO UPDATE SET hash = excluded.hash, created_at = excluded.created_at`),
+		convID, hash, criadaEm.UnixMilli())
+	return err
+}
+
+func (o *ops) ObterPropostaTicket(ctx context.Context, convID string) (string, time.Time, error) {
+	var hash string
+	var criada int64
+	err := o.db.QueryRowContext(ctx, o.rebind(
+		`SELECT hash, created_at FROM gw.propostas_ticket WHERE conversation_id = ?`), convID).Scan(&hash, &criada)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", time.Time{}, nil
+	}
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return hash, time.UnixMilli(criada), nil
 }

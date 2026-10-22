@@ -172,6 +172,7 @@ func (r *Reconciliador) Executar(ctx context.Context) time.Duration {
 		{"tickets_pendentes", r.ticketsPendentes},
 		{"handoffs_pendentes", r.handoffsPendentes},
 		{"vigia", r.vigiaSemResposta},
+		{"cadastros_vencidos", r.cadastrosVencidos},
 	}
 	for _, p := range passos {
 		if ctx.Err() != nil {
@@ -188,7 +189,7 @@ func (r *Reconciliador) Executar(ctx context.Context) time.Duration {
 			r.log.Warn("Infodesk limitou as requisições (RATE_LIMITED); ciclo interrompido", "passo", p.nome, "espera", r.backoff.String())
 			break
 		}
-		r.log.Error("passo do reconciliador falhou", "passo", p.nome, "err", err)
+		r.log.Error("passo do reconciliador falhou", "passo", p.nome, "err", descreverErroDoPasso(err))
 	}
 	if limitado {
 		return r.backoff
@@ -234,4 +235,13 @@ func (r *Reconciliador) esperarMais(retryAfter time.Duration) {
 // avisar alerta sem nunca derrubar o ciclo.
 func (r *Reconciliador) avisar(tipo, titulo, texto, convID string) {
 	r.vigia.Aviso(tipo, titulo, texto, convID)
+}
+
+// descreverErroDoPasso: erro que veio do Infodesk é resumido (sem a mensagem do
+// servidor, que pode ecoar dado do cliente); erro interno (store…) segue inteiro.
+func descreverErroDoPasso(err error) string {
+	if engine.ErroDoInfodesk(err) {
+		return engine.DescreverErro(err)
+	}
+	return err.Error()
 }

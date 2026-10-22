@@ -56,9 +56,19 @@ func (h *Handler) handleTransferir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if c, err := h.d.Store.ObterConversa(ctx, conv); err != nil {
+	// A conversa precisa existir no store (E4.5, M7): o id vem do cérebro, mas só
+	// uma conversa que o webhook já viu pode ser transferida por esta tool.
+	c, err := h.d.Store.ObterConversa(ctx, conv)
+	switch {
+	case err != nil:
 		h.log.Error("transferir: ler conversa", "conversation_id", conv, "err", err)
-	} else if c != nil && !botConduz(c) {
+		responderRecusa(w, "campo_invalido", txtSessaoInvalida)
+		return
+	case c == nil:
+		h.log.Warn("transferir: conversa desconhecida; recusada", "conversation_id", conv)
+		responderRecusa(w, "campo_invalido", txtSessaoInvalida)
+		return
+	case !botConduz(c):
 		responderRecusa(w, "ja_transferida", txtJaTransferida)
 		return
 	}

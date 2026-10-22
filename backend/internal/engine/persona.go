@@ -1,5 +1,7 @@
 package engine
 
+import "fmt"
+
 // nomeAssistente é o ÚNICO lugar do gateway onde o nome da persona vive.
 // O lado Python tem o equivalente em prompts.py — os dois ficam alinhados
 // (ver docs/plano/00-visao-geral.md, "Persona").
@@ -27,3 +29,12 @@ const (
 // motivoPedidoAtendente é a causa (registro/log/alerta) da transferência
 // pedida pelo cliente.
 const motivoPedidoAtendente = "cliente pediu para falar com um atendente"
+
+// MsgChamadoAberto confirma ao cliente o chamado aberto (E4.5, B1). É o gateway
+// que a manda, ANTES do handoff pós-ticket: depois dele a conversa deixa de ser
+// da Sofia e a resposta do cérebro no mesmo turno é descartada (responder →
+// botConduz), então o cliente ficaria sem saber o número. Texto fixo, sem
+// prazo, sem dado pessoal.
+func MsgChamadoAberto(numero int) string {
+	return fmt.Sprintf("Pronto, abri o chamado nº %d para você. Um de nossos atendentes segue com o seu caso por aqui. 🙏", numero)
+}

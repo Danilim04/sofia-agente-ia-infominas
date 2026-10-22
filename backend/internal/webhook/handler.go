@@ -31,7 +31,8 @@ type Engine interface {
 
 // Options configura o receptor.
 type Options struct {
-	// Secret habilita a verificação HMAC (INFODESK_WEBHOOK_SECRET); vazio =
+	// Secret habilita a verificação HMAC (INFODESK_WEBHOOK_SECRET); vazio só chega
+	// aqui com WEBHOOK_SEM_AUTENTICACAO=true (config.Load recusa o boot sem ele) =
 	// sem verificação (só dev — main.go avisa no boot).
 	Secret string
 	// Token exige um segredo na query da URL (?token=...), além do HMAC.

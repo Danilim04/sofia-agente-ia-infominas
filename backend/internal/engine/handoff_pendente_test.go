@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -272,5 +273,89 @@ func TestChatbotInternoNaoLimpaAMarca(t *testing.T) {
 	}
 	if marcaDe(t, st, "c-hp7") == nil {
 		t.Fatal("INTERNAL_BOT não é humano: a marca devia ficar")
+	}
+}
+
+// B1 (E4.5): o gateway confirma o número do chamado ANTES do handoff pós-ticket;
+// a resposta do cérebro que chega depois (conversa já transferida) é descartada,
+// então o cliente recebe UMA confirmação, nunca duas nem contraditórias.
+func TestConfirmacaoDoChamadoAntesDoHandoffERespostaDoCerebroDescartada(t *testing.T) {
+	e, _, tr, _ := engineCompleta(t)
+	comRelogioFalso(e)
+	ctx := context.Background()
+	e.TransferirParaHumano(ctx, "c-b1", Transferencia{
+		Origem: OrigemTicketAberto, Mensagem: MsgChamadoAberto(4521), Causa: "chamado aberto",
+	})
+	e.responder(ctx, "c-b1", "Abri o chamado 4521 para você! Em breve um atendente fala com você.")
+	msgs := tr.mensagens("c-b1")
+	if len(msgs) != 1 || msgs[0] != MsgChamadoAberto(4521) {
+		t.Fatalf("uma confirmação só, a do gateway: %v", msgs)
+	}
+	if len(tr.transferida("c-b1")) != 1 {
+		t.Fatalf("handoff pós-ticket: %v", tr.transferida("c-b1"))
+	}
+}
+
+// Persona: pt-BR, "você", ≤ 1 emoji, o número e nenhuma promessa de prazo.
+func TestMsgChamadoAbertoNaPersona(t *testing.T) {
+	m := MsgChamadoAberto(4521)
+	if !strings.Contains(m, "4521") || !strings.Contains(m, "você") {
+		t.Fatalf("texto: %q", m)
+	}
+	if strings.Count(m, "🙏") > 1 {
+		t.Fatalf("no máximo 1 emoji: %q", m)
+	}
+	for _, proibido := range []string{"minuto", "hora", "prazo", "breve", "logo", "amanhã"} {
+		if strings.Contains(strings.ToLower(m), proibido) {
+			t.Fatalf("a Sofia não promete prazo (%q): %q", proibido, m)
+		}
+	}
+}
+
+// M1 (E4.5): o erro do Infodesk (que pode ecoar dado do cliente na mensagem) não
+// vai cru para o log — só tipo, status, code e rota.
+func TestLogDoHandoffQueFalhaNaoTrazAMensagemDoServidor(t *testing.T) {
+	e, _, tr, _ := engineCompleta(t)
+	comRelogioFalso(e)
+	var buf strings.Builder
+	e.log = slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	tr.handoffErr = &infodesk.HTTPError{Status: 400, Code: infodesk.CodeValidationError, Rota: "/conversations/x/handoff", Mensagem: "CPF 529.982.247-25 de Maria Souza inválido"}
+	tr.enviarErr = &infodesk.HTTPError{Status: 400, Code: infodesk.CodeValidationError, Rota: "/conversations/x/messages", Mensagem: "telefone +5531999990000 inválido"}
+	e.TransferirParaHumano(context.Background(), "c-m1", Transferencia{Origem: OrigemCliente})
+	log := buf.String()
+	for _, vazou := range []string{"529.982.247-25", "Maria Souza", "+5531999990000"} {
+		if strings.Contains(log, vazou) {
+			t.Fatalf("o log vazou %q:\n%s", vazou, log)
+		}
+	}
+	if !strings.Contains(log, "http 400 VALIDATION_ERROR /conversations/x/handoff") {
+		t.Fatalf("o log descreve o erro por tipo/status/code/rota:\n%s", log)
+	}
+}
+
+// O aviso que não foi entregue (ex.: o número do chamado) vira WARN e o handoff segue.
+func TestAvisoNaoEntregueViraWarnEOHandoffSegue(t *testing.T) {
+	e, _, tr, _ := engineCompleta(t)
+	comRelogioFalso(e)
+	var buf strings.Builder
+	e.log = slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	tr.enviarErr = &infodesk.HTTPError{Status: 400, Code: infodesk.CodeValidationError, Rota: "/conversations/x/messages"}
+	e.TransferirParaHumano(context.Background(), "c-w1", Transferencia{Origem: OrigemTicketAberto, Mensagem: MsgChamadoAberto(7)})
+	if !strings.Contains(buf.String(), "aviso ao cliente antes do handoff não foi entregue") {
+		t.Fatalf("faltou o WARN:\n%s", buf.String())
+	}
+	if len(tr.transferida("c-w1")) != 1 {
+		t.Fatalf("o handoff segue: %v", tr.transferida("c-w1"))
+	}
+}
+
+// Erro interno (store, contexto) segue inteiro no log; só o do Infodesk é resumido.
+func TestErroParaLog(t *testing.T) {
+	if got := erroParaLog(errors.New("disco cheio")); got != "disco cheio" {
+		t.Fatalf("erro interno inteiro: %q", got)
+	}
+	he := &infodesk.HTTPError{Status: 400, Code: "X", Rota: "/r", Mensagem: "CPF 1"}
+	if got := erroParaLog(he); strings.Contains(got, "CPF") || !strings.Contains(got, "http 400 X /r") {
+		t.Fatalf("erro do Infodesk resumido: %q", got)
 	}
 }
