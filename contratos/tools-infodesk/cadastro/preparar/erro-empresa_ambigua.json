@@ -1,0 +1,13 @@
+{
+  "status": false,
+  "erro": "encontrei mais de uma empresa com esse nome; mostre as opções ao cliente e peça para ele dizer qual é a dele",
+  "motivo": "empresa_ambigua",
+  "candidatos": [
+    {
+      "nome": "ACME Ltda"
+    },
+    {
+      "nome": "ACME Brasil S.A."
+    }
+  ]
+}

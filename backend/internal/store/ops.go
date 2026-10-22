@@ -403,6 +403,28 @@ CREATE INDEX IF NOT EXISTS tickets_numero ON gw.tickets (numero);
 CREATE INDEX IF NOT EXISTS tickets_conversa ON gw.tickets (conversation_id);
 CREATE INDEX IF NOT EXISTS tickets_telefone ON gw.tickets (telefone);
 
+CREATE TABLE IF NOT EXISTS gw.cadastros (
+    chave           TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL DEFAULT '',
+    telefone        TEXT NOT NULL DEFAULT '',
+    nome            TEXT NOT NULL DEFAULT '',
+    email           TEXT NOT NULL DEFAULT '',
+    cliente_id      TEXT NOT NULL DEFAULT '',
+    cliente_nome    TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'proposta',
+    requester_id    TEXT NOT NULL DEFAULT '',
+    criado          INTEGER NOT NULL DEFAULT 0,
+    created_at      BIGINT NOT NULL DEFAULT 0,
+    updated_at      BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS cadastros_conversa ON gw.cadastros (conversation_id);
+
+CREATE TABLE IF NOT EXISTS gw.cadastro_tentativas (
+    conversation_id TEXT PRIMARY KEY,
+    tentativas      INTEGER NOT NULL DEFAULT 0,
+    updated_at      BIGINT NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS gw.handoffs_pendentes (
     conversation_id TEXT PRIMARY KEY,
     origem          TEXT NOT NULL DEFAULT '',
@@ -538,4 +560,90 @@ func (o *ops) LimparHandoffPendente(ctx context.Context, convID string) (bool, e
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+// ---------------------------------------------------------------------------
+// Cadastro de solicitante (E5.3, ADR 0009)
+// ---------------------------------------------------------------------------
+
+const colunasCadastro = `chave, conversation_id, telefone, nome, email, cliente_id, cliente_nome, status, requester_id, criado, created_at, updated_at`
+
+func lerCadastro(r linha) (*Cadastro, error) {
+	var c Cadastro
+	var criado int
+	var criadoEm, atualizadoEm int64
+	if err := r.Scan(&c.Chave, &c.ConversationID, &c.Telefone, &c.Nome, &c.Email, &c.ClienteID, &c.ClienteNome,
+		&c.Status, &c.RequesterID, &criado, &criadoEm, &atualizadoEm); err != nil {
+		return nil, err
+	}
+	c.Criado = criado != 0
+	c.CreatedAt, c.UpdatedAt = time.UnixMilli(criadoEm), time.UnixMilli(atualizadoEm)
+	return &c, nil
+}
+
+func (o *ops) ObterCadastro(ctx context.Context, chave string) (*Cadastro, error) {
+	c, err := lerCadastro(o.db.QueryRowContext(ctx,
+		o.rebind(`SELECT `+colunasCadastro+` FROM gw.cadastros WHERE chave = ?`), chave))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return c, err
+}
+
+func (o *ops) GravarCadastroProposta(ctx context.Context, c *Cadastro) (*Cadastro, error) {
+	if strings.TrimSpace(c.Chave) == "" {
+		return nil, errors.New("store: cadastro sem chave")
+	}
+	agora := time.Now().UnixMilli()
+	// Dois passos portáveis: cria se não existe; se existe e ainda é proposta,
+	// renova (uma linha `feito` nunca muda).
+	if _, err := o.db.ExecContext(ctx, o.rebind(
+		`INSERT INTO gw.cadastros (`+colunasCadastro+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?, ?)
+		 ON CONFLICT (chave) DO NOTHING`),
+		c.Chave, c.ConversationID, c.Telefone, c.Nome, c.Email, c.ClienteID, c.ClienteNome, CadastroProposta, agora, agora); err != nil {
+		return nil, err
+	}
+	if _, err := o.db.ExecContext(ctx, o.rebind(
+		`UPDATE gw.cadastros SET conversation_id = ?, telefone = ?, nome = ?, email = ?, cliente_id = ?, cliente_nome = ?,
+		        created_at = ?, updated_at = ?
+		  WHERE chave = ? AND status = ?`),
+		c.ConversationID, c.Telefone, c.Nome, c.Email, c.ClienteID, c.ClienteNome, agora, agora, c.Chave, CadastroProposta); err != nil {
+		return nil, err
+	}
+	return o.ObterCadastro(ctx, c.Chave)
+}
+
+func (o *ops) ConcluirCadastro(ctx context.Context, chave, requesterID string, criado bool) error {
+	if strings.TrimSpace(requesterID) == "" {
+		return errors.New("store: cadastro concluído sem requester_id")
+	}
+	res, err := o.db.ExecContext(ctx, o.rebind(
+		`UPDATE gw.cadastros SET status = ?, requester_id = ?, criado = ?, updated_at = ? WHERE chave = ?`),
+		CadastroFeito, requesterID, boolInt(criado), time.Now().UnixMilli(), chave)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("store: cadastro %q não existe", chave)
+	}
+	return nil
+}
+
+func (o *ops) IncrementarTentativasCadastro(ctx context.Context, convID string) (int, error) {
+	agora := time.Now().UnixMilli()
+	if _, err := o.db.ExecContext(ctx, o.rebind(
+		`INSERT INTO gw.cadastro_tentativas (conversation_id, tentativas, updated_at) VALUES (?, 0, ?)
+		 ON CONFLICT (conversation_id) DO NOTHING`), convID, agora); err != nil {
+		return 0, err
+	}
+	var n int
+	err := o.db.QueryRowContext(ctx, o.rebind(
+		`UPDATE gw.cadastro_tentativas SET tentativas = tentativas + 1, updated_at = ?
+		  WHERE conversation_id = ? RETURNING tentativas`), agora, convID).Scan(&n)
+	return n, err
+}
+
+func (o *ops) ZerarTentativasCadastro(ctx context.Context, convID string) error {
+	_, err := o.db.ExecContext(ctx, o.rebind(`DELETE FROM gw.cadastro_tentativas WHERE conversation_id = ?`), convID)
+	return err
 }

@@ -90,6 +90,8 @@ um deslocamento opaco).
 | GET | `/catalog?deskId=` | nenhum | itens de catálogo da mesa (`[{id, name}]`; só 3 mesas têm itens, de teste) |
 | GET | `/users`, `/departments` | nenhum | atendentes (`id, username, email, type, departmentIds`) e departamentos de `dados.json` |
 | GET | `/contacts/lookup?phone=` | `contacts:read` | `{phone, requesters, clientContacts, clientIds, openTickets, conversation}`; solicitantes de `dados.json` (ex.: `+5531990000100` Maria Souza/ACME) |
+| GET | `/clients?q=` ou `?document=` | `contacts:read` | clientes (empresas) de `dados.json` cujo nome contém `q` (sem caixa); array puro `[{id, name}]` (formato não documentado, `07` D3); sem `q` nem `document` → `400` |
+| POST | `/requesters` | `contacts:write` | cadastra solicitante **sem duplicar** (`docs/infodesk/04`, `10` §6): `name` e `clientId` obrigatórios (`clientId` inexistente → `400 INVALID_REFERENCE`), `phone`, `email`, `extension`, `conversationId` e `ticketNumber` opcionais (vinculam; o cliente vem junto). Idempotente **por cliente**: mesmo telefone (com/sem `+55`, com/sem o 9º dígito) ou mesmo e-mail devolve o cadastro existente com `created: false`. `200` com o solicitante + `client`, `canOpenWhatsapp`, `openTickets`, `created`. O `/mock/reset` remove os cadastrados |
 | GET | `/tickets?status=open\|closed\|all&deskId&clientId&requesterId&phone&updatedSince&limit&cursor` | `tickets:read` | `{data, nextCursor}`; padrão `status=open`; `phone` casa `contactPhone` ou telefone do solicitante |
 | POST | `/tickets` | `tickets:write` | `deskId` e `title` obrigatórios; `201` com o objeto `ticket` (03) |
 | GET | `/tickets/:number` | `tickets:read` | ticket + `messages` (respostas públicas); `404 NOT_FOUND` |
@@ -114,8 +116,8 @@ Operar numa conversa encerrada → `404 NOT_FOUND`.
 
 **Não implementadas** (fora da v1 da Sofia ou sem uso no plano): `PATCH/close/
 reopen/cancel/escalate` de ticket, `/tickets/:n/requester`, `/conversations/:id/
-{messages GET,bot,client}`, `/messages`, `/attachments`, `/clients`,
-`/requesters`, `/whatsapp/*`, `/alerts`, `/deliveries`, `/webhook/test`.
+{messages GET,bot,client}`, `/messages`, `/attachments`, `PATCH /requesters/:id`,
+`GET /requesters`, `/whatsapp/*`, `/alerts`, `/deliveries`, `/webhook/test`.
 Eventos **não emitidos**: `message.sent`, `message.status`,
 `conversation.department_changed`, `ticket.*`, `ping` (07 item W8: o real emite os
 ecos das nossas próprias ações; sem eles o E2E não prova "ignorar eco" nem

@@ -614,6 +614,148 @@ class TestMockInfodesk(unittest.TestCase):
         self.assertIsNone(desconhecido["conversation"])
         self.assert_erro(chamar(self.api, "GET", "/contacts/lookup"), 400, "VALIDATION_ERROR")
 
+    # --- clientes e solicitantes (cadastro pela Sofia, E5.3) -------------------------
+
+    def test_listar_clientes_por_nome(self) -> None:
+        r = chamar(self.api, "GET", "/clients?q=acme")
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertEqual(r.json, [{"id": CLIENTE_ACME, "name": "ACME Ltda"}])
+        # `q` aparece em mais de um nome → vários candidatos (ambiguidade)
+        self.assertEqual(len(chamar(self.api, "GET", "/clients?q=a").json), 2)
+        self.assertEqual(chamar(self.api, "GET", "/clients?q=empresa-que-nao-existe").json, [])
+        self.assertEqual(len(chamar(self.api, "GET", "/clients?q=a&limit=1").json), 1)
+        self.assert_erro(chamar(self.api, "GET", "/clients"), 400, "VALIDATION_ERROR")
+        self.assert_erro(chamar(self.api, "GET", "/clients?q=a", chave=None), 401, "UNAUTHORIZED")
+
+    def test_clientes_e_solicitantes_exigem_escopo(self) -> None:
+        self.mock.config["escopos"] = [e for e in mock_infodesk.ESCOPOS_TODOS if e != "contacts:read"]
+        self.assert_erro(chamar(self.api, "GET", "/clients?q=a"), 403, "FORBIDDEN")
+        self.mock.config["escopos"] = [e for e in mock_infodesk.ESCOPOS_TODOS if e != "contacts:write"]
+        corpo = {"name": "Ana Lima", "clientId": CLIENTE_ACME, "phone": "+5531991110001"}
+        self.assert_erro(chamar(self.api, "POST", "/requesters", corpo), 403, "FORBIDDEN")
+        self.assertEqual(chamar(self.api, "GET", "/clients?q=a").status, 200)
+
+    def test_cadastrar_solicitante_vincula_a_conversa_e_o_lookup_acha(self) -> None:
+        fone = "+5531991110001"
+        conv = self.cliente_escreve(fone, nome="Ana")["conversationId"]
+        antes = chamar(self.api, "GET", f"/contacts/lookup?phone={fone.replace('+', '%2B')}").json
+        self.assertEqual(antes["requesters"], [])  # telefone desconhecido
+
+        r = chamar(
+            self.api,
+            "POST",
+            "/requesters",
+            {
+                "name": "Ana Lima",
+                "clientId": CLIENTE_ACME,
+                "phone": fone,
+                "email": "ana@acme.example",
+                "conversationId": conv,
+            },
+        )
+        self.assertEqual(r.status, 200, r.corpo)
+        novo = r.json
+        self.assertIs(novo["created"], True)
+        self.assertEqual(
+            (novo["name"], novo["email"], novo["phone"], novo["clientId"]),
+            ("Ana Lima", "ana@acme.example", fone, CLIENTE_ACME),
+        )
+        self.assertEqual(novo["client"], {"id": CLIENTE_ACME, "name": "ACME Ltda"})
+        self.assertIs(novo["canOpenWhatsapp"], True)
+        self.assertEqual(novo["openTickets"], 0)
+        # a conversa saiu vinculada ao solicitante e ao cliente
+        conversa = chamar(self.api, "GET", f"/conversations/{conv}").json
+        self.assertEqual(conversa["requesterId"], novo["id"])
+        self.assertEqual(conversa["clientId"], CLIENTE_ACME)
+        # e agora o lookup reconhece o telefone
+        depois = chamar(self.api, "GET", f"/contacts/lookup?phone={fone.replace('+', '%2B')}").json
+        self.assertEqual([x["id"] for x in depois["requesters"]], [novo["id"]])
+        self.assertEqual(depois["clientIds"], [CLIENTE_ACME])
+
+    def test_cadastrar_solicitante_e_idempotente_no_mesmo_cliente(self) -> None:
+        corpo = {
+            "name": "Ana Lima",
+            "clientId": CLIENTE_ACME,
+            "phone": "+5531991110001",
+            "email": "ana@acme.example",
+        }
+        primeiro = chamar(self.api, "POST", "/requesters", corpo).json
+        self.assertIs(primeiro["created"], True)
+        # mesmo telefone, com e sem +55 e com/sem o 9º dígito → o mesmo cadastro
+        for variante in ("+5531991110001", "31991110001", "5531991110001", "+553191110001", "(31) 99111-0001"):
+            r = chamar(self.api, "POST", "/requesters", {**corpo, "phone": variante})
+            self.assertEqual(r.status, 200, r.corpo)
+            self.assertIs(r.json["created"], False, variante)
+            self.assertEqual(r.json["id"], primeiro["id"], variante)
+        # mesmo e-mail (caixa diferente), outro telefone → o mesmo cadastro
+        igual_por_email = chamar(
+            self.api,
+            "POST",
+            "/requesters",
+            {"name": "Outra Ana", "clientId": CLIENTE_ACME, "phone": "+5531988887777", "email": "Ana@ACME.example"},
+        ).json
+        self.assertIs(igual_por_email["created"], False)
+        self.assertEqual(igual_por_email["id"], primeiro["id"])
+        # a idempotência é POR CLIENTE: o mesmo telefone em outro cliente é outro cadastro
+        outro_cliente = chamar(
+            self.api, "POST", "/requesters", {**corpo, "clientId": "99999999-9999-4999-8999-000000000002"}
+        ).json
+        self.assertIs(outro_cliente["created"], True)
+        self.assertNotEqual(outro_cliente["id"], primeiro["id"])
+        # solicitante de dados.json também conta (não duplica quem já existe)
+        existente = chamar(
+            self.api, "POST", "/requesters", {"name": "Maria S", "clientId": CLIENTE_ACME, "phone": "+5531990000100"}
+        ).json
+        self.assertIs(existente["created"], False)
+        self.assertEqual(existente["id"], REQ_MARIA)
+
+    def test_cadastrar_solicitante_validacoes(self) -> None:
+        base = {"name": "Ana Lima", "clientId": CLIENTE_ACME, "phone": "+5531991110001"}
+        self.assert_erro(
+            chamar(self.api, "POST", "/requesters", {**base, "name": " "}), 400, "VALIDATION_ERROR"
+        )
+        sem_cliente = {k: v for k, v in base.items() if k != "clientId"}
+        self.assert_erro(chamar(self.api, "POST", "/requesters", sem_cliente), 400, "VALIDATION_ERROR")
+        self.assert_erro(
+            chamar(self.api, "POST", "/requesters", {**base, "clientId": "nao-existe"}),
+            400,
+            "INVALID_REFERENCE",
+        )
+        self.assert_erro(
+            chamar(self.api, "POST", "/requesters", {**base, "conversationId": "nao-existe"}),
+            404,
+            "NOT_FOUND",
+        )
+        self.assert_erro(
+            chamar(self.api, "POST", "/requesters", {**base, "phone": 123}), 400, "VALIDATION_ERROR"
+        )
+        # nada foi criado pelas tentativas inválidas
+        look = chamar(self.api, "GET", "/contacts/lookup?phone=%2B5531991110001").json
+        self.assertEqual(look["requesters"], [])
+
+    def test_cadastrar_solicitante_vincula_ao_ticket(self) -> None:
+        t = chamar(self.api, "POST", "/tickets", {"deskId": DESK_N1, "title": "Sem internet"}).json
+        r = chamar(
+            self.api,
+            "POST",
+            "/requesters",
+            {"name": "Ana Lima", "clientId": CLIENTE_ACME, "phone": "+5531991110001", "ticketNumber": t["number"]},
+        )
+        self.assertEqual(r.status, 200, r.corpo)
+        self.assertEqual(r.json["openTickets"], 1)
+        self.assertEqual(
+            chamar(self.api, "GET", f"/tickets/{t['number']}").json["requester"]["id"], r.json["id"]
+        )
+
+    def test_reset_remove_os_solicitantes_cadastrados(self) -> None:
+        corpo = {"name": "Ana Lima", "clientId": CLIENTE_ACME, "phone": "+5531991110001"}
+        self.assertIs(chamar(self.api, "POST", "/requesters", corpo).json["created"], True)
+        self.mock.reset()
+        # sem o reset, o 2º POST seria `created: false`; os de dados.json continuam
+        self.assertIs(chamar(self.api, "POST", "/requesters", corpo).json["created"], True)
+        look = chamar(self.api, "GET", f"/contacts/lookup?phone=%2B5531990000100").json
+        self.assertEqual([x["id"] for x in look["requesters"]], [REQ_MARIA])
+
     # --- conversas --------------------------------------------------------------
 
     def test_listar_conversas_com_filtros_e_cursor(self) -> None:

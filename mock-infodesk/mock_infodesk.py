@@ -64,6 +64,7 @@ ESCOPOS_TODOS = (
     "conversations:read",
     "conversations:write",
     "contacts:read",
+    "contacts:write",
     "events:read",
 )
 
@@ -273,6 +274,8 @@ class MockInfodesk:
         self.seq = 0
         self.proximo_number = int(config["primeiro_number"])
         self.contador_requisicoes = 0
+        # ids dos solicitantes criados por POST /requesters (o reset os remove).
+        self.requesters_criados: list[str] = []
         self.log = print
 
     # --- referência ---------------------------------------------------------
@@ -310,6 +313,11 @@ class MockInfodesk:
             self.entregas.clear()
             self.proximo_number = int(self.config["primeiro_number"])
             self.contador_requisicoes = 0
+            criados = set(self.requesters_criados)
+            self.referencia["requesters"] = [
+                r for r in self.referencia["requesters"] if r["id"] not in criados
+            ]
+            self.requesters_criados.clear()
 
     # --- autenticação / escopo / rate limit -----------------------------------
 
@@ -444,6 +452,121 @@ class MockInfodesk:
         saida = dict(r)
         cliente = self._acha("clients", r.get("clientId"))
         saida["client"] = {"id": cliente["id"], "name": cliente["name"]} if cliente else None
+        return saida
+
+    # --- clientes e solicitantes (cadastro pela Sofia; docs/infodesk/04, 10 §6) ------
+
+    def listar_clientes(
+        self, args: tuple[str, ...], query: dict[str, str], corpo: dict[str, Any]
+    ) -> Any:
+        """`GET /clients?q=` (nome/razão social) ou `?document=` (CPF/CNPJ): clientes (empresas).
+
+        Formato da lista NÃO documentado (07 D3): array puro, como as outras listas de
+        referência; `document` casa só se o cliente de `dados.json` tiver `document`.
+        """
+        q = (query.get("q") or "").strip()
+        documento = digitos(query.get("document"))
+        if not q and not documento:
+            raise invalido("q", "Parâmetro obrigatório ausente: q ou document.")
+        limite = limite_da_query(query, LIMITE_PADRAO, LIMITE_MAX)
+        alvo = q.casefold()
+        achados = [
+            dict(c)
+            for c in self.referencia["clients"]
+            if (alvo and alvo in str(c.get("name", "")).casefold())
+            or (documento and digitos(c.get("document")) == documento)
+        ]
+        return achados[:limite]
+
+    @staticmethod
+    def _telefone_canonico(telefone: str | None) -> str:
+        """Dígitos sem o 55 e com o 9º dígito: casa com/sem `+55`, com/sem o 9 (docs/infodesk/04)."""
+        d = digitos(telefone)
+        if d.startswith("55") and len(d) >= 12:
+            d = d[2:]
+        if len(d) == 10 and d[2] >= "6":
+            d = d[:2] + "9" + d[2:]
+        return d
+
+    def criar_solicitante(
+        self, args: tuple[str, ...], query: dict[str, str], corpo: dict[str, Any]
+    ) -> Any:
+        """`POST /requesters`: cadastra sem duplicar e, opcionalmente, já vincula (04, 10 §6).
+
+        Obrigatórios aqui: `name` e `clientId` (cliente inexistente = `INVALID_REFERENCE`).
+        Idempotente **dentro do mesmo cliente**: mesmo telefone (variantes BR) ou mesmo
+        e-mail devolve o cadastro existente com `created: false`. `conversationId` /
+        `ticketNumber` opcionais: vinculam o solicitante (o cliente vem junto).
+        """
+        nome = corpo.get("name")
+        if not isinstance(nome, str) or not nome.strip():
+            raise invalido("name", "Campo obrigatório ausente: name.")
+        client_id = corpo.get("clientId")
+        if not isinstance(client_id, str) or not client_id:
+            raise invalido("clientId", "Campo obrigatório ausente: clientId.")
+        exigir_str_ou_none(corpo, "phone", "email", "extension", "conversationId")
+        ticket_number = corpo.get("ticketNumber")
+        if ticket_number is not None and (
+            not isinstance(ticket_number, int) or isinstance(ticket_number, bool)
+        ):
+            raise invalido("ticketNumber", "Campo inválido: ticketNumber deve ser inteiro.")
+        if self._acha("clients", client_id) is None:
+            raise referencia_invalida(f"clientId inválido: cliente não encontrado ({client_id}).")
+        telefone = digitos(corpo.get("phone"))
+        email = (corpo.get("email") or "").strip().casefold()
+
+        with self.lock:
+            conversa = None
+            if corpo.get("conversationId"):
+                conversa = self._conversa(str(corpo["conversationId"]), aberta=True)
+            ticket = self._ticket(str(ticket_number)) if ticket_number is not None else None
+
+            existente = next(
+                (
+                    r
+                    for r in self.referencia["requesters"]
+                    if r.get("clientId") == client_id
+                    and (
+                        (
+                            telefone
+                            and self._telefone_canonico(r.get("phone"))
+                            == self._telefone_canonico(telefone)
+                        )
+                        or (email and str(r.get("email") or "").strip().casefold() == email)
+                    )
+                ),
+                None,
+            )
+            criado = existente is None
+            if existente is None:
+                existente = {
+                    "id": novo_id(),
+                    "name": nome.strip(),
+                    "email": (corpo.get("email") or "").strip() or None,
+                    "phone": ("+" + telefone if telefone.startswith("55") else "+55" + telefone)
+                    if telefone
+                    else None,
+                    "extension": corpo.get("extension") or None,
+                    "clientId": client_id,
+                }
+                self.referencia["requesters"].append(existente)
+                self.requesters_criados.append(existente["id"])
+            if conversa is not None:
+                conversa["requesterId"] = existente["id"]
+                conversa["clientId"] = client_id
+                conversa["updatedAt"] = agora_iso()
+            if ticket is not None:
+                ticket["requesterId"] = existente["id"]
+                ticket["clientId"] = ticket.get("clientId") or client_id
+            abertos = sum(
+                1
+                for t in self.tickets.values()
+                if t.get("requesterId") == existente["id"] and self._ticket_aberto(t)
+            )
+            saida = self._solicitante_com_cliente(existente)
+        saida.update(
+            canOpenWhatsapp=bool(existente.get("phone")), openTickets=abertos, created=criado
+        )
         return saida
 
     # --- tickets ---------------------------------------------------------------
@@ -1476,6 +1599,8 @@ ROTAS: list[Rota] = [
     _r("GET", "/users", (), "listar_usuarios", escopo_referencia="conversations:read"),
     _r("GET", "/departments", (), "listar_departamentos", escopo_referencia="conversations:read"),
     _r("GET", "/contacts/lookup", ("contacts:read",), "lookup_contato"),
+    _r("GET", "/clients", ("contacts:read",), "listar_clientes"),
+    _r("POST", "/requesters", ("contacts:write",), "criar_solicitante"),
     _r("GET", "/tickets", ("tickets:read",), "listar_tickets"),
     _r("POST", "/tickets", ("tickets:write",), "criar_ticket", 201),
     _r("GET", f"/tickets/{ID}", ("tickets:read",), "consultar_ticket"),

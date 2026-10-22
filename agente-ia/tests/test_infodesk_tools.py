@@ -53,7 +53,7 @@ def _motivos(caminho: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_catalogo_tem_as_6_tools_do_plano_na_ordem():
+def test_catalogo_tem_as_8_tools_do_plano_na_ordem():
     assert [t.name for t in get_default_tools()] == [
         "informar_identificacao",
         "preparar_abertura_chamado",
@@ -61,6 +61,8 @@ def test_catalogo_tem_as_6_tools_do_plano_na_ordem():
         "consultar_status_chamado",
         "listar_meus_chamados",
         "transferir_para_atendente",
+        "preparar_cadastro_solicitante",
+        "cadastrar_solicitante",
     ]
 
 
@@ -84,6 +86,8 @@ def test_args_que_o_modelo_ve_sao_os_do_plano():
         "consultar_status_chamado": {"numero"},
         "listar_meus_chamados": set(),
         "transferir_para_atendente": {"motivo"},
+        "preparar_cadastro_solicitante": {"nome", "empresa", "email"},
+        "cadastrar_solicitante": set(),
     }
     for tool in get_default_tools():
         schema = convert_to_openai_tool(tool)["function"]["parameters"]

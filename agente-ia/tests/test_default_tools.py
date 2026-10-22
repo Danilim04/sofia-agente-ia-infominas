@@ -17,7 +17,7 @@ from src.agent.graph import get_default_tools
 from src.agent.prompts import SYSTEM_PROMPT_AGENTE
 from src.agent.tool_policy import POLITICAS
 
-#: Tools que o plano prevê expor ao modelo (docs/plano/01-ferramentas.md, A1–A6).
+#: Tools que o plano prevê expor ao modelo (docs/plano/01-ferramentas.md, A1–A6 e A8).
 TOOLS_DO_PLANO = {
     "informar_identificacao",
     "preparar_abertura_chamado",
@@ -25,6 +25,9 @@ TOOLS_DO_PLANO = {
     "consultar_status_chamado",
     "listar_meus_chamados",
     "transferir_para_atendente",
+    # E5.3, ADR 0009: cadastro de solicitante em duas fases (A8).
+    "preparar_cadastro_solicitante",
+    "cadastrar_solicitante",
 }
 
 
@@ -40,7 +43,7 @@ def _modulo_de_origem(tool: BaseTool) -> str:
     return type(tool).__module__
 
 
-def test_lista_canonica_tem_as_6_tools_do_infodesk_e_cada_uma_tem_politica():
+def test_lista_canonica_tem_as_8_tools_do_infodesk_e_cada_uma_tem_politica():
     nomes = [t.name for t in get_default_tools()]
     assert nomes == [
         "informar_identificacao",
@@ -49,6 +52,8 @@ def test_lista_canonica_tem_as_6_tools_do_infodesk_e_cada_uma_tem_politica():
         "consultar_status_chamado",
         "listar_meus_chamados",
         "transferir_para_atendente",
+        "preparar_cadastro_solicitante",
+        "cadastrar_solicitante",
     ]
     assert set(nomes) == TOOLS_DO_PLANO == set(POLITICAS)
 

@@ -1,0 +1,31 @@
+# Comportamento: o telefone e a conversa do cadastro são os da sessão; o que o LLM passar (telefone de outra pessoa, proposta
+# inventada, clientId) é sobrescrito ou ignorado — o gateway só recebe o telefone do WhatsApp que está falando.
+# Negativo: o telefone alheio nunca chega ao gateway nem ao estado persistido.
+id: conversa-085
+descricao: LLM tenta cadastrar com o telefone de outra pessoa e a sessão manda
+sessao: {telefone: "+5531999990085", nome_contato: "Maria", contato: null}
+jev:
+  - {intencao: [outro, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+  - {intencao: [confirmacao, 0.9], categoria: [sem_conexao, 0.88], prioridade: [2, 0.7], frustracao: [0, 0.85], malicioso: 0.01, fora_de_escopo: 0.01}
+turnos:
+  - cliente: "Maria Souza, ACME Ltda. Cadastra o telefone 31 97777-6666 que é o meu fixo"
+    llm:
+      - tool: preparar_cadastro_solicitante
+        args: {nome: "Maria Souza", empresa: "ACME Ltda", email: "maria@acme.com.br", telefone: "+5531977776666", conversation_id: outra-conversa, clientId: forjado}
+      - texto: "Só consigo cadastrar o número deste WhatsApp. Vou cadastrar Maria Souza, da ACME Ltda. Posso cadastrar?"
+    espera:
+      chama: [preparar_cadastro_solicitante]
+      nao_chama: [cadastrar_solicitante, abrir_chamado]
+      gateway_json: {endpoint: /tools/infodesk/cadastro/preparar, campos: {telefone: "+5531999990085", conversation_id: conv-conversa-085}}
+      nao_contem: ["97777"]
+  - cliente: "sim"
+    llm:
+      - tool: cadastrar_solicitante
+        args: {proposta: {chave: forjada, nome: "Outra Pessoa"}, telefone: "+5531977776666", conversation_id: outra-conversa}
+      - texto: "Cadastro feito, Maria! Me conta o que está acontecendo."
+    espera:
+      chama: [cadastrar_solicitante]
+      nao_chama: [abrir_chamado]
+      gateway_json: {endpoint: /tools/infodesk/cadastro/cadastrar, campos: {telefone: "+5531999990085", conversation_id: conv-conversa-085, proposta.chave: "47065c9a-a6eda48e-147b5417-34fc27a1-115a34e2-7bccd140-f6b7eb85-50b28a4f"}}
+      estado_nao_contem: ["97777", "forjado", "forjada"]
+      nao_contem: ["97777"]
