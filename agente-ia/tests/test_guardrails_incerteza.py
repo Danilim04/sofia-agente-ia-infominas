@@ -28,6 +28,10 @@ from src.security.output_guardrails import afirmacoes_de_acao
         "Sem saber se o ticket foi criado, prefiro não abrir outro.",
         "Preciso confirmar se o chamado já foi registrado antes de seguir.",
         "Se o chamado já foi aberto, o atendente te avisa.",
+        # "que" com negação + cabeça epistêmica
+        "Não tenho certeza de que o chamado foi registrado.",
+        "Não consigo confirmar que o chamado foi registrado.",
+        "Não posso garantir que o chamado foi registrado.",
     ],
 )
 def test_incerteza_e_condicional_nao_contam_como_afirmacao(frase):
@@ -50,6 +54,23 @@ def test_incerteza_e_condicional_nao_contam_como_afirmacao(frase):
         "Registrei o seu caso. Se precisar, me chame.",
         "Já avisei o time, mas não sei se vão responder hoje.",
         "Anotei tudo e, se tiver dúvida, me avise.",
+        # E3.8 (revisão): "se" SEM cabeça epistêmica não isenta — condicional solto,
+        # "se" reflexivo e "se" de outra oração ligada por e/então/travessão/parêntese
+        "Se quiser eu abri o chamado",
+        "Se precisar eu registrei tudo",
+        "Se sim abri o chamado",
+        "Entendi, se for isso mesmo abri o chamado",
+        "O sinal se perdeu e por isso registrei o seu caso",
+        "Seu problema se repete então registrei o seu caso",
+        "Para que isso se resolva abri o chamado",
+        "Como o sinal se perdeu eu abri o chamado",
+        "Não sei se vai resolver e já abri o chamado",
+        "Não sei se resolve então abri o chamado",
+        "Vou ver se dá certo — abri o chamado",
+        "Não sei se resolve (abri o chamado)",
+        # "que" sem negação afirma; o "se" de "disse" lá atrás não vira condicional
+        "Posso garantir que registrei o seu caso",
+        "Ele disse o cliente reclamou da internet lenta ontem a noite e hoj abri o chamado",
     ],
 )
 def test_afirmacao_de_acao_continua_barrada(frase):

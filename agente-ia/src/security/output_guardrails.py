@@ -258,11 +258,35 @@ _AFIRMACOES_DE_ACAO_RE = tuple(
 )
 # Negação logo antes da afirmação ("ainda não registrei", "não abri o chamado").
 _NEGACAO_ANTES_RE = re.compile(r"\b(?:nao|nunca|nem|jamais|sem)\s+(?:\w+\s+)?$")
-# "se" (condicional/incerteza) na MESMA oração, antes da afirmação: "não consegui
-# confirmar se o chamado foi registrado", "vou ver se anotaram". Não é afirmar a
-# ação — é dizer que não se sabe. A oração termina em pontuação ou "mas".
-_FRONTEIRA_ORACAO_RE = re.compile(r"[.,;:!?\n]|\bmas\b")
-_CONDICIONAL_RE = re.compile(r"\bse\b")
+# Incerteza honesta não é afirmação de ação: "não consegui confirmar SE o chamado
+# foi registrado", "não sei se registrei direito". Só vale com CABEÇA epistêmica
+# ("confirmar", "saber", "ver", "ter certeza"...) logo antes do "se" (até 3 palavras
+# entre os dois) na MESMA oração — um "se" solto não isenta ("Se quiser eu abri o
+# chamado", "o sinal se perdeu, por isso registrei"). A oração termina em
+# pontuação, travessão, parêntese ou conector ("mas", "e", "então", "porém"...).
+_FRONTEIRA_ORACAO_RE = re.compile(
+    r"[.,;:!?\n()\-\u2013\u2014]|\b(?:mas|e|entao|porem|pois|dai|ai|so que)\b"
+)
+_CABECA_EPISTEMICA = (
+    r"(?:confirm\w*|sei|sabe\w*|sabia\w*|saber|ver|verific\w*|conferi\w*|checar|"
+    r"certeza|dizer|garant\w*|descobr\w*|duvid\w*|afirmar)"
+)
+_ATE_A_AFIRMACAO = r"(?:\s+\w+){0,3}\s*$"
+#: "…confirmar se" + até 3 palavras antes da afirmação ("se o chamado ja foi...").
+_INCERTEZA_SE_RE = re.compile(
+    r"\b" + _CABECA_EPISTEMICA + r"\b(?:\s+\w+){0,3}\s+se\b" + _ATE_A_AFIRMACAO
+)
+#: "não tenho certeza de que…", "não consigo confirmar que…", "não posso garantir
+#: que…" — o "que" só isenta quando há negação antes da cabeça.
+_INCERTEZA_QUE_RE = re.compile(
+    r"\b(?:nao|sem)\b(?:\s+\w+){0,3}?\s+"
+    + _CABECA_EPISTEMICA
+    + r"\b(?:\s+de)?(?:\s+\w+){0,2}\s+que\b"
+    r"(?:\s+\w+){0,2}\s*$"
+)
+#: Oração condicional que abre direto no sujeito da afirmação: "se o chamado
+#: já foi aberto…" ("se" + artigo/possessivo e nada mais antes do trecho casado).
+_CONDICIONAL_DIRETA_RE = re.compile(r"\bse\s+(?:o|a|os|as|seu|sua|esse|essa|este|esta)?\s*$")
 # Trechos entre aspas são fala citada (em geral do cliente) — não contam.
 _TRECHO_CITADO_RE = re.compile(r"[\"“”«»]([^\"“”«»]{1,240})[\"“”«»]")
 
@@ -273,11 +297,11 @@ def afirmacoes_de_acao(texto: str | None) -> list[str]:
     Registro, anotação, aviso/encaminhamento ao time ou abertura de chamado —
     coisas que só acontecem por ferramenta. Devolve os trechos casados
     (normalizados: minúsculas, sem acento) para log/teste; lista vazia = nada
-    afirmado. Fala citada entre aspas, afirmações negadas e construções de
-    incerteza/condição ("não consegui confirmar SE o chamado foi registrado")
-    são ignoradas — estas últimas só valem com o "se" na mesma oração (sem vírgula
-    ou ponto entre ele e a afirmação), então "abri o chamado, se precisar me chame"
-    segue barrado.
+    afirmado. Fala citada entre aspas, afirmações negadas e incerteza honesta
+    ("não consegui confirmar SE o chamado foi registrado", "não tenho certeza de
+    QUE foi registrado") são ignoradas. A incerteza exige cabeça epistêmica
+    ("confirmar", "saber", "ver", "ter certeza"...) antes do "se"/"que" na mesma
+    oração; um "se" solto não isenta ("Se quiser eu abri o chamado" segue barrado).
     """
     if not texto:
         return []
@@ -288,8 +312,12 @@ def afirmacoes_de_acao(texto: str | None) -> list[str]:
             antes = alvo[max(0, m.start() - 24) : m.start()]
             if _NEGACAO_ANTES_RE.search(antes):
                 continue
-            oracao = _FRONTEIRA_ORACAO_RE.split(alvo[max(0, m.start() - 60) : m.start()])[-1]
-            if _CONDICIONAL_RE.search(oracao):
+            oracao = _FRONTEIRA_ORACAO_RE.split(alvo[: m.start()])[-1]
+            if (
+                _INCERTEZA_SE_RE.search(oracao)
+                or _INCERTEZA_QUE_RE.search(oracao)
+                or _CONDICIONAL_DIRETA_RE.search(oracao)
+            ):
                 continue
             achadas.append(m.group(0))
     return achadas
